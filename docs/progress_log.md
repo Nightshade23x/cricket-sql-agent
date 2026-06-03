@@ -8,3 +8,5 @@ downloaded ipl cricsheet csv data
 inspected raw delivery and match info files
 prepared combined processed datasets into csvs called deliveries and matches
 confirmed the dataset size
+created sql server and connected it to vs code
+ensured both the tables exist
