@@ -1,4 +1,7 @@
 Week 1
+
+day 1
+
 created project folder
 created git repo
 created venv environment
@@ -10,3 +13,6 @@ prepared combined processed datasets into csvs called deliveries and matches
 confirmed the dataset size
 created sql server and connected it to vs code
 ensured both the tables exist
+tested the sql server using manual queries
+all queries work perfectly
+
