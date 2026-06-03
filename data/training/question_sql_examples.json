@@ -1,0 +1,74 @@
+[
+    {
+        "id": 1,
+        "category": "basic_database_check",
+        "question": "How many IPL matches are in the database?",
+        "sql": "SELECT COUNT(*) AS total_matches\nFROM matches;"
+    },
+    {
+        "id": 2,
+        "category": "basic_database_check",
+        "question": "How many ball-by-ball deliveries are in the database?",
+        "sql": "SELECT COUNT(*) AS total_deliveries\nFROM deliveries;"
+    },
+    {
+        "id": 3,
+        "category": "season_analysis",
+        "question": "How many matches were played in each IPL season?",
+        "sql": "SELECT\n    season,\n    COUNT(*) AS total_matches\nFROM matches\nGROUP BY season\nORDER BY season;"
+    },
+    {
+        "id": 4,
+        "category": "batting",
+        "question": "Who are the top 10 run scorers in the IPL dataset?",
+        "sql": "SELECT TOP 10\n    striker AS batter,\n    SUM(runs_off_bat) AS total_runs\nFROM deliveries\nGROUP BY striker\nORDER BY total_runs DESC;"
+    },
+    {
+        "id": 5,
+        "category": "batting",
+        "question": "Which batters have the best strike rate with at least 300 balls faced?",
+        "sql": "SELECT TOP 10\n    striker AS batter,\n    SUM(runs_off_bat) AS runs,\n    SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS balls_faced,\n    ROUND(\n        SUM(runs_off_bat) * 100.0 /\n        NULLIF(SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END), 0),\n        2\n    ) AS strike_rate\nFROM deliveries\nGROUP BY striker\nHAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300\nORDER BY strike_rate DESC;"
+    },
+    {
+        "id": 6,
+        "category": "bowling",
+        "question": "Who are the top 10 wicket takers in the IPL dataset?",
+        "sql": "SELECT TOP 10\n    bowler,\n    COUNT(*) AS wickets\nFROM deliveries\nWHERE wicket_type IS NOT NULL\n  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')\nGROUP BY bowler\nORDER BY wickets DESC;"
+    },
+    {
+        "id": 7,
+        "category": "bowling",
+        "question": "Which bowlers have the best economy rate with at least 300 legal balls bowled?",
+        "sql": "SELECT TOP 10\n    bowler,\n    SUM(runs_off_bat + extras) AS runs_conceded,\n    SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,\n    ROUND(\n        SUM(runs_off_bat + extras) * 6.0 /\n        NULLIF(SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END), 0),\n        2\n    ) AS economy_rate\nFROM deliveries\nGROUP BY bowler\nHAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300\nORDER BY economy_rate ASC;"
+    },
+    {
+        "id": 8,
+        "category": "death_overs",
+        "question": "Who scored the most runs in death overs?",
+        "sql": "SELECT TOP 10\n    striker AS batter,\n    SUM(runs_off_bat) AS death_overs_runs\nFROM deliveries\nWHERE FLOOR(ball) BETWEEN 15 AND 19\nGROUP BY striker\nORDER BY death_overs_runs DESC;"
+    },
+    {
+        "id": 9,
+        "category": "death_overs",
+        "question": "Which batters have the best death overs strike rate with at least 100 balls faced?",
+        "sql": "SELECT TOP 10\n    striker AS batter,\n    SUM(runs_off_bat) AS runs,\n    SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS balls_faced,\n    ROUND(\n        SUM(runs_off_bat) * 100.0 /\n        NULLIF(SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END), 0),\n        2\n    ) AS death_overs_strike_rate\nFROM deliveries\nWHERE FLOOR(ball) BETWEEN 15 AND 19\nGROUP BY striker\nHAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 100\nORDER BY death_overs_strike_rate DESC;"
+    },
+    {
+        "id": 10,
+        "category": "powerplay",
+        "question": "Who has taken the most wickets in the powerplay?",
+        "sql": "SELECT TOP 10\n    bowler,\n    COUNT(*) AS powerplay_wickets\nFROM deliveries\nWHERE FLOOR(ball) BETWEEN 0 AND 5\n  AND wicket_type IS NOT NULL\n  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')\nGROUP BY bowler\nORDER BY powerplay_wickets DESC;"
+    },
+    {
+        "id": 11,
+        "category": "team_analysis",
+        "question": "Which teams have the most wins while chasing?",
+        "sql": "SELECT\n    batting_team AS chasing_team,\n    COUNT(DISTINCT d.match_id) AS chasing_wins\nFROM deliveries d\nJOIN matches m\n    ON d.match_id = m.match_id\nWHERE d.innings = 2\n  AND d.batting_team = m.winner\nGROUP BY batting_team\nORDER BY chasing_wins DESC;"
+    },
+    {
+        "id": 12,
+        "category": "venue_analysis",
+        "question": "Which venues have the highest average first innings score?",
+        "sql": "SELECT TOP 10\n    venue,\n    ROUND(AVG(total_score * 1.0), 2) AS average_first_innings_score,\n    COUNT(*) AS innings_count\nFROM (\n    SELECT\n        match_id,\n        venue,\n        SUM(runs_off_bat + extras) AS total_score\n    FROM deliveries\n    WHERE innings = 1\n    GROUP BY match_id, venue\n) AS first_innings_scores\nGROUP BY venue\nHAVING COUNT(*) >= 10\nORDER BY average_first_innings_score DESC;"
+    }
+]
