@@ -31,3 +31,8 @@ tested sql generation from the local mode
 cleaned the model output so generated sql can be used properly
 fixed the ollama model storage path due to c drive being full
 both main pipelines work separately...python to sql server, and python to ollama
+combined the ollama local model pipeline with sql server database pipeline
+created an llm based sql agent that takes a natural lang cricket ques and generates added safety checks to only allow select querie
+tested the full flow from user question to generated sql to database result
+confirmed the local model can generate sql and return ipl anayltic results from sql server
+also tested a ques : who are the top 10 run scorers and received the correct ans.
