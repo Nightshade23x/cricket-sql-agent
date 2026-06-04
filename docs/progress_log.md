@@ -16,3 +16,18 @@ ensured both the tables exist
 tested the sql server using manual queries
 all queries work perfectly
 
+day 2
+created a ques bank with natural lang cricket questions which map to sql queries
+saved the question sql examples in a json file for future model training
+created a python database connection file to connect the project to sql server
+confirmed python can run sql queries and return results
+created a basic question matching agent
+tested the agent with cricket ques
+confirmed the bagic agent can match a user ques to the closest saved sql example and return the correct sql result
+installed and tested ollama locally
+downloaded qwen2.5 model
+connected python to local ollama model
+tested sql generation from the local mode
+cleaned the model output so generated sql can be used properly
+fixed the ollama model storage path due to c drive being full
+both main pipelines work separately...python to sql server, and python to ollama
