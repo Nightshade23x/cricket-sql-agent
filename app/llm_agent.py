@@ -1,5 +1,6 @@
 from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
+from app.agent import load_examples,find_best_example
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -77,6 +78,11 @@ sql rules:
 -return only the sql query
 -do not use markdown code fences
 -do not explain anything
+- When using a subquery, make sure the inner SELECT has a complete FROM clause before closing the subquery.
+- Do not close the subquery until after GROUP BY inside the subquery.
+-for average first innings score by venue,first calculate total score per match and venue where innings=1, then average those totals grouped by venue
+-when using a subquery, make sure the inner select has its from clause before closing the subquery
+-do not close subquery until after the inner group by its complete.
 
 Examples:
 
@@ -125,22 +131,22 @@ order by chasing_wins desc;
 
 Question: Which venues have the highest average first innings score?
 SQL:
-select top 10
+SELECT TOP 10
     venue,
-    round(avg(total_score*1.0),2) as average_first_innings_score,
-    count(*) as innings_count
-from(
-    select
+    ROUND(AVG(total_score * 1.0), 2) AS average_first_innings_score,
+    COUNT(*) AS innings_count
+FROM (
+    SELECT
         match_id,
         venue,
-        sum(runs_off_bat+extras) as total_score)
-    from deliveries
-    where innings=1
-    group by match_id,venue
-) as first_innings_scores
-group by venue
-having count(*)>=10
-order by average_first_innings_score desc;
+        SUM(runs_off_bat + extras) AS total_score
+    FROM deliveries
+    WHERE innings = 1
+    GROUP BY match_id, venue
+) AS first_innings_scores
+GROUP BY venue
+HAVING COUNT(*) >= 10
+ORDER BY average_first_innings_score DESC;
 
 Question: Which batters have the best strike rate with at least 300 balls faced?
 SQL:
@@ -215,3 +221,34 @@ def answer_question_with_llm(user_question):#generates sql using ollama and runs
         raise ValueError("Model generated an unsafe or invalid query")
     result=run_query(sql_query)
     return sql_query,result 
+
+def answer_question_with_fallback(user_question):
+    try:
+        sql_query,result=answer_question_with_llm(user_question)
+        return{
+            "method":"llm",
+            "matched_question":None,
+            "sql_query":sql_query,
+            "result":result,
+            "error":None
+        }
+    except Exception as error:
+        examples=load_examples()
+        best_example,score=find_best_example(user_question,examples)
+        if best_example is None or score==0:
+            return{
+                "method":"failed",
+                "matched_question":None,
+                "sql_query":None,
+                "result":None,
+                "error":str(error)
+            }
+        sql_query=best_example["sql"]
+        result=run_query(sql_query)
+        return{
+            "method":"fallback_question_bank",
+            "matched_question":best_example["question"],
+            "sql_query":sql_query,
+            "result":result,
+            "error":str(error)
+        }
