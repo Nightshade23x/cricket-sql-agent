@@ -47,3 +47,10 @@ added examples for chasing wins, venue average first innings score,strike rate e
 improved sql safety checks so safe subqueries are allowed while still blocking unsafe sql commands
 updated the test script so one failed ques doesnt stop the script using try and except
 confirmed the expected test questions generate correct sql and return results correctly
+tested the llm based sql agent with multiple ques
+checked the generated sql for wicket takers,death overs etc
+added fallback logic incase the agent fails,if so then the agent can use the closest matching question from the bank
+testing the reliable agent and confirmed both llm generation and fallback logic work correctly
+confirmed the llm can answer custom ques beyon the fixed ques bank,as long as the ans can be calculated from the available database cols
+first created a terminal based interactive chat then created streamlit for ui
+tested and checked how it works
