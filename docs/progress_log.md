@@ -36,3 +36,14 @@ created an llm based sql agent that takes a natural lang cricket ques and genera
 tested the full flow from user question to generated sql to database result
 confirmed the local model can generate sql and return ipl anayltic results from sql server
 also tested a ques : who are the top 10 run scorers and received the correct ans.
+
+day 3
+restarted the ollama local server and confirmed the llm agent still works
+created a multi questions test script to evaluate the llm agent across diff cricket analytics question types
+tested the agent on batting,bowling,death overs,powerplay,chasing wins,venue analysis,strike rate,and economy rate questions
+idenitifed issues where the local model generated incorrect sql logic for some cricket specific questions
+fixed the prompt by adding better cricket defs and sql rules
+added examples for chasing wins, venue average first innings score,strike rate etc
+improved sql safety checks so safe subqueries are allowed while still blocking unsafe sql commands
+updated the test script so one failed ques doesnt stop the script using try and except
+confirmed the expected test questions generate correct sql and return results correctly
