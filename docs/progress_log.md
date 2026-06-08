@@ -64,3 +64,8 @@ improved the streamlit web interface by adding automatic result charts for suita
 added chart generation for numeric result tables such as top run scorers
 fixed the displayed result table index so it starts from 1 instead of 0
 tested the streamlit app with questions and confirmed it works
+tested more custom ques 
+identified llm weaknesses in certain ques such as ducks,highest score etc
+added curated templates for such ques
+added team abbreviation handling such as csk,rcb etc and also added support for nicknames of venues such as chepauk
+confirmed that the templates work in the streamlit app
