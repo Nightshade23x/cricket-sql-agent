@@ -1,11 +1,11 @@
 id,category,question,success,method,rows_returned,sql_query,error
-1,batting,Who are the top 10 run scorers?,True,llm,10,"SELECT TOP 10
+1,batting,Who are the top 10 run scorers?,True,curated_template,10,"SELECT TOP 10
     striker AS batter,
     SUM(runs_off_bat) AS total_runs
 FROM deliveries
 GROUP BY striker
 ORDER BY total_runs DESC;",
-2,bowling,Who are the top 10 wicket takers?,True,llm,10,"SELECT TOP 10
+2,bowling,Who are the top 10 wicket takers?,True,curated_template,10,"SELECT TOP 10
     bowler,
     COUNT(*) AS wickets
 FROM deliveries
@@ -13,33 +13,33 @@ WHERE wicket_type IS NOT NULL
   AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
 GROUP BY bowler
 ORDER BY wickets DESC;",
-3,death_overs,Who scored the most runs in death overs?,True,llm,10,"SELECT TOP 10
+3,death_overs,Who scored the most runs in death overs?,True,curated_template,10,"SELECT TOP 10
     striker AS batter,
     SUM(runs_off_bat) AS death_overs_runs
 FROM deliveries
 WHERE FLOOR(ball) BETWEEN 15 AND 19
 GROUP BY striker
 ORDER BY death_overs_runs DESC;",
-4,powerplay,Who has taken the most wickets in the powerplay?,True,llm,10,"SELECT TOP 10
+4,powerplay,Who has taken the most wickets in the powerplay?,True,curated_template,10,"SELECT TOP 10
     bowler,
-    COUNT(*) AS wickets
+    COUNT(*) AS powerplay_wickets
 FROM deliveries
 WHERE FLOOR(ball) BETWEEN 0 AND 5
   AND wicket_type IS NOT NULL
   AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
 GROUP BY bowler
-ORDER BY wickets DESC;",
-5,team_analysis,Which teams have the most wins while chasing?,True,llm,10,"SELECT TOP 10
+ORDER BY powerplay_wickets DESC;",
+5,team_analysis,Which teams have the most wins while chasing?,True,curated_template,10,"SELECT TOP 10
     d.batting_team AS chasing_team,
     COUNT(DISTINCT d.match_id) AS chasing_wins
 FROM deliveries d
 JOIN matches m
     ON d.match_id = m.match_id
 WHERE d.innings = 2
-    AND d.batting_team = m.winner
+  AND d.batting_team = m.winner
 GROUP BY d.batting_team
 ORDER BY chasing_wins DESC;",
-6,venue_analysis,Which venues have the highest average first innings score?,True,llm,10,"SELECT TOP 10
+6,venue_analysis,Which venues have the highest average first innings score?,True,fallback_question_bank,10,"SELECT TOP 10
     venue,
     ROUND(AVG(total_score * 1.0), 2) AS average_first_innings_score,
     COUNT(*) AS innings_count
@@ -54,8 +54,16 @@ FROM (
 ) AS first_innings_scores
 GROUP BY venue
 HAVING COUNT(*) >= 10
-ORDER BY average_first_innings_score DESC;",
-7,batting,Which batters have the best strike rate with at least 300 balls faced?,True,llm,10,"SELECT TOP 10
+ORDER BY average_first_innings_score DESC;","Execution failed on sql 'SELECT venue, AVG(first_innings_score) AS avg_first_innings_score
+FROM matches
+GROUP BY venue
+ORDER BY avg_first_innings_score DESC;': (pyodbc.ProgrammingError) ('42S22', ""[42S22] [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Invalid column name 'first_innings_score'. (207) (SQLExecDirectW)"")
+[SQL: SELECT venue, AVG(first_innings_score) AS avg_first_innings_score
+FROM matches
+GROUP BY venue
+ORDER BY avg_first_innings_score DESC;]
+(Background on this error at: https://sqlalche.me/e/20/f405)"
+7,batting,Which batters have the best strike rate with at least 300 balls faced?,True,fallback_question_bank,10,"SELECT TOP 10
     striker AS batter,
     SUM(runs_off_bat) AS runs,
     SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS balls_faced,
@@ -67,8 +75,8 @@ ORDER BY average_first_innings_score DESC;",
 FROM deliveries
 GROUP BY striker
 HAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300
-ORDER BY strike_rate DESC;",
-8,bowling,Which bowlers have the best economy rate with at least 300 legal balls bowled?,True,llm,10,"SELECT TOP 10
+ORDER BY strike_rate DESC;",Model generated an unsafe or invalid query
+8,bowling,Which bowlers have the best economy rate with at least 300 legal balls bowled?,True,curated_template,10,"SELECT TOP 10
     bowler,
     SUM(runs_off_bat + extras) AS runs_conceded,
     SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
@@ -81,40 +89,42 @@ FROM deliveries
 GROUP BY bowler
 HAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300
 ORDER BY economy_rate ASC;",
-9,powerplay,Who scored the most runs in powerplay overs?,True,llm,10,"SELECT TOP 10
+9,powerplay,Who scored the most runs in powerplay overs?,True,curated_template,10,"SELECT TOP 10
     striker AS batter,
-    SUM(runs_off_bat) AS powerplay_overs_runs
+    SUM(runs_off_bat) AS powerplay_runs
 FROM deliveries
 WHERE FLOOR(ball) BETWEEN 0 AND 5
 GROUP BY striker
-ORDER BY powerplay_overs_runs DESC;",
-10,death_overs,Which bowlers took the most wickets in death overs?,True,llm,10,"SELECT TOP 10
+ORDER BY powerplay_runs DESC;",
+10,death_overs,Which bowlers took the most wickets in death overs?,True,curated_template,10,"SELECT TOP 10
     bowler,
-    COUNT(*) AS wickets
+    COUNT(*) AS death_overs_wickets
 FROM deliveries
 WHERE FLOOR(ball) BETWEEN 15 AND 19
   AND wicket_type IS NOT NULL
   AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
 GROUP BY bowler
-ORDER BY wickets DESC;",
-11,venue_analysis,Which venues hosted the most IPL matches?,True,llm,10,"SELECT TOP 10 venue AS host_venue, COUNT(*) AS match_count
+ORDER BY death_overs_wickets DESC;",
+11,venue_analysis,Which venues hosted the most IPL matches?,True,curated_template,10,"SELECT TOP 10
+    venue,
+    COUNT(*) AS match_count
 FROM matches
 GROUP BY venue
 ORDER BY match_count DESC;",
-12,season_analysis,How many matches were played in each season?,True,llm,19,"SELECT 
+12,season_analysis,How many matches were played in each season?,True,curated_template,19,"SELECT
     season,
     COUNT(*) AS match_count
-FROM 
-    matches
-GROUP BY 
-    season;",
-13,team_analysis,Which teams have won the most matches?,True,llm,10,"SELECT TOP 10
+FROM matches
+GROUP BY season
+ORDER BY season;",
+13,team_analysis,Which teams have won the most matches?,True,curated_template,10,"SELECT TOP 10
     winner AS team,
     COUNT(*) AS wins
 FROM matches
+WHERE winner IS NOT NULL
 GROUP BY winner
 ORDER BY wins DESC;",
-14,batting,Which batters have hit the most runs in a single innings?,True,llm,10,"SELECT TOP 10
+14,batting,Which batters have hit the most runs in a single innings?,True,fallback_question_bank,10,"SELECT TOP 10
     d.striker AS batter,
     d.match_id,
     d.innings,
@@ -125,10 +135,319 @@ FROM deliveries d
 JOIN matches m
     ON d.match_id = m.match_id
 GROUP BY d.match_id, d.innings, d.striker, m.start_date, m.venue
-ORDER BY runs_in_innings DESC;",
-15,bowling,Which bowlers have conceded the most runs?,True,llm,10,"SELECT TOP 10
+ORDER BY runs_in_innings DESC;",Model generated an unsafe or invalid query
+15,bowling,Which bowlers have conceded the most runs?,True,curated_template,10,"SELECT TOP 10
     bowler,
     SUM(runs_off_bat + extras) AS total_runs_conceded
 FROM deliveries
 GROUP BY bowler
 ORDER BY total_runs_conceded DESC;",
+16,batting,Which players have the most ducks?,True,curated_template,10,"SELECT TOP 10
+    striker AS batter,
+    COUNT(*) AS ducks
+FROM (
+    SELECT
+        match_id,
+        innings,
+        striker,
+        SUM(runs_off_bat) AS runs_in_innings,
+        MAX(CASE
+                WHEN player_dismissed = striker
+                     AND wicket_type NOT IN ('retired hurt', 'retired out')
+                THEN 1
+                ELSE 0
+            END) AS was_dismissed
+    FROM deliveries
+    GROUP BY match_id, innings, striker
+) AS batter_innings
+WHERE runs_in_innings = 0
+  AND was_dismissed = 1
+GROUP BY striker
+ORDER BY ducks DESC;",
+17,bowling,What is the most expensive spell by a bowler?,True,curated_template,10,"SELECT TOP 10
+    d.bowler,
+    d.bowling_team,
+    d.batting_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+    SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.bowler, d.bowling_team, d.batting_team, m.season, m.start_date, m.venue
+HAVING SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) >= 6
+ORDER BY runs_conceded DESC;",
+18,batting,Who has the highest number of sixes in a single season?,True,curated_template,10,"SELECT TOP 10
+    season,
+    striker AS batter,
+    COUNT(*) AS sixes
+FROM deliveries
+WHERE runs_off_bat = 6
+GROUP BY season, striker
+ORDER BY sixes DESC;",
+19,team_analysis,What are the top 5 highest successful chases?,True,curated_template,5,"SELECT TOP 5
+    d.batting_team AS chasing_team,
+    d.bowling_team AS defending_team,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS chase_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings = 2
+  AND d.batting_team = m.winner
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY chase_score DESC;",
+20,batting,Which player has the highest score for CSK?,True,curated_template,10,"SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.batting_team = 'Chennai Super Kings'
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY runs_in_innings DESC;",
+21,batting,Which player has the highest score for MI?,True,curated_template,10,"SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.batting_team = 'Mumbai Indians'
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY runs_in_innings DESC;",
+22,bowling,Who has the most death over wickets for CSK?,True,llm,10,"SELECT TOP 10 
+    d.bowler, 
+    COUNT(*) AS death_over_wickets
+FROM deliveries d
+WHERE d.bowling_team = 'Chennai Super Kings'
+  AND FLOOR(d.ball) BETWEEN 15 AND 19
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler
+ORDER BY death_over_wickets DESC",
+23,team_analysis,What is the lowest team score?,True,curated_template,10,"SELECT TOP 10
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS team_score,
+    COUNT(d.player_dismissed) AS wickets_lost
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings IN (1, 2)
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+HAVING COUNT(d.player_dismissed) >= 10
+ORDER BY team_score ASC;",
+24,team_analysis,What is the highest team score?,True,curated_template,10,"SELECT TOP 10
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS team_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings IN (1, 2)
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY team_score DESC;",
+25,venue_analysis,Who has the most runs at Chinnaswamy?,True,llm,10,"SELECT TOP 10 d.striker AS batter, SUM(d.runs_off_bat) AS total_runs FROM deliveries d JOIN matches m ON d.match_id = m.match_id WHERE m.venue LIKE '%Chinnaswamy%' OR m.city IN ('Bengaluru', 'Bangalore') GROUP BY d.striker ORDER BY total_runs DESC",
+26,venue_analysis,Who has the most wickets at Chepauk?,True,llm,10,"SELECT TOP 10 
+    d.bowler, 
+    COUNT(*) AS wickets
+FROM deliveries d
+JOIN matches m ON d.match_id = m.match_id
+WHERE (
+        m.venue LIKE '%Chidambaram%'
+        OR m.venue LIKE '%Chepauk%'
+        OR m.city = 'Chennai'
+      )
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler
+ORDER BY wickets DESC",
+27,batting,Which player hit the most fours in a single innings?,True,curated_template,10,"SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings,
+    SUM(CASE WHEN d.runs_off_bat = 4 THEN 1 ELSE 0 END) AS fours_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY fours_in_innings DESC;",
+28,batting,Which player hit the most sixes in a single innings?,True,curated_template,10,"SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings,
+    SUM(CASE WHEN d.runs_off_bat = 6 THEN 1 ELSE 0 END) AS sixes_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY sixes_in_innings DESC;",
+29,batting,Which player hit the fastest fifty and in how many balls?,True,curated_template,10,"WITH batter_ball_progress AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.delivery_id,
+        d.ball,
+        SUM(d.runs_off_bat) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_runs,
+        SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+),
+batter_innings AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        batting_team,
+        opponent,
+        season,
+        start_date,
+        venue,
+        MAX(running_runs) AS final_score
+    FROM batter_ball_progress
+    GROUP BY match_id, innings, batter, batting_team, opponent, season, start_date, venue
+),
+milestones AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        MIN(running_balls) AS balls_to_fifty
+    FROM batter_ball_progress
+    WHERE running_runs >= 50
+    GROUP BY match_id, innings, batter
+)
+SELECT TOP 10
+    b.batter,
+    b.batting_team,
+    b.opponent,
+    b.season,
+    b.start_date,
+    b.venue,
+    b.final_score,
+    m.balls_to_fifty
+FROM milestones m
+JOIN batter_innings b
+    ON m.match_id = b.match_id
+    AND m.innings = b.innings
+    AND m.batter = b.batter
+ORDER BY m.balls_to_fifty ASC, b.final_score DESC;",
+30,batting,What is the fastest hundred of all time?,True,curated_template,10,"WITH batter_ball_progress AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.delivery_id,
+        d.ball,
+        SUM(d.runs_off_bat) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_runs,
+        SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+),
+batter_innings AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        batting_team,
+        opponent,
+        season,
+        start_date,
+        venue,
+        MAX(running_runs) AS final_score
+    FROM batter_ball_progress
+    GROUP BY match_id, innings, batter, batting_team, opponent, season, start_date, venue
+),
+milestones AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        MIN(running_balls) AS balls_to_hundred
+    FROM batter_ball_progress
+    WHERE running_runs >= 100
+    GROUP BY match_id, innings, batter
+)
+SELECT TOP 10
+    b.batter,
+    b.batting_team,
+    b.opponent,
+    b.season,
+    b.start_date,
+    b.venue,
+    b.final_score,
+    m.balls_to_hundred
+FROM milestones m
+JOIN batter_innings b
+    ON m.match_id = b.match_id
+    AND m.innings = b.innings
+    AND m.batter = b.batter
+ORDER BY m.balls_to_hundred ASC, b.final_score DESC;",
+31,batting,Which player has scored the most runs against CSK?,True,curated_template,10,"SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+WHERE d.bowling_team = 'Chennai Super Kings'
+GROUP BY d.striker
+ORDER BY total_runs DESC;",
+32,team_analysis,How many matches has PBKS won?,True,curated_template,1,"SELECT
+    COUNT(*) AS wins
+FROM matches
+WHERE winner IN ('Punjab Kings', 'Kings XI Punjab');",

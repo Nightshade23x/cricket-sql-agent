@@ -73,5 +73,91 @@
         "id": 15,
         "category": "bowling",
         "question": "Which bowlers have conceded the most runs?"
+    },
+    
+    {
+        "id": 16,
+        "category": "batting",
+        "question": "Which players have the most ducks?"
+    },
+    {
+        "id": 17,
+        "category": "bowling",
+        "question": "What is the most expensive spell by a bowler?"
+    },
+    {
+        "id": 18,
+        "category": "batting",
+        "question": "Who has the highest number of sixes in a single season?"
+    },
+    {
+        "id": 19,
+        "category": "team_analysis",
+        "question": "What are the top 5 highest successful chases?"
+    },
+    {
+        "id": 20,
+        "category": "batting",
+        "question": "Which player has the highest score for CSK?"
+    },
+    {
+        "id": 21,
+        "category": "batting",
+        "question": "Which player has the highest score for MI?"
+    },
+    {
+        "id": 22,
+        "category": "bowling",
+        "question": "Who has the most death over wickets for CSK?"
+    },
+    {
+        "id": 23,
+        "category": "team_analysis",
+        "question": "What is the lowest team score?"
+    },
+    {
+        "id": 24,
+        "category": "team_analysis",
+        "question": "What is the highest team score?"
+    },
+    {
+        "id": 25,
+        "category": "venue_analysis",
+        "question": "Who has the most runs at Chinnaswamy?"
+    },
+    {
+        "id": 26,
+        "category": "venue_analysis",
+        "question": "Who has the most wickets at Chepauk?"
+    },
+    {
+        "id": 27,
+        "category": "batting",
+        "question": "Which player hit the most fours in a single innings?"
+    },
+    {
+        "id": 28,
+        "category": "batting",
+        "question": "Which player hit the most sixes in a single innings?"
+    },
+    {
+        "id": 29,
+        "category": "batting",
+        "question": "Which player hit the fastest fifty and in how many balls?"
+    },
+    {
+        "id": 30,
+        "category": "batting",
+        "question": "What is the fastest hundred of all time?"
+    },
+    {
+        "id": 31,
+        "category": "batting",
+        "question": "Which player has scored the most runs against CSK?"
+    },
+    {
+        "id": 32,
+        "category": "team_analysis",
+        "question": "How many matches has PBKS won?"
     }
 ]

@@ -1109,6 +1109,158 @@ ORDER BY total_runs DESC;
 
     if "fastest hundred" in question_lower or "fastest 100" in question_lower or "fastest century" in question_lower:
         return build_fastest_milestone_sql(100, "hundred")
+    
+    if "top 10 run scorers" in question_lower:
+        return """
+SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS total_runs
+FROM deliveries
+GROUP BY striker
+ORDER BY total_runs DESC;
+""".strip()
+
+    if "top 10 wicket takers" in question_lower:
+        return """
+SELECT TOP 10
+    bowler,
+    COUNT(*) AS wickets
+FROM deliveries
+WHERE wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY bowler
+ORDER BY wickets DESC;
+""".strip()
+
+    if "most runs in death overs" in question_lower:
+        return """
+SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS death_overs_runs
+FROM deliveries
+WHERE FLOOR(ball) BETWEEN 15 AND 19
+GROUP BY striker
+ORDER BY death_overs_runs DESC;
+""".strip()
+
+    if "most runs in powerplay" in question_lower or "most runs in powerplay overs" in question_lower:
+        return """
+SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS powerplay_runs
+FROM deliveries
+WHERE FLOOR(ball) BETWEEN 0 AND 5
+GROUP BY striker
+ORDER BY powerplay_runs DESC;
+""".strip()
+
+    if "most wickets in the powerplay" in question_lower or "most powerplay wickets" in question_lower:
+        return """
+SELECT TOP 10
+    bowler,
+    COUNT(*) AS powerplay_wickets
+FROM deliveries
+WHERE FLOOR(ball) BETWEEN 0 AND 5
+  AND wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY bowler
+ORDER BY powerplay_wickets DESC;
+""".strip()
+
+    if "bowlers took the most wickets in death overs" in question_lower or "most wickets in death overs" in question_lower:
+        return """
+SELECT TOP 10
+    bowler,
+    COUNT(*) AS death_overs_wickets
+FROM deliveries
+WHERE FLOOR(ball) BETWEEN 15 AND 19
+  AND wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY bowler
+ORDER BY death_overs_wickets DESC;
+""".strip()
+
+    if "most wins while chasing" in question_lower:
+        return """
+SELECT TOP 10
+    d.batting_team AS chasing_team,
+    COUNT(DISTINCT d.match_id) AS chasing_wins
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings = 2
+  AND d.batting_team = m.winner
+GROUP BY d.batting_team
+ORDER BY chasing_wins DESC;
+""".strip()
+
+    if "best economy rate" in question_lower:
+        return """
+SELECT TOP 10
+    bowler,
+    SUM(runs_off_bat + extras) AS runs_conceded,
+    SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    ROUND(
+        SUM(runs_off_bat + extras) * 6.0 /
+        NULLIF(SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS economy_rate
+FROM deliveries
+GROUP BY bowler
+HAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300
+ORDER BY economy_rate ASC;
+""".strip()
+
+    if "venues hosted the most" in question_lower or "venue hosted the most" in question_lower:
+        return """
+SELECT TOP 10
+    venue,
+    COUNT(*) AS match_count
+FROM matches
+GROUP BY venue
+ORDER BY match_count DESC;
+""".strip()
+
+    if "matches were played in each season" in question_lower:
+        return """
+SELECT
+    season,
+    COUNT(*) AS match_count
+FROM matches
+GROUP BY season
+ORDER BY season;
+""".strip()
+
+    if "teams have won the most matches" in question_lower or "team has won the most matches" in question_lower:
+        return """
+SELECT TOP 10
+    winner AS team,
+    COUNT(*) AS wins
+FROM matches
+WHERE winner IS NOT NULL
+GROUP BY winner
+ORDER BY wins DESC;
+""".strip()
+
+    if "bowlers have conceded the most runs" in question_lower or "bowler conceded the most runs" in question_lower:
+        return """
+SELECT TOP 10
+    bowler,
+    SUM(runs_off_bat + extras) AS total_runs_conceded
+FROM deliveries
+GROUP BY bowler
+ORDER BY total_runs_conceded DESC;
+""".strip()
+    if "how many matches" in question_lower and "won" in question_lower:
+        team_condition = get_team_condition_from_question(user_question, "winner")
+
+        if team_condition is not None:
+            return f"""
+SELECT
+    COUNT(*) AS wins
+FROM matches
+WHERE {team_condition};
+""".strip()
     return None
 
 def answer_question_with_fallback(user_question):
