@@ -810,6 +810,134 @@ def needs_team_clarification(user_question):
 
     return False
 
+def get_team_condition_from_question(user_question, column_name):
+    question_lower = user_question.lower()
+
+    words = question_lower.replace("?", " ").replace(".", " ").replace(",", " ").split()
+
+    if "csk" in words or "chennai" in question_lower:
+        return f"{column_name} = 'Chennai Super Kings'"
+
+    if "mi" in words or "mumbai" in question_lower:
+        return f"{column_name} = 'Mumbai Indians'"
+
+    if "rcb" in words or "bangalore" in question_lower or "bengaluru" in question_lower:
+        return f"{column_name} = 'Royal Challengers Bangalore'"
+
+    if "kkr" in words or "kolkata" in question_lower:
+        return f"{column_name} = 'Kolkata Knight Riders'"
+
+    if "srh" in words or "sunrisers" in question_lower or "hyderabad" in question_lower:
+        return f"{column_name} = 'Sunrisers Hyderabad'"
+
+    if "rr" in words or "rajasthan" in question_lower:
+        return f"{column_name} = 'Rajasthan Royals'"
+
+    if "pbks" in words or "kxip" in words or "punjab" in question_lower:
+        return f"{column_name} IN ('Punjab Kings', 'Kings XI Punjab')"
+
+    if "gt" in words or "gujarat" in question_lower:
+        return f"{column_name} = 'Gujarat Titans'"
+
+    if "lsg" in words or "lucknow" in question_lower:
+        return f"{column_name} = 'Lucknow Super Giants'"
+
+    if "rps" in words or "pune supergiant" in question_lower:
+        return f"{column_name} IN ('Rising Pune Supergiant', 'Rising Pune Supergiants')"
+
+    if "kt" in words or "ktk" in words or "kochi" in question_lower:
+        return f"{column_name} = 'Kochi Tuskers Kerala'"
+
+    return None
+
+
+def build_curated_sql(user_question):
+    question_lower = user_question.lower()
+
+    if "ducks" in question_lower or "duck" in question_lower:
+        return """
+SELECT TOP 10
+    striker AS batter,
+    COUNT(*) AS ducks
+FROM (
+    SELECT
+        match_id,
+        innings,
+        striker,
+        SUM(runs_off_bat) AS runs_in_innings,
+        MAX(CASE
+                WHEN player_dismissed = striker
+                     AND wicket_type NOT IN ('retired hurt', 'retired out')
+                THEN 1
+                ELSE 0
+            END) AS was_dismissed
+    FROM deliveries
+    GROUP BY match_id, innings, striker
+) AS batter_innings
+WHERE runs_in_innings = 0
+  AND was_dismissed = 1
+GROUP BY striker
+ORDER BY ducks DESC;
+""".strip()
+
+    if "highest score" in question_lower and (" for " in question_lower or " csk" in question_lower or " mi" in question_lower):
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+
+        if team_condition is not None:
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {team_condition}
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY runs_in_innings DESC;
+""".strip()
+
+    if "highest team score" in question_lower or "highest total" in question_lower:
+        return """
+SELECT TOP 10
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS team_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings IN (1, 2)
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY team_score DESC;
+""".strip()
+
+    if "lowest team score" in question_lower or "lowest total" in question_lower:
+        return """
+SELECT TOP 10
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS team_score,
+    COUNT(d.player_dismissed) AS wickets_lost
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings IN (1, 2)
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+HAVING COUNT(d.player_dismissed) >= 10
+ORDER BY team_score ASC;
+""".strip()
+
+    return None
 
 def answer_question_with_fallback(user_question):
     if needs_team_clarification(user_question):
@@ -819,6 +947,19 @@ def answer_question_with_fallback(user_question):
             "sql_query": None,
             "result": None,
             "error": "DC is ambiguous. Please specify whether you mean Delhi Capitals or Deccan Chargers."
+        }
+
+    curated_sql = build_curated_sql(user_question)
+
+    if curated_sql is not None:
+        result = run_query(curated_sql)
+
+        return {
+            "method": "curated_template",
+            "matched_question": None,
+            "sql_query": curated_sql,
+            "result": result,
+            "error": None
         }
 
     try:

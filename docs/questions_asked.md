@@ -222,3 +222,13 @@ HAVING SUM(runs_off_bat) >= 50
 ORDER BY balls_faced ASC;
 ans is wrong,because urvil patel and jaiswal have the fastest fifty not pat cummins
 
+who has the highest score for csk
+wrong again,gave most runs for csk,switched to mi and same result,most runs for mi not highest score
+
+which players have the most ducks ques failed again
+SELECT striker AS batter, COUNT(*) AS wickets FROM deliveries WHERE player_dismissed IS NOT NULL GROUP BY striker ORDER BY wickets DESC
+
+what is the highest team score failed as well
+went to fallback ques: which venues have the highest average first innings score
+reason: llm error,model produced unsafe or invalid query
+
