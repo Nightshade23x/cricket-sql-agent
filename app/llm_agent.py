@@ -127,7 +127,7 @@ Important cricket definitions:
 - Include useful context such as season, start_date, venue, batting_team, bowling_team, and runs_in_innings when possible.
 - Fastest fifty or fastest hundred means the fewest legal balls faced to reach 50 or 100 in one innings.
 - Use cumulative batter runs and cumulative legal balls within match_id, innings, and striker.
-- Legal ball for batter milestone counting means wides IS NULL and noballs IS NULL.
+- For batting balls faced and fastest 50/100 milestone counting, count deliveries where wides IS NULL. Do not exclude no-balls from batter milestone ball count.
 Venue and city alias rules:
 - If the user asks about a venue nickname or city, map it to the actual venue names in the database.
 - For venue/city questions, prefer joining deliveries d with matches m using match_id, then filter using m.venue, d.venue, or m.city.
@@ -850,6 +850,74 @@ def get_team_condition_from_question(user_question, column_name):
 
     return None
 
+def build_fastest_milestone_sql(milestone_runs, milestone_name):
+    return f"""
+WITH batter_ball_progress AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.delivery_id,
+        d.ball,
+        SUM(d.runs_off_bat) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_runs,
+        SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+),
+batter_innings AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        batting_team,
+        opponent,
+        season,
+        start_date,
+        venue,
+        MAX(running_runs) AS final_score
+    FROM batter_ball_progress
+    GROUP BY match_id, innings, batter, batting_team, opponent, season, start_date, venue
+),
+milestones AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        MIN(running_balls) AS balls_to_{milestone_name}
+    FROM batter_ball_progress
+    WHERE running_runs >= {milestone_runs}
+    GROUP BY match_id, innings, batter
+)
+SELECT TOP 10
+    b.batter,
+    b.batting_team,
+    b.opponent,
+    b.season,
+    b.start_date,
+    b.venue,
+    b.final_score,
+    m.balls_to_{milestone_name}
+FROM milestones m
+JOIN batter_innings b
+    ON m.match_id = b.match_id
+    AND m.innings = b.innings
+    AND m.batter = b.batter
+ORDER BY m.balls_to_{milestone_name} ASC, b.final_score DESC;
+""".strip()
 
 def build_curated_sql(user_question):
     question_lower = user_question.lower()
@@ -937,6 +1005,110 @@ HAVING COUNT(d.player_dismissed) >= 10
 ORDER BY team_score ASC;
 """.strip()
 
+    if "most expensive spell" in question_lower or "expensive spell" in question_lower:
+        return """
+SELECT TOP 10
+    d.bowler,
+    d.bowling_team,
+    d.batting_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+    SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.bowler, d.bowling_team, d.batting_team, m.season, m.start_date, m.venue
+HAVING SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) >= 6
+ORDER BY runs_conceded DESC;
+""".strip()
+
+    if "successful chase" in question_lower or "successful chases" in question_lower or "highest chase" in question_lower:
+        return """
+SELECT TOP 5
+    d.batting_team AS chasing_team,
+    d.bowling_team AS defending_team,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS chase_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings = 2
+  AND d.batting_team = m.winner
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY chase_score DESC;
+""".strip()
+
+    if "sixes" in question_lower and "single season" in question_lower:
+        return """
+SELECT TOP 10
+    season,
+    striker AS batter,
+    COUNT(*) AS sixes
+FROM deliveries
+WHERE runs_off_bat = 6
+GROUP BY season, striker
+ORDER BY sixes DESC;
+""".strip()
+
+    if "fours" in question_lower and "single innings" in question_lower:
+        return """
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings,
+    SUM(CASE WHEN d.runs_off_bat = 4 THEN 1 ELSE 0 END) AS fours_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY fours_in_innings DESC;
+""".strip()
+
+    if "sixes" in question_lower and "single innings" in question_lower:
+        return """
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings,
+    SUM(CASE WHEN d.runs_off_bat = 6 THEN 1 ELSE 0 END) AS sixes_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY sixes_in_innings DESC;
+""".strip()
+
+    if "runs against" in question_lower or "most runs against" in question_lower:
+        team_condition = get_team_condition_from_question(user_question, "d.bowling_team")
+
+        if team_condition is not None:
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+WHERE {team_condition}
+GROUP BY d.striker
+ORDER BY total_runs DESC;
+""".strip()
+        
+    if "fastest fifty" in question_lower or "fastest 50" in question_lower:
+        return build_fastest_milestone_sql(50, "fifty")
+
+    if "fastest hundred" in question_lower or "fastest 100" in question_lower or "fastest century" in question_lower:
+        return build_fastest_milestone_sql(100, "hundred")
     return None
 
 def answer_question_with_fallback(user_question):
