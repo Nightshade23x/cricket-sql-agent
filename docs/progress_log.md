@@ -69,3 +69,7 @@ identified llm weaknesses in certain ques such as ducks,highest score etc
 added curated templates for such ques
 added team abbreviation handling such as csk,rcb etc and also added support for nicknames of venues such as chepauk
 confirmed that the templates work in the streamlit app
+added more templates for fastest 50 and fastest 100 ques
+tested it against known records
+found a bug so fixed that as no balls were being excluded from batting balls faced
+corrected it and now results are accurate
