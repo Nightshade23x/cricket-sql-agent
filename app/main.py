@@ -95,18 +95,27 @@ def main():
                 st.write(response["error"])
 
             st.subheader("SQL Used")
-            st.code(response["sql_query"], language="sql")
+
+            if response["sql_query"] is not None:
+                st.code(response["sql_query"], language="sql")
+            else:
+                st.write("No SQL query was generated.")
 
             st.subheader("Result")
 
-            result = response["result"].copy()
+            if response["result"] is not None:
+                result = response["result"].copy()
 
-            result.index = result.index + 1
+                result.index = result.index + 1
 
-            st.dataframe(result, use_container_width=True)
+                st.dataframe(result, use_container_width=True)
 
-            show_chart_if_possible(result)
-                    
+                show_chart_if_possible(result)
+            else:
+                st.info("No result table to display.")
+
+
+                                
 
 
 main()

@@ -77,5 +77,11 @@
     "category": "batting",
     "question": "Which batters have hit the most runs in a single innings?",
     "sql": "SELECT TOP 10\n    d.striker AS batter,\n    d.match_id,\n    d.innings,\n    m.start_date,\n    m.venue,\n    SUM(d.runs_off_bat) AS runs_in_innings\nFROM deliveries d\nJOIN matches m\n    ON d.match_id = m.match_id\nGROUP BY d.match_id, d.innings, d.striker, m.start_date, m.venue\nORDER BY runs_in_innings DESC;"
-    }   
+    },
+    {
+    "id": 14,
+    "category": "team_analysis",
+    "question": "How many matches has PBKS won?",
+    "sql": "SELECT\n    COUNT(*) AS punjab_franchise_wins\nFROM matches\nWHERE winner IN ('Punjab Kings', 'Kings XI Punjab');"
+    } 
 ]

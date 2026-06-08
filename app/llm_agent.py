@@ -69,6 +69,42 @@ Important cricket definitions:
 -economy rate should include all deliveries bowled, not only wicket deliveries
 -do not filter wicket_type when calculating economy rate
 -economy rate= sum(runs_off_bat+extras)*6.0/legal balls bowled
+- A duck means a batter was dismissed for 0 runs in a match innings. Do not count dot balls as ducks.
+- For ducks, first group by match_id, innings, and striker, then check SUM(runs_off_bat) = 0 and the batter was dismissed.
+- A bowling spell means one bowler's bowling figures in one match innings. Group by match_id, innings, and bowler.
+- For "single season" records, group by season and player.
+- Orange Cap means the highest run scorer in each season.
+- Purple Cap means the highest wicket taker in each season.
+- A successful chase means innings = 2, batting_team = winner, and the innings total is the chase score.
+- For "against a team", use bowling_team. For example, runs against Chennai Super Kings means bowling_team = 'Chennai Super Kings'.
+- For "for a team", use batting_team.
+- CSK means Chennai Super Kings.
+- RCB means Royal Challengers Bangalore.
+- MI means Mumbai Indians.
+- KKR means Kolkata Knight Riders.
+- SRH means Sunrisers Hyderabad.
+- DC means Delhi Capitals.
+- DD means Delhi Daredevils.
+- RR means Rajasthan Royals.
+- PBKS means Punjab Kings.
+- KXIP means Kings XI Punjab.
+- GT means Gujarat Titans.
+- LSG means Lucknow Super Giants.
+-KT means Kochi Tuskers
+- Chepauk means MA Chidambaram Stadium in Chennai. Use venue LIKE '%Chidambaram%' or venue LIKE '%Chepauk%'.
+- For highest sixes in a match, include match_id, season, start_date, venue, and both teams if possible.
+- The current matches table does not contain a clear playoff stage column, so playoff-specific questions may require adding match_number or stage metadata first.
+- PBKS and KXIP refer to the same franchise history. For Punjab franchise questions, use: IN ('Punjab Kings', 'Kings XI Punjab').
+- Punjab Kings and Kings XI Punjab should be treated as the same team when calculating franchise-level totals.
+- DD and Delhi Capitals refer to the same franchise history. For Delhi franchise questions, use: IN ('Delhi Capitals', 'Delhi Daredevils').
+- Delhi Capitals and Delhi Daredevils should be treated as the same team when calculating franchise-level totals.
+- DC is ambiguous because it can mean Delhi Capitals or Deccan Chargers.
+- If the user only says "DC" without specifying Delhi Capitals or Deccan Chargers, ask the user to clarify instead of generating SQL.
+- If the user says "Deccan Chargers", use 'Deccan Chargers' only.
+- If the user says "Delhi Capitals" or "Delhi Daredevils", treat them as the same Delhi franchise using IN ('Delhi Capitals', 'Delhi Daredevils').
+- For team match wins, use the matches table only. Do not join deliveries unless the question needs ball-by-ball data.
+- For Punjab franchise wins, count matches where winner IN ('Punjab Kings', 'Kings XI Punjab').
+- For Delhi franchise wins, count matches where winner IN ('Delhi Capitals', 'Delhi Daredevils').
 
 sql rules:
 -use sql server syntax only
@@ -197,6 +233,185 @@ JOIN matches m
 GROUP BY d.match_id, d.innings, d.striker, m.start_date, m.venue
 ORDER BY runs_in_innings DESC;
 
+Question: Which players have the most ducks?
+SQL:
+SELECT TOP 10
+    striker AS batter,
+    COUNT(*) AS ducks
+FROM (
+    SELECT
+        match_id,
+        innings,
+        striker,
+        SUM(runs_off_bat) AS runs_in_innings,
+        MAX(CASE 
+                WHEN player_dismissed = striker 
+                     AND wicket_type NOT IN ('retired hurt', 'retired out')
+                THEN 1 
+                ELSE 0 
+            END) AS was_dismissed
+    FROM deliveries
+    GROUP BY match_id, innings, striker
+) AS batter_innings
+WHERE runs_in_innings = 0
+  AND was_dismissed = 1
+GROUP BY striker
+ORDER BY ducks DESC;
+
+Question: What is the most expensive spell by a bowler?
+SQL:
+SELECT TOP 10
+    d.bowler,
+    d.match_id,
+    d.innings,
+    m.start_date,
+    m.venue,
+    d.bowling_team,
+    d.batting_team,
+    SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+    SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.bowler, m.start_date, m.venue, d.bowling_team, d.batting_team
+HAVING SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) >= 6
+ORDER BY runs_conceded DESC;
+
+Question: Who has the highest number of sixes in a single season?
+SQL:
+SELECT TOP 10
+    season,
+    striker AS batter,
+    COUNT(*) AS sixes
+FROM deliveries
+WHERE runs_off_bat = 6
+GROUP BY season, striker
+ORDER BY sixes DESC;
+
+Question: What are the top 5 highest successful chases?
+SQL:
+SELECT TOP 5
+    d.match_id,
+    m.season,
+    m.start_date,
+    m.venue,
+    d.batting_team AS chasing_team,
+    d.bowling_team AS defending_team,
+    SUM(d.runs_off_bat + d.extras) AS chase_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings = 2
+  AND d.batting_team = m.winner
+GROUP BY d.match_id, m.season, m.start_date, m.venue, d.batting_team, d.bowling_team
+ORDER BY chase_score DESC;
+
+Question: What game had the highest number of sixes in it?
+SQL:
+SELECT TOP 1
+    d.match_id,
+    m.season,
+    m.start_date,
+    m.venue,
+    MIN(d.batting_team) AS team_1,
+    MAX(d.batting_team) AS team_2,
+    SUM(CASE WHEN d.runs_off_bat = 6 THEN 1 ELSE 0 END) AS total_sixes
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, m.season, m.start_date, m.venue
+ORDER BY total_sixes DESC;
+
+Question: Which players have the most hundreds?
+SQL:
+SELECT TOP 5
+    batter,
+    COUNT(*) AS hundreds
+FROM (
+    SELECT
+        match_id,
+        innings,
+        striker AS batter,
+        SUM(runs_off_bat) AS runs_in_innings
+    FROM deliveries
+    GROUP BY match_id, innings, striker
+) AS batter_innings
+WHERE runs_in_innings >= 100
+GROUP BY batter
+ORDER BY hundreds DESC;
+
+Question: Which player has scored the most runs against Chennai Super Kings?
+SQL:
+SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS total_runs
+FROM deliveries
+WHERE bowling_team = 'Chennai Super Kings'
+GROUP BY striker
+ORDER BY total_runs DESC;
+
+Question: Who won the Orange Cap in each season?
+SQL:
+WITH season_runs AS (
+    SELECT
+        season,
+        striker AS batter,
+        SUM(runs_off_bat) AS total_runs
+    FROM deliveries
+    GROUP BY season, striker
+),
+ranked_runs AS (
+    SELECT
+        season,
+        batter,
+        total_runs,
+        RANK() OVER (PARTITION BY season ORDER BY total_runs DESC) AS run_rank
+    FROM season_runs
+)
+SELECT
+    season,
+    batter,
+    total_runs
+FROM ranked_runs
+WHERE run_rank = 1
+ORDER BY season;
+
+Question: Who won the Purple Cap in each season?
+SQL:
+WITH season_wickets AS (
+    SELECT
+        season,
+        bowler,
+        COUNT(*) AS wickets
+    FROM deliveries
+    WHERE wicket_type IS NOT NULL
+      AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+    GROUP BY season, bowler
+),
+ranked_wickets AS (
+    SELECT
+        season,
+        bowler,
+        wickets,
+        RANK() OVER (PARTITION BY season ORDER BY wickets DESC) AS wicket_rank
+    FROM season_wickets
+)
+SELECT
+    season,
+    bowler,
+    wickets
+FROM ranked_wickets
+WHERE wicket_rank = 1
+ORDER BY season;
+
+Question: How many matches has PBKS won?
+SQL:
+SELECT
+    COUNT(*) AS punjab_franchise_wins
+FROM matches
+WHERE winner IN ('Punjab Kings', 'Kings XI Punjab');
+
+
 User question:
 {user_question}
 """
@@ -239,33 +454,61 @@ def answer_question_with_llm(user_question):#generates sql using ollama and runs
     result=run_query(sql_query)
     return sql_query,result 
 
+def needs_team_clarification(user_question):
+    question_lower = user_question.lower()
+
+    words = question_lower.replace("?", " ").replace(".", " ").replace(",", " ").split()
+
+    if "dc" in words:
+        if "delhi" not in question_lower and "deccan" not in question_lower:
+            return True
+
+    return False
+
+
 def answer_question_with_fallback(user_question):
-    try:
-        sql_query,result=answer_question_with_llm(user_question)
-        return{
-            "method":"llm",
-            "matched_question":None,
-            "sql_query":sql_query,
-            "result":result,
-            "error":None
+    if needs_team_clarification(user_question):
+        return {
+            "method": "clarification_needed",
+            "matched_question": None,
+            "sql_query": None,
+            "result": None,
+            "error": "DC is ambiguous. Please specify whether you mean Delhi Capitals or Deccan Chargers."
         }
+
+    try:
+        sql_query, result = answer_question_with_llm(user_question)
+
+        return {
+            "method": "llm",
+            "matched_question": None,
+            "sql_query": sql_query,
+            "result": result,
+            "error": None
+        }
+
     except Exception as error:
-        examples=load_examples()
-        best_example,score=find_best_example(user_question,examples)
-        if best_example is None or score==0:
-            return{
-                "method":"failed",
-                "matched_question":None,
-                "sql_query":None,
-                "result":None,
-                "error":str(error)
+        examples = load_examples()
+
+        best_example, score = find_best_example(user_question, examples)
+
+        if best_example is None or score == 0:
+            return {
+                "method": "failed",
+                "matched_question": None,
+                "sql_query": None,
+                "result": None,
+                "error": str(error)
             }
-        sql_query=best_example["sql"]
-        result=run_query(sql_query)
-        return{
-            "method":"fallback_question_bank",
-            "matched_question":best_example["question"],
-            "sql_query":sql_query,
-            "result":result,
-            "error":str(error)
+
+        sql_query = best_example["sql"]
+
+        result = run_query(sql_query)
+
+        return {
+            "method": "fallback_question_bank",
+            "matched_question": best_example["question"],
+            "sql_query": sql_query,
+            "result": result,
+            "error": str(error)
         }
