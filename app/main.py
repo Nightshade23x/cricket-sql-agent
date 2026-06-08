@@ -7,6 +7,8 @@ def show_chart_if_possible(result):
         return
     if result.empty:
         return
+    if len(result) < 2:
+        return
     numeric_columns=result.select_dtypes(include="number").columns.tolist()
     if len(numeric_columns)==0:
         return

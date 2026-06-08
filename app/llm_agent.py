@@ -90,7 +90,6 @@ Important cricket definitions:
 - KXIP means Kings XI Punjab.
 - GT means Gujarat Titans.
 - LSG means Lucknow Super Giants.
--KT means Kochi Tuskers
 - Chepauk means MA Chidambaram Stadium in Chennai. Use venue LIKE '%Chidambaram%' or venue LIKE '%Chepauk%'.
 - For highest sixes in a match, include match_id, season, start_date, venue, and both teams if possible.
 - The current matches table does not contain a clear playoff stage column, so playoff-specific questions may require adding match_number or stage metadata first.
@@ -105,6 +104,58 @@ Important cricket definitions:
 - For team match wins, use the matches table only. Do not join deliveries unless the question needs ball-by-ball data.
 - For Punjab franchise wins, count matches where winner IN ('Punjab Kings', 'Kings XI Punjab').
 - For Delhi franchise wins, count matches where winner IN ('Delhi Capitals', 'Delhi Daredevils').
+- KT and KTK mean Kochi Tuskers Kerala.
+- RPS means Rising Pune Supergiant or Rising Pune Supergiants. Use IN ('Rising Pune Supergiant', 'Rising Pune Supergiants').
+- Chinnaswamy means M Chinnaswamy Stadium or M.Chinnaswamy Stadium.
+- Narendra Modi Stadium may also appear as Sardar Patel Stadium or Motera in older data. Use venue LIKE '%Narendra Modi%' OR venue LIKE '%Sardar Patel%' OR venue LIKE '%Motera%'.
+- Highest score for a team means highest individual score in one match innings for that team. Group by match_id, innings, striker, batting_team, and bowling_team.
+- Do not answer highest score for a team by summing the player's career runs for that team.
+- Most expensive spell means one bowler in one match innings. Group by match_id, innings, and bowler.
+- Do not answer most expensive spell using career total runs conceded.
+- Single season records must group by season and player.
+- Highest sixes in a single season means season + batter, not career sixes.
+- Successful chase means an innings 2 team won the match. The chase score is the innings total for that match, not the number of rows/deliveries.
+- Highest successful chase should group by match_id, innings, batting_team, and bowling_team.
+- Highest or lowest team score means one team's score in one match innings. Group by match_id, innings, batting_team, and bowling_team.
+- Do not group only by match_id for team scores, because that combines both teams' scores.
+- For lowest team score, prefer completed/all-out innings by counting wickets. Use wickets >= 10 when asking for all-time lowest completed team score.
+- For wickets in a phase, count only actual wickets. Use wicket_type IS NOT NULL and exclude run out, retired hurt, retired out, and obstructing the field.
+- Do not count every ball in the phase as a wicket.
+- For runs against a team, use bowling_team.
+- For runs for a team, use batting_team.
+- For single-innings fours or sixes records, group by match_id, innings, striker, batting_team, and bowling_team.
+- Include useful context such as season, start_date, venue, batting_team, bowling_team, and runs_in_innings when possible.
+- Fastest fifty or fastest hundred means the fewest legal balls faced to reach 50 or 100 in one innings.
+- Use cumulative batter runs and cumulative legal balls within match_id, innings, and striker.
+- Legal ball for batter milestone counting means wides IS NULL and noballs IS NULL.
+Venue and city alias rules:
+- If the user asks about a venue nickname or city, map it to the actual venue names in the database.
+- For venue/city questions, prefer joining deliveries d with matches m using match_id, then filter using m.venue, d.venue, or m.city.
+- Use LIKE filters for venue aliases because the same stadium may appear with slightly different names.
+
+Venue aliases:
+- Ekana or Lucknow means venue LIKE '%Ekana%' OR venue LIKE '%Lucknow%'.
+- DY Patil means venue LIKE '%DY Patil%'.
+- Vizag or Visakhapatnam means venue LIKE '%Visakhapatnam%' OR venue LIKE '%ACA-VDCA%'.
+- Chinnaswamy, Bengaluru, or Bangalore means venue LIKE '%Chinnaswamy%' OR city IN ('Bengaluru', 'Bangalore').
+- Chepauk or Chennai means venue LIKE '%Chidambaram%' OR venue LIKE '%Chepauk%' OR city = 'Chennai'.
+- Mullanpur or New Chandigarh means venue LIKE '%Mullanpur%' OR venue LIKE '%New Chandigarh%'.
+- Mohali or Chandigarh means venue LIKE '%Mohali%' OR venue LIKE '%Chandigarh%'.
+- Uppal or Hyderabad means venue LIKE '%Uppal%' OR venue LIKE '%Hyderabad%' OR city = 'Hyderabad'.
+- Motera, Ahmedabad, Narendra Modi Stadium, or Sardar Patel Stadium means venue LIKE '%Narendra Modi%' OR venue LIKE '%Sardar Patel%' OR venue LIKE '%Motera%' OR city = 'Ahmedabad'.
+- Wankhede or Mumbai means venue LIKE '%Wankhede%' OR city = 'Mumbai'.
+- Eden Gardens or Kolkata means venue LIKE '%Eden Gardens%' OR city = 'Kolkata'.
+- Jaipur means venue LIKE '%Sawai Mansingh%' OR city = 'Jaipur'.
+- Dharamsala means venue LIKE '%Himachal Pradesh%' OR city = 'Dharamsala'.
+- Pune means venue LIKE '%Maharashtra Cricket Association%' OR venue LIKE '%Subrata Roy%' OR city = 'Pune'.
+- Raipur means venue LIKE '%Raipur%' OR city = 'Raipur'.
+- Guwahati means venue LIKE '%Guwahati%' OR venue LIKE '%Barsapara%'.
+- Delhi means venue LIKE '%Arun Jaitley%' OR venue LIKE '%Feroz Shah Kotla%' OR city = 'Delhi'.
+- Rajkot means venue LIKE '%Saurashtra%' OR city = 'Rajkot'.
+- Abu Dhabi means venue LIKE '%Zayed%' OR city = 'Abu Dhabi'.
+- Dubai means venue LIKE '%Dubai%'.
+- Sharjah means venue LIKE '%Sharjah%'.
+- Wanderers means venue LIKE '%Wanderers%'.
 
 sql rules:
 -use sql server syntax only
@@ -410,6 +461,300 @@ SELECT
     COUNT(*) AS punjab_franchise_wins
 FROM matches
 WHERE winner IN ('Punjab Kings', 'Kings XI Punjab');
+
+Question: Which player has the highest score for MI?
+SQL:
+SELECT TOP 1
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.batting_team = 'Mumbai Indians'
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY runs_in_innings DESC;
+
+Question: What is the most expensive spell by a bowler?
+SQL:
+SELECT TOP 10
+    d.bowler,
+    d.bowling_team,
+    d.batting_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+    SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.bowler, d.bowling_team, d.batting_team, m.season, m.start_date, m.venue
+HAVING SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) >= 6
+ORDER BY runs_conceded DESC;
+
+Question: What are the top 5 highest successful chases?
+SQL:
+SELECT TOP 5
+    d.batting_team AS chasing_team,
+    d.bowling_team AS defending_team,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS chase_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings = 2
+  AND d.batting_team = m.winner
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY chase_score DESC;
+
+Question: Who has the most death over wickets for CSK?
+SQL:
+SELECT TOP 10
+    d.bowler,
+    COUNT(*) AS death_over_wickets
+FROM deliveries d
+WHERE d.bowling_team = 'Chennai Super Kings'
+  AND FLOOR(d.ball) BETWEEN 15 AND 19
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler
+ORDER BY death_over_wickets DESC;
+
+Question: What is the lowest team score?
+SQL:
+SELECT TOP 10
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS team_score,
+    COUNT(d.player_dismissed) AS wickets_lost
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings IN (1, 2)
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+HAVING COUNT(d.player_dismissed) >= 10
+ORDER BY team_score ASC;
+
+Question: What is the highest team score?
+SQL:
+SELECT TOP 10
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS team_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings IN (1, 2)
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY team_score DESC;
+
+Question: Who has the most runs at Narendra Modi Stadium?
+SQL:
+SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+WHERE d.venue LIKE '%Narendra Modi%'
+   OR d.venue LIKE '%Sardar Patel%'
+   OR d.venue LIKE '%Motera%'
+GROUP BY d.striker
+ORDER BY total_runs DESC;
+
+Question: Which player hit the most fours in a single innings?
+SQL:
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings,
+    SUM(CASE WHEN d.runs_off_bat = 4 THEN 1 ELSE 0 END) AS fours_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY fours_in_innings DESC;
+
+Question: Which player hit the most sixes in a single innings?
+SQL:
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings,
+    SUM(CASE WHEN d.runs_off_bat = 6 THEN 1 ELSE 0 END) AS sixes_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY sixes_in_innings DESC;
+
+Question: Which player hit the fastest fifty and in how many balls?
+SQL:
+WITH batter_ball_progress AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.ball,
+        SUM(d.runs_off_bat) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_runs,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+),
+fifties AS (
+    SELECT
+        batter,
+        batting_team,
+        opponent,
+        season,
+        start_date,
+        venue,
+        MIN(running_balls) AS balls_to_hundred
+    FROM batter_ball_progress
+    WHERE running_runs >= 50
+    GROUP BY match_id, innings, batter, batting_team, opponent, season, start_date, venue
+)
+SELECT TOP 10
+    batter,
+    batting_team,
+    opponent,
+    season,
+    start_date,
+    venue,
+    balls_to_fifty
+FROM fifties
+ORDER BY balls_to_fifty ASC;
+
+Question: Which player hit the fastest hundred and in how many balls?
+SQL:
+WITH batter_ball_progress AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.ball,
+        SUM(d.runs_off_bat) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_runs,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+),
+fifties AS (
+    SELECT
+        batter,
+        batting_team,
+        opponent,
+        season,
+        start_date,
+        venue,
+        MIN(running_balls) AS balls_to_hundred
+    FROM batter_ball_progress
+    WHERE running_runs >= 100
+    GROUP BY match_id, innings, batter, batting_team, opponent, season, start_date, venue
+)
+SELECT TOP 10
+    batter,
+    batting_team,
+    opponent,
+    season,
+    start_date,
+    venue,
+    balls_to_hundred
+FROM fifties
+ORDER BY balls_to_hundred ASC;
+
+Question: Who has the most runs at Lucknow?
+SQL:
+SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE m.venue LIKE '%Ekana%'
+   OR m.venue LIKE '%Lucknow%'
+   OR m.city = 'Lucknow'
+GROUP BY d.striker
+ORDER BY total_runs DESC;
+
+
+Question: Who has the most wickets at Chepauk?
+SQL:
+SELECT TOP 10
+    d.bowler,
+    COUNT(*) AS wickets
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE (
+        m.venue LIKE '%Chidambaram%'
+        OR m.venue LIKE '%Chepauk%'
+        OR m.city = 'Chennai'
+      )
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler
+ORDER BY wickets DESC;
+
+Question: Who has the most runs at Chinnaswamy?
+SQL:
+SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE m.venue LIKE '%Chinnaswamy%'
+   OR m.city IN ('Bengaluru', 'Bangalore')
+GROUP BY d.striker
+ORDER BY total_runs DESC;
+
 
 
 User question:
