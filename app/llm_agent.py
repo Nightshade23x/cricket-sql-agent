@@ -83,6 +83,8 @@ sql rules:
 -for average first innings score by venue,first calculate total score per match and venue where innings=1, then average those totals grouped by venue
 -when using a subquery, make sure the inner select has its from clause before closing the subquery
 -do not close subquery until after the inner group by its complete.
+- for single innings batting records, group by match_id,innings, and striker. do not group only by striker
+-"single innings" means one batter's runs in one match innings, not total runs across all matches.
 
 Examples:
 
@@ -179,6 +181,21 @@ FROM deliveries
 GROUP BY bowler
 HAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300
 ORDER BY economy_rate ASC;
+
+Question: Which batters have hit the most runs in a single innings?
+SQL:
+SELECT TOP 10
+    d.striker AS batter,
+    d.match_id,
+    d.innings,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+GROUP BY d.match_id, d.innings, d.striker, m.start_date, m.venue
+ORDER BY runs_in_innings DESC;
 
 User question:
 {user_question}

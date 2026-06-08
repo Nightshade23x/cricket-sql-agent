@@ -70,5 +70,12 @@
         "category": "venue_analysis",
         "question": "Which venues have the highest average first innings score?",
         "sql": "SELECT TOP 10\n    venue,\n    ROUND(AVG(total_score * 1.0), 2) AS average_first_innings_score,\n    COUNT(*) AS innings_count\nFROM (\n    SELECT\n        match_id,\n        venue,\n        SUM(runs_off_bat + extras) AS total_score\n    FROM deliveries\n    WHERE innings = 1\n    GROUP BY match_id, venue\n) AS first_innings_scores\nGROUP BY venue\nHAVING COUNT(*) >= 10\nORDER BY average_first_innings_score DESC;"
-    }
+    },
+
+    {
+    "id": 13,
+    "category": "batting",
+    "question": "Which batters have hit the most runs in a single innings?",
+    "sql": "SELECT TOP 10\n    d.striker AS batter,\n    d.match_id,\n    d.innings,\n    m.start_date,\n    m.venue,\n    SUM(d.runs_off_bat) AS runs_in_innings\nFROM deliveries d\nJOIN matches m\n    ON d.match_id = m.match_id\nGROUP BY d.match_id, d.innings, d.striker, m.start_date, m.venue\nORDER BY runs_in_innings DESC;"
+    }   
 ]
