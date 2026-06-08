@@ -60,4 +60,7 @@ created an evaluation dataset with 15 cricket ques across multiple categories su
 created an evaluation script to automatically test the reliable llm agent on the evaluation dataset
 ran the evaluation script and all 15 test questions were successful
 saved the results to a csv file
-
+improved the streamlit web interface by adding automatic result charts for suitable questions
+added chart generation for numeric result tables such as top run scorers
+fixed the displayed result table index so it starts from 1 instead of 0
+tested the streamlit app with questions and confirmed it works
