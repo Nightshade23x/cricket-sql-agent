@@ -73,3 +73,6 @@ added more templates for fastest 50 and fastest 100 ques
 tested it against known records
 found a bug so fixed that as no balls were being excluded from batting balls faced
 corrected it and now results are accurate
+continued testing custom cricket questions in the streamlit app
+expanded evaluation to 32 questions
+reran evaluation and imrpoved the agent based on incorrect sql logic
