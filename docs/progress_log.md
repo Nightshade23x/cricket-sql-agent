@@ -54,3 +54,10 @@ testing the reliable agent and confirmed both llm generation and fallback logic 
 confirmed the llm can answer custom ques beyon the fixed ques bank,as long as the ans can be calculated from the available database cols
 first created a terminal based interactive chat then created streamlit for ui
 tested and checked how it works
+
+day 4(break after weekend)
+created an evaluation dataset with 15 cricket ques across multiple categories such as batting,venue based etc
+created an evaluation script to automatically test the reliable llm agent on the evaluation dataset
+ran the evaluation script and all 15 test questions were successful
+saved the results to a csv file
+
