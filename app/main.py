@@ -2,6 +2,47 @@ import streamlit as st
 
 from app.llm_agent import answer_question_with_fallback
 
+def show_chart_if_possible(result):
+    if result is None:
+        return
+    if result.empty:
+        return
+    numeric_columns=result.select_dtypes(include="number").columns.tolist()
+    if len(numeric_columns)==0:
+        return
+    preferred_value_columns=[
+        "total_runs",
+        "wickets",
+        "death_overs_runs",
+        "powerplay_overs_runs",
+        "chasing_wins",
+        "average_first_innings_score",
+        "strike_rate",
+        "economy_rate",
+        "match_count",
+        "wins",
+        "runs_in_innings",
+        "total_runs_conceded",
+        "runs_conceded",
+    ]
+    value_column=None
+    for column in preferred_value_columns:
+        if column in result.columns:
+            value_column=column
+            break
+    if value_column is None:
+        value_column=numeric_columns[-1]
+    label_column=None
+    for column in result.columns:
+        if column!=value_column and column not in numeric_columns:
+            label_column=column
+            break
+    if label_column is None:
+        return
+    chart_data=result[[label_column,value_column]].copy()
+    chart_data=chart_data.set_index(label_column)
+    st.subheader("chart")
+    st.bar_chart(chart_data)
 
 def main():
     st.set_page_config(page_title="Cricket SQL Agent", layout="wide")
@@ -57,7 +98,15 @@ def main():
             st.code(response["sql_query"], language="sql")
 
             st.subheader("Result")
-            st.dataframe(response["result"], use_container_width=True)
+
+            result = response["result"].copy()
+
+            result.index = result.index + 1
+
+            st.dataframe(result, use_container_width=True)
+
+            show_chart_if_possible(result)
+                    
 
 
 main()
