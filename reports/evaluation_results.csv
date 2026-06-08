@@ -1,0 +1,129 @@
+id,category,question,success,method,rows_returned,sql_query,error
+1,batting,Who are the top 10 run scorers?,True,llm,10,"SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS total_runs
+FROM deliveries
+GROUP BY striker
+ORDER BY total_runs DESC;",
+2,bowling,Who are the top 10 wicket takers?,True,llm,10,"SELECT TOP 10
+    bowler,
+    COUNT(*) AS wickets
+FROM deliveries
+WHERE wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY bowler
+ORDER BY wickets DESC;",
+3,death_overs,Who scored the most runs in death overs?,True,llm,10,"SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS death_overs_runs
+FROM deliveries
+WHERE FLOOR(ball) BETWEEN 15 AND 19
+GROUP BY striker
+ORDER BY death_overs_runs DESC;",
+4,powerplay,Who has taken the most wickets in the powerplay?,True,llm,10,"SELECT TOP 10
+    bowler,
+    COUNT(*) AS wickets
+FROM deliveries
+WHERE FLOOR(ball) BETWEEN 0 AND 5
+  AND wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY bowler
+ORDER BY wickets DESC;",
+5,team_analysis,Which teams have the most wins while chasing?,True,llm,10,"SELECT TOP 10
+    d.batting_team AS chasing_team,
+    COUNT(DISTINCT d.match_id) AS chasing_wins
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings = 2
+    AND d.batting_team = m.winner
+GROUP BY d.batting_team
+ORDER BY chasing_wins DESC;",
+6,venue_analysis,Which venues have the highest average first innings score?,True,llm,10,"SELECT TOP 10
+    venue,
+    ROUND(AVG(total_score * 1.0), 2) AS average_first_innings_score,
+    COUNT(*) AS innings_count
+FROM (
+    SELECT
+        match_id,
+        venue,
+        SUM(runs_off_bat + extras) AS total_score
+    FROM deliveries
+    WHERE innings = 1
+    GROUP BY match_id, venue
+) AS first_innings_scores
+GROUP BY venue
+HAVING COUNT(*) >= 10
+ORDER BY average_first_innings_score DESC;",
+7,batting,Which batters have the best strike rate with at least 300 balls faced?,True,llm,10,"SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS runs,
+    SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    ROUND(
+        SUM(runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM deliveries
+GROUP BY striker
+HAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300
+ORDER BY strike_rate DESC;",
+8,bowling,Which bowlers have the best economy rate with at least 300 legal balls bowled?,True,llm,10,"SELECT TOP 10
+    bowler,
+    SUM(runs_off_bat + extras) AS runs_conceded,
+    SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    ROUND(
+        SUM(runs_off_bat + extras) * 6.0 /
+        NULLIF(SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS economy_rate
+FROM deliveries
+GROUP BY bowler
+HAVING SUM(CASE WHEN wides IS NULL AND noballs IS NULL THEN 1 ELSE 0 END) >= 300
+ORDER BY economy_rate ASC;",
+9,powerplay,Who scored the most runs in powerplay overs?,True,llm,10,"SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS powerplay_overs_runs
+FROM deliveries
+WHERE FLOOR(ball) BETWEEN 0 AND 5
+GROUP BY striker
+ORDER BY powerplay_overs_runs DESC;",
+10,death_overs,Which bowlers took the most wickets in death overs?,True,llm,10,"SELECT TOP 10
+    bowler,
+    COUNT(*) AS wickets
+FROM deliveries
+WHERE wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+  AND FLOOR(ball) BETWEEN 15 AND 19
+GROUP BY bowler
+ORDER BY wickets DESC;",
+11,venue_analysis,Which venues hosted the most IPL matches?,True,llm,10,"SELECT TOP 10 venue, COUNT(*) AS match_count
+FROM matches
+GROUP BY venue
+ORDER BY match_count DESC;",
+12,season_analysis,How many matches were played in each season?,True,llm,19,"SELECT 
+    season,
+    COUNT(*) AS match_count
+FROM 
+    matches
+GROUP BY 
+    season;",
+13,team_analysis,Which teams have won the most matches?,True,llm,10,"SELECT TOP 10
+    winner AS team,
+    COUNT(*) AS wins
+FROM matches
+GROUP BY winner
+ORDER BY wins DESC;",
+14,batting,Which batters have hit the most runs in a single innings?,True,llm,10,"SELECT TOP 10
+    striker AS batter,
+    SUM(runs_off_bat) AS total_runs_in_single_innings
+FROM deliveries
+WHERE innings = 1
+GROUP BY striker
+ORDER BY total_runs_in_single_innings DESC;",
+15,bowling,Which bowlers have conceded the most runs?,True,llm,10,"SELECT TOP 10
+    bowler,
+    SUM(runs_off_bat + extras) AS total_runs_conceded
+FROM deliveries
+GROUP BY bowler
+ORDER BY total_runs_conceded DESC;",

@@ -1,0 +1,77 @@
+[
+    {
+        "id": 1,
+        "category": "batting",
+        "question": "Who are the top 10 run scorers?"
+    },
+    {
+        "id": 2,
+        "category": "bowling",
+        "question": "Who are the top 10 wicket takers?"
+    },
+    {
+        "id": 3,
+        "category": "death_overs",
+        "question": "Who scored the most runs in death overs?"
+    },
+    {
+        "id": 4,
+        "category": "powerplay",
+        "question": "Who has taken the most wickets in the powerplay?"
+    },
+    {
+        "id": 5,
+        "category": "team_analysis",
+        "question": "Which teams have the most wins while chasing?"
+    },
+    {
+        "id": 6,
+        "category": "venue_analysis",
+        "question": "Which venues have the highest average first innings score?"
+    },
+    {
+        "id": 7,
+        "category": "batting",
+        "question": "Which batters have the best strike rate with at least 300 balls faced?"
+    },
+    {
+        "id": 8,
+        "category": "bowling",
+        "question": "Which bowlers have the best economy rate with at least 300 legal balls bowled?"
+    },
+    {
+        "id": 9,
+        "category": "powerplay",
+        "question": "Who scored the most runs in powerplay overs?"
+    },
+    {
+        "id": 10,
+        "category": "death_overs",
+        "question": "Which bowlers took the most wickets in death overs?"
+    },
+    {
+        "id": 11,
+        "category": "venue_analysis",
+        "question": "Which venues hosted the most IPL matches?"
+    },
+    {
+        "id": 12,
+        "category": "season_analysis",
+        "question": "How many matches were played in each season?"
+    },
+    {
+        "id": 13,
+        "category": "team_analysis",
+        "question": "Which teams have won the most matches?"
+    },
+    {
+        "id": 14,
+        "category": "batting",
+        "question": "Which batters have hit the most runs in a single innings?"
+    },
+    {
+        "id": 15,
+        "category": "bowling",
+        "question": "Which bowlers have conceded the most runs?"
+    }
+]
