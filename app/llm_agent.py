@@ -129,6 +129,16 @@ Important cricket definitions:
 - Fastest fifty or fastest hundred means the fewest legal balls faced to reach 50 or 100 in one innings.
 - Use cumulative batter runs and cumulative legal balls within match_id, innings, and striker.
 - For batting balls faced and fastest 50/100 milestone counting, count deliveries where wides IS NULL. Do not exclude no-balls from batter milestone ball count.
+- Purple Cap means the highest wicket taker in a season.
+- A five-wicket haul, five wicket haul, 5-wicket haul, or fifer means a bowler took at least 5 wickets in one match innings.
+- For batting average, allow the user to specify a custom minimum runs threshold. For example, min 1000 runs means HAVING SUM(runs_off_bat) >= 1000.
+- For strike rate, allow the user to specify a custom minimum balls threshold. For example, min 800 balls faced means HAVING balls_faced >= 800.
+- Highest aggregate in a match means add both teams' innings totals in the same match.
+- Most sixes in a match means count all sixes hit by both teams in that match.
+- Largest victory by runs uses matches.winner_runs.
+- Largest victory by wickets uses matches.winner_wickets.
+- Victory by balls remaining must be calculated from the number of legal balls used by the chasing team in innings 2.
+
 Venue and city alias rules:
 - If the user asks about a venue nickname or city, map it to the actual venue names in the database.
 - For venue/city questions, prefer joining deliveries d with matches m using match_id, then filter using m.venue, d.venue, or m.city.
@@ -139,6 +149,7 @@ Venue and city alias rules:
 - Hitman and Rohit mean RG Sharma.
 - ABD and de Villiers mean AB de Villiers.
 - Universe Boss and Gayle mean CH Gayle.
+- SKY means SA Yadav
 - For "player runs against a team", filter striker as the player and bowling_team as the opponent.
 - For example, Dhoni against MI means striker = 'MS Dhoni' and bowling_team = 'Mumbai Indians'.
 
@@ -970,6 +981,36 @@ ORDER BY m.balls_to_{milestone_name} ASC, b.final_score DESC;
 """.strip()
 def has_player_reference(user_question):
     return get_player_condition_from_question(user_question,"dummy_column") is not None
+def get_minimum_runs_from_question(user_question, default_value):
+    question_lower = user_question.lower()
+
+    match = re.search(r"(?:min|minimum|at least)\s*\(?\s*(\d+)", question_lower)
+
+    if match is not None:
+        return int(match.group(1))
+
+    match = re.search(r"(\d+)\s*runs", question_lower)
+
+    if match is not None:
+        return int(match.group(1))
+
+    return default_value
+
+
+def get_minimum_balls_from_question(user_question, default_value):
+    question_lower = user_question.lower()
+
+    match = re.search(r"(?:min|minimum|at least)\s*\(?\s*(\d+)", question_lower)
+
+    if match is not None:
+        return int(match.group(1))
+
+    match = re.search(r"(\d+)\s*balls", question_lower)
+
+    if match is not None:
+        return int(match.group(1))
+
+    return default_value
 
 def build_curated_sql(user_question):
     question_lower = user_question.lower()
@@ -1020,7 +1061,355 @@ SELECT
 FROM team_wins
 CROSS JOIN team_total_matches;
 """.strip()
+    # Purple Cap winner in a specific season
+    if "purple cap" in question_lower:
+        season = get_season_from_question(user_question)
 
+        if season is not None:
+            return f"""
+SELECT TOP 1
+    season,
+    bowler,
+    COUNT(*) AS wickets
+FROM deliveries
+WHERE season = '{season}'
+  AND wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY season, bowler
+ORDER BY wickets DESC;
+""".strip()
+
+        return """
+WITH season_wickets AS (
+    SELECT
+        season,
+        bowler,
+        COUNT(*) AS wickets
+    FROM deliveries
+    WHERE wicket_type IS NOT NULL
+      AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+    GROUP BY season, bowler
+),
+ranked_wickets AS (
+    SELECT
+        season,
+        bowler,
+        wickets,
+        RANK() OVER (PARTITION BY season ORDER BY wickets DESC) AS wicket_rank
+    FROM season_wickets
+)
+SELECT
+    season,
+    bowler,
+    wickets
+FROM ranked_wickets
+WHERE wicket_rank = 1
+ORDER BY season;
+""".strip()
+
+    # Best strike rate for a team with custom minimum balls
+    if "best strike rate" in question_lower and "for" in question_lower:
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+        minimum_balls = get_minimum_balls_from_question(user_question, 300)
+
+        if team_condition is not None:
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    SUM(d.runs_off_bat) AS runs,
+    SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    ROUND(
+        SUM(d.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM deliveries d
+WHERE {team_condition}
+GROUP BY d.striker, d.batting_team
+HAVING SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) >= {minimum_balls}
+ORDER BY strike_rate DESC;
+""".strip()
+
+    # Best batting average for a team with custom minimum runs
+    if ("best average" in question_lower or "best batting average" in question_lower) and "for" in question_lower:
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+        minimum_runs = get_minimum_runs_from_question(user_question, 500)
+
+        if team_condition is not None:
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    SUM(d.runs_off_bat) AS total_runs,
+    COUNT(CASE
+        WHEN d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('retired hurt', 'retired out')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(d.runs_off_bat) * 1.0 /
+        NULLIF(
+            COUNT(CASE
+                WHEN d.player_dismissed = d.striker
+                     AND d.wicket_type NOT IN ('retired hurt', 'retired out')
+                THEN 1
+            END),
+            0
+        ),
+        2
+    ) AS batting_average
+FROM deliveries d
+WHERE {team_condition}
+GROUP BY d.striker, d.batting_team
+HAVING SUM(d.runs_off_bat) >= {minimum_runs}
+   AND COUNT(CASE
+        WHEN d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('retired hurt', 'retired out')
+        THEN 1
+    END) > 0
+ORDER BY batting_average DESC;
+""".strip()
+
+    # Most runs in a single season
+    if "most runs" in question_lower and "single season" in question_lower:
+        return """
+SELECT TOP 10
+    season,
+    striker AS batter,
+    SUM(runs_off_bat) AS total_runs
+FROM deliveries
+GROUP BY season, striker
+ORDER BY total_runs DESC;
+""".strip()
+
+    # Most wickets in a single season
+    if "most wickets" in question_lower and "single season" in question_lower:
+        return """
+SELECT TOP 10
+    season,
+    bowler,
+    COUNT(*) AS wickets
+FROM deliveries
+WHERE wicket_type IS NOT NULL
+  AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY season, bowler
+ORDER BY wickets DESC;
+""".strip()
+
+    # Most five-wicket hauls / fifers
+    if "five wicket haul" in question_lower or "five-wicket haul" in question_lower or "fifer" in question_lower or "5 wicket haul" in question_lower:
+        return """
+SELECT TOP 10
+    bowler,
+    COUNT(*) AS five_wicket_hauls
+FROM (
+    SELECT
+        match_id,
+        innings,
+        bowler,
+        COUNT(*) AS wickets
+    FROM deliveries
+    WHERE wicket_type IS NOT NULL
+      AND wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+    GROUP BY match_id, innings, bowler
+) AS bowling_spells
+WHERE wickets >= 5
+GROUP BY bowler
+ORDER BY five_wicket_hauls DESC;
+""".strip()
+
+    # Most hundreds in a single season
+    if "hundreds" in question_lower and "single season" in question_lower:
+        return """
+SELECT TOP 10
+    season,
+    batter,
+    COUNT(*) AS hundreds
+FROM (
+    SELECT
+        season,
+        match_id,
+        innings,
+        striker AS batter,
+        SUM(runs_off_bat) AS runs_in_innings
+    FROM deliveries
+    GROUP BY season, match_id, innings, striker
+) AS batter_innings
+WHERE runs_in_innings >= 100
+GROUP BY season, batter
+ORDER BY hundreds DESC;
+""".strip()
+
+    # Highest aggregate runs in a match
+    if "aggregate" in question_lower and "match" in question_lower:
+        return """
+WITH innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        m.season,
+        m.start_date,
+        m.venue,
+        SUM(d.runs_off_bat + d.extras) AS team_score
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings IN (1, 2)
+    GROUP BY d.match_id, d.innings, d.batting_team, m.season, m.start_date, m.venue
+)
+SELECT TOP 10
+    match_id,
+    season,
+    start_date,
+    venue,
+    MIN(batting_team) AS team_1,
+    MAX(batting_team) AS team_2,
+    SUM(team_score) AS match_aggregate_runs
+FROM innings_scores
+GROUP BY match_id, season, start_date, venue
+ORDER BY match_aggregate_runs DESC;
+""".strip()
+
+    # Most sixes in a single match
+    if "sixes" in question_lower and ("single match" in question_lower or "in a match" in question_lower):
+        return """
+SELECT TOP 10
+    d.match_id,
+    m.season,
+    m.start_date,
+    m.venue,
+    MIN(d.batting_team) AS team_1,
+    MAX(d.batting_team) AS team_2,
+    SUM(CASE WHEN d.runs_off_bat = 6 THEN 1 ELSE 0 END) AS total_sixes
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.innings IN (1, 2)
+GROUP BY d.match_id, m.season, m.start_date, m.venue
+ORDER BY total_sixes DESC;
+""".strip()
+
+    # Largest victory by runs
+    if ("largest victory" in question_lower or "biggest victory" in question_lower or "largest win" in question_lower or "biggest win" in question_lower) and "runs" in question_lower:
+        return """
+SELECT TOP 10
+    winner,
+    season,
+    start_date,
+    venue,
+    winner_runs AS victory_margin_runs
+FROM matches
+WHERE winner_runs IS NOT NULL
+  AND winner_runs > 0
+ORDER BY winner_runs DESC;
+""".strip()
+
+    # Smallest victory by runs
+    if ("smallest victory" in question_lower or "narrowest victory" in question_lower or "smallest win" in question_lower or "narrowest win" in question_lower) and "runs" in question_lower:
+        return """
+SELECT TOP 10
+    winner,
+    season,
+    start_date,
+    venue,
+    winner_runs AS victory_margin_runs
+FROM matches
+WHERE winner_runs IS NOT NULL
+  AND winner_runs > 0
+ORDER BY winner_runs ASC;
+""".strip()
+
+    # Largest victory by wickets
+    if ("largest victory" in question_lower or "biggest victory" in question_lower or "largest win" in question_lower or "biggest win" in question_lower) and "wickets" in question_lower:
+        return """
+SELECT TOP 10
+    winner,
+    season,
+    start_date,
+    venue,
+    winner_wickets AS victory_margin_wickets
+FROM matches
+WHERE winner_wickets IS NOT NULL
+  AND winner_wickets > 0
+ORDER BY winner_wickets DESC;
+""".strip()
+
+    # Smallest victory by wickets
+    if ("smallest victory" in question_lower or "narrowest victory" in question_lower or "smallest win" in question_lower or "narrowest win" in question_lower) and "wickets" in question_lower:
+        return """
+SELECT TOP 10
+    winner,
+    season,
+    start_date,
+    venue,
+    winner_wickets AS victory_margin_wickets
+FROM matches
+WHERE winner_wickets IS NOT NULL
+  AND winner_wickets > 0
+ORDER BY winner_wickets ASC;
+""".strip()
+
+    # Largest victory by balls remaining
+    if ("largest victory" in question_lower or "biggest victory" in question_lower or "largest win" in question_lower or "biggest win" in question_lower) and "balls" in question_lower:
+        return """
+WITH chase_balls AS (
+    SELECT
+        d.match_id,
+        m.winner,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.batting_team,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls_used
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings = 2
+      AND d.batting_team = m.winner
+    GROUP BY d.match_id, m.winner, m.season, m.start_date, m.venue, d.batting_team
+)
+SELECT TOP 10
+    winner,
+    season,
+    start_date,
+    venue,
+    120 - legal_balls_used AS balls_remaining
+FROM chase_balls
+WHERE 120 - legal_balls_used >= 0
+ORDER BY balls_remaining DESC;
+""".strip()
+
+    # Smallest victory by balls remaining
+    if ("smallest victory" in question_lower or "narrowest victory" in question_lower or "smallest win" in question_lower or "narrowest win" in question_lower) and "balls" in question_lower:
+        return """
+WITH chase_balls AS (
+    SELECT
+        d.match_id,
+        m.winner,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.batting_team,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls_used
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings = 2
+      AND d.batting_team = m.winner
+    GROUP BY d.match_id, m.winner, m.season, m.start_date, m.venue, d.batting_team
+)
+SELECT TOP 10
+    winner,
+    season,
+    start_date,
+    venue,
+    120 - legal_balls_used AS balls_remaining
+FROM chase_balls
+WHERE 120 - legal_balls_used >= 0
+ORDER BY balls_remaining ASC;
+""".strip()
     # 3. Player-specific fifties against a team
     if "fifties" in question_lower and "against" in question_lower:
         player_condition = get_player_condition_from_question(user_question, "d.striker")
@@ -1230,7 +1619,38 @@ FROM (
 WHERE runs_in_innings BETWEEN 50 AND 99
 GROUP BY batter;
 """.strip()
+    # Team-specific ducks
+    if ("ducks" in question_lower or "duck" in question_lower) and "for" in question_lower:
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
 
+        if team_condition is not None:
+            return f"""
+SELECT TOP 10
+    batter,
+    batting_team,
+    COUNT(*) AS ducks
+FROM (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        SUM(d.runs_off_bat) AS runs_in_innings,
+        MAX(CASE
+                WHEN d.player_dismissed = d.striker
+                     AND d.wicket_type NOT IN ('retired hurt', 'retired out')
+                THEN 1
+                ELSE 0
+            END) AS was_dismissed
+    FROM deliveries d
+    WHERE {team_condition}
+    GROUP BY d.match_id, d.innings, d.striker, d.batting_team
+) AS batter_innings
+WHERE runs_in_innings = 0
+  AND was_dismissed = 1
+GROUP BY batter, batting_team
+ORDER BY ducks DESC;
+""".strip()
     # 12. Player-specific ducks
     if "ducks" in question_lower or "duck" in question_lower:
         player_condition = get_player_condition_from_question(user_question, "d.striker")

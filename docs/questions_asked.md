@@ -299,3 +299,16 @@ used fallback,couldnt ans
 
 who has the best average(min 500 runs scored)
 couldnt ans,used fallback
+
+who won the purple cap in 2024 couldnt be answered
+who has the best strike rate for csk(min 800 balls faced) couldnt be answered
+who has the best average for csk(min 1000 runs scored) gave me best average for min 500 runs scored,so template must be edited to allow for any runs user specifies
+who has scored the most runs in a single season went to fallback ques,need to add support for most wickets in a season also
+who has the most five wicket hauls couldnt be answered...need to add fifer to rules
+most hundreds in a single season couldnt be answered
+highest total aggregrate in a match? (as in add both innings totals and list the highest total)
+most sixes in a single match couldnt be answered(went to fallback)
+not sure if we can add largest victory by runs and also by balls
+same with smallest victory 
+
+need to use player surnames also not specific names

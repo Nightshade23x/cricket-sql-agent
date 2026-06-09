@@ -1,5 +1,6 @@
 import streamlit as st
-
+import app.llm_agent as llm_agent
+st.caption(f"Using agent file: {llm_agent.__file__}")
 from app.llm_agent import answer_question_with_fallback
 
 def show_chart_if_possible(result):
