@@ -132,6 +132,14 @@ Venue and city alias rules:
 - If the user asks about a venue nickname or city, map it to the actual venue names in the database.
 - For venue/city questions, prefer joining deliveries d with matches m using match_id, then filter using m.venue, d.venue, or m.city.
 - Use LIKE filters for venue aliases because the same stadium may appear with slightly different names.
+- Users may refer to players by surname or nickname.
+- Thala, MSD, and Dhoni mean MS Dhoni.
+- King Kohli and Kohli mean V Kohli.
+- Hitman and Rohit mean RG Sharma.
+- ABD and de Villiers mean AB de Villiers.
+- Universe Boss and Gayle mean CH Gayle.
+- For "player runs against a team", filter striker as the player and bowling_team as the opponent.
+- For example, Dhoni against MI means striker = 'MS Dhoni' and bowling_team = 'Mumbai Indians'.
 
 Venue aliases:
 - Ekana or Lucknow means venue LIKE '%Ekana%' OR venue LIKE '%Lucknow%'.
@@ -809,6 +817,35 @@ def needs_team_clarification(user_question):
             return True
 
     return False
+def get_player_condition_from_question(user_question,column_name):
+    question_lower=user_question.lower()
+    if "dhoni" in question_lower or "thala" in question_lower or "msd" in question_lower:
+        return f"{column_name}='MS Dhoni'"
+    if "kohli" in question_lower or "king kohli" in question_lower:
+        return f"{column_name}='V Kohli'"
+    if "rohit" in question_lower or "hitman" in question_lower or "rohit sharma" in question_lower:
+        return f"{column_name}='RG Sharma'"
+    if "gayle" in question_lower or "universe_boss" in question_lower:
+        return f"{column_name}='CH Gayle'"
+    if "abd" in question_lower or "ab de villiers" in question_lower or "de villiers" in question_lower:
+        return f"{column_name}='AB de Villiers'"
+    if "raina" in question_lower:
+        return f"{column_name}='SK Raina'"
+    if "warner" in question_lower:
+        return f"{column_name}='DA Warner'"
+    if "dhawan" in question_lower or "gabbar" in question_lower:
+        return f"{column_name}='S Dhawan'"
+    if "rahul" in question_lower or "kl rahul" in question_lower:
+        return f"{column_name}='KL Rahul'"
+    if "pollard" in question_lower:
+        return f"{column_name}='KA Pollard'"
+    if "jadeja" in question_lower or "jaddu" in question_lower:
+        return f"{column_name}='RA Jadeja'"
+    if "bumrah" in question_lower:
+        return f"{column_name}='JJ Bumrah'"
+    if "yuzi chahal" in question_lower or "chahal" in question_lower:
+        return f"{column_name}='YS Chahal'"
+    return None
 
 def get_team_condition_from_question(user_question, column_name):
     question_lower = user_question.lower()
@@ -1260,6 +1297,23 @@ SELECT
     COUNT(*) AS wins
 FROM matches
 WHERE {team_condition};
+""".strip()
+    if "runs" in question_lower and "against" in question_lower:
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+
+        team_condition = get_team_condition_from_question(user_question, "d.bowling_team")
+
+        if player_condition is not None and team_condition is not None:
+            return f"""
+SELECT
+    d.striker AS batter,
+    d.bowling_team AS opponent,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+WHERE {player_condition}
+  AND {team_condition}
+GROUP BY d.striker, d.bowling_team
+ORDER BY total_runs DESC;
 """.strip()
     return None
 
