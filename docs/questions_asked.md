@@ -232,3 +232,70 @@ what is the highest team score failed as well
 went to fallback ques: which venues have the highest average first innings score
 reason: llm error,model produced unsafe or invalid query
 
+how many hundreds does kohli have
+SELECT COUNT(*) AS hundreds FROM deliveries WHERE striker = 'Kohli' AND runs_off_bat >= 100
+sql looks correct but result came as 0
+
+how many ducks does kohli have
+gave me entire list of players with most ducks,no mention of kohli in the sql or the result
+
+what is csk win percentage
+llm error: unsafe or invalid query
+
+how many wickets does chahal have for rcb
+used llm
+SELECT COUNT(*) AS wickets FROM deliveries WHERE bowler = 'Chahal' AND batting_team = 'Royal Challengers Bangalore'
+sql was wrong,batting team should be everyone other than rcb
+
+who has the most fifties ever
+failed,used fallback question bank
+
+how many fifties does kohli have
+SELECT COUNT(*) AS fifties FROM deliveries WHERE striker = 'Kohli' AND runs_off_bat >= 50
+again sql seems correct but result came as 0
+
+what is kohli's highest score against csk
+used curated template for csk's highest scores...ive seen a strong tendency for the model to use curated templates if it sees any keywords...we need to improve this
+
+what seasons did csk win the title
+SELECT season FROM matches WHERE winner = 'Chennai Super Kings'
+maybe this is a bad ques coz match id doesnt include its a final etc,so we can fix this later
+
+how many runs does abd have for rcb
+SELECT SUM(runs_off_bat) AS total_runs FROM deliveries WHERE striker = 'ABD' AND batting_team = 'Royal Challengers Bangalore';
+got no ans
+
+what is msd strike rate
+used fallback question bank
+
+csk win percentage failed again
+
+how many fifties does kohli have worked but then i asked how many fifties does kohli have against csk failed because it used the curated template for kohli fifties
+
+what is kohli strike rate was correct then i asked what is kohli strike rate in death overs,used curated template but didnt account for my ques
+SELECT
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS runs,
+    SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    ROUND(
+        SUM(d.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM deliveries d
+WHERE d.striker='V Kohli'
+GROUP BY d.striker;
+
+who has bowled the most balls ever
+used fallback ques bank
+
+who has the most fifties for csk
+gave curated template of most fifties
+
+also people can write suryavanshi as sooryavanshi...need to add that to rules also
+
+who was the orange cap winner in the 2014 season
+used fallback,couldnt ans
+
+who has the best average(min 500 runs scored)
+couldnt ans,used fallback
