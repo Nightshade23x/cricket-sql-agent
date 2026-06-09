@@ -2,6 +2,7 @@ import re
 from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
+from functools import lru_cache
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -138,6 +139,13 @@ Important cricket definitions:
 - Largest victory by runs uses matches.winner_runs.
 - Largest victory by wickets uses matches.winner_wickets.
 - Victory by balls remaining must be calculated from the number of legal balls used by the chasing team in innings 2.
+- Fours are deliveries where runs_off_bat = 4.
+- Sixes are deliveries where runs_off_bat = 6.
+- For player fours/sixes, filter striker as the player.
+- For player fours/sixes against a team, use bowling_team as the opponent.
+- For player fours/sixes for a team, use batting_team as the player's team.
+- The current processed deliveries table does not include fielder names, so catches, wicketkeeper stumpings, and fielder run outs cannot be credited to fielders yet.
+- The current data can only count dismissal events using wicket_type and player_dismissed.
 
 Venue and city alias rules:
 - If the user asks about a venue nickname or city, map it to the actual venue names in the database.
@@ -837,38 +845,192 @@ def needs_team_clarification(user_question):
             return True
 
     return False
-def get_player_condition_from_question(user_question,column_name):
-    question_lower=user_question.lower()
-    if "dhoni" in question_lower or "thala" in question_lower or "msd" in question_lower:
-        return f"{column_name}='MS Dhoni'"
-    if "kohli" in question_lower or "king kohli" in question_lower:
-        return f"{column_name}='V Kohli'"
-    if "rohit" in question_lower or "hitman" in question_lower or "rohit sharma" in question_lower:
-        return f"{column_name}='RG Sharma'"
-    if "gayle" in question_lower or "universe boss" in question_lower or "universe_boss" in question_lower:
-        return f"{column_name}='CH Gayle'"
-    if "abd" in question_lower or "ab de villiers" in question_lower or "de villiers" in question_lower:
-        return f"{column_name}='AB de Villiers'"
-    if "raina" in question_lower:
-        return f"{column_name}='SK Raina'"
-    if "warner" in question_lower:
-        return f"{column_name}='DA Warner'"
-    if "dhawan" in question_lower or "gabbar" in question_lower:
-        return f"{column_name}='S Dhawan'"
-    if "rahul" in question_lower or "kl rahul" in question_lower:
-        return f"{column_name}='KL Rahul'"
-    if "pollard" in question_lower:
-        return f"{column_name}='KA Pollard'"
-    if "jadeja" in question_lower or "jaddu" in question_lower:
-        return f"{column_name}='RA Jadeja'"
-    if "bumrah" in question_lower:
-        return f"{column_name}='JJ Bumrah'"
-    if "yuzi chahal" in question_lower or "chahal" in question_lower:
-        return f"{column_name}='YS Chahal'"
-    if "suryavanshi" in question_lower or "sooryavanshi" in question_lower or "vaibhav sooryavanshi" in question_lower:
-        return f"{column_name} LIKE '%Suryavanshi%'"
-    if "suryakumar" in question_lower or "surya" in question_lower or "sky" in question_lower:
-        return f"{column_name} = 'SA Yadav'"
+
+@lru_cache(maxsize=1)
+def get_known_player_names():
+    sql_query = """
+SELECT DISTINCT player_name
+FROM (
+    SELECT striker AS player_name FROM deliveries
+    UNION
+    SELECT non_striker AS player_name FROM deliveries
+    UNION
+    SELECT bowler AS player_name FROM deliveries
+    UNION
+    SELECT player_dismissed AS player_name FROM deliveries WHERE player_dismissed IS NOT NULL
+) AS all_players
+WHERE player_name IS NOT NULL
+ORDER BY player_name;
+""".strip()
+
+    result = run_query(sql_query)
+
+    return [str(name) for name in result["player_name"].dropna().tolist()]
+
+
+def clean_text_for_matching(text):
+    text = text.lower()
+    text = text.replace("?", " ")
+    text = text.replace(".", " ")
+    text = text.replace(",", " ")
+    text = text.replace("'", " ")
+    text = text.replace("-", " ")
+
+    return text
+
+
+def sql_escape(value):
+    return value.replace("'", "''")
+
+
+def get_player_condition_from_question(user_question, column_name):
+    question_lower = clean_text_for_matching(user_question)
+
+    manual_aliases = {
+        "dhoni": "MS Dhoni",
+        "thala": "MS Dhoni",
+        "msd": "MS Dhoni",
+
+        "kohli": "V Kohli",
+        "king kohli": "V Kohli",
+
+        "rohit": "RG Sharma",
+        "hitman": "RG Sharma",
+        "rohit sharma": "RG Sharma",
+
+        "gayle": "CH Gayle",
+        "universe boss": "CH Gayle",
+        "universe_boss": "CH Gayle",
+
+        "abd": "AB de Villiers",
+        "ab de villiers": "AB de Villiers",
+        "de villiers": "AB de Villiers",
+
+        "raina": "SK Raina",
+        "warner": "DA Warner",
+        "dhawan": "S Dhawan",
+        "gabbar": "S Dhawan",
+        "rahul": "KL Rahul",
+        "kl rahul": "KL Rahul",
+        "pollard": "KA Pollard",
+        "jadeja": "RA Jadeja",
+        "jaddu": "RA Jadeja",
+        "bumrah": "JJ Bumrah",
+        "yuzi chahal": "YS Chahal",
+        "chahal": "YS Chahal",
+
+        "pant": "RR Pant",
+        "rishabh pant": "RR Pant",
+
+        "bhuvneshwar": "B Kumar",
+        "bhuvneshwar kumar": "B Kumar",
+        "bhuvi": "B Kumar",
+
+        "suryakumar": "SA Yadav",
+        "suryakumar yadav": "SA Yadav",
+        "surya": "SA Yadav",
+        "sky": "SA Yadav",
+
+        "suryavanshi": "LIKE:%Suryavanshi%",
+        "sooryavanshi": "LIKE:%Suryavanshi%",
+        "vaibhav sooryavanshi": "LIKE:%Suryavanshi%",
+
+        "deepak chahar": "DL Chahar",
+        "rahul chahar": "RD Chahar",
+    }
+
+    # First check manual nicknames and common full names
+    for alias, player_name in manual_aliases.items():
+        if re.search(rf"\b{re.escape(alias)}\b", question_lower):
+            if player_name.startswith("LIKE:"):
+                like_pattern = player_name.replace("LIKE:", "")
+                return f"{column_name} LIKE '{sql_escape(like_pattern)}'"
+
+            return f"{column_name} = '{sql_escape(player_name)}'"
+
+    known_players = get_known_player_names()
+
+    # Check exact database names, e.g. "v kohli", "ms dhoni", "b kumar"
+    for player_name in known_players:
+        clean_player_name = clean_text_for_matching(player_name)
+
+        if re.search(rf"\b{re.escape(clean_player_name)}\b", question_lower):
+            return f"{column_name} = '{sql_escape(player_name)}'"
+
+    ignored_words = {
+        "who", "has", "have", "had", "how", "many", "much", "runs", "run",
+        "wickets", "wicket", "does", "did", "for", "against", "in", "the",
+        "a", "an", "of", "ever", "most", "best", "highest", "lowest",
+        "strike", "rate", "average", "score", "scored", "taken", "take",
+        "balls", "ball", "bowled", "faced", "with", "min", "minimum",
+    }
+
+    question_words = [
+        word
+        for word in question_lower.split()
+        if word not in ignored_words
+    ]
+
+    question_word_set = set(question_words)
+
+    candidate_players = []
+
+    for player_name in known_players:
+        clean_player_name = clean_text_for_matching(player_name)
+        player_parts = clean_player_name.split()
+
+        if len(player_parts) == 0:
+            continue
+
+        surname = player_parts[-1]
+
+        if surname not in question_word_set:
+            continue
+
+        name_before_surname = player_parts[:-1]
+
+        # Example:
+        # database: B Kumar
+        # user: bhuvneshwar kumar
+        # b from B matches bhuvneshwar
+        for name_part in name_before_surname:
+            if len(name_part) <= 3:
+                initial_letter = name_part[0]
+
+                for question_word in question_words:
+                    if question_word != surname and question_word.startswith(initial_letter):
+                        candidate_players.append(player_name)
+
+        # Example:
+        # database: KS Williamson
+        # user: kane williamson
+        # k from KS matches kane
+
+    unique_candidates = sorted(set(candidate_players))
+
+    if len(unique_candidates) == 1:
+        return f"{column_name} = '{sql_escape(unique_candidates[0])}'"
+
+    # Final fallback: surname-only matching, but only if unique
+    surname_candidates = []
+
+    for player_name in known_players:
+        clean_player_name = clean_text_for_matching(player_name)
+        player_parts = clean_player_name.split()
+
+        if len(player_parts) == 0:
+            continue
+
+        surname = player_parts[-1]
+
+        if surname in question_word_set and surname not in ignored_words:
+            surname_candidates.append(player_name)
+
+    unique_surname_candidates = sorted(set(surname_candidates))
+
+    if len(unique_surname_candidates) == 1:
+        return f"{column_name} = '{sql_escape(unique_surname_candidates[0])}'"
+
     return None
 
 def get_team_condition_from_question(user_question, column_name):
@@ -1012,6 +1174,18 @@ def get_minimum_balls_from_question(user_question, default_value):
 
     return default_value
 
+def get_boundary_type_from_question(user_question):
+    question_lower = clean_text_for_matching(user_question)
+    words = question_lower.split()
+
+    if "sixes" in words or "six" in words or "6s" in words or "maximums" in words:
+        return 6, "sixes"
+
+    if "fours" in words or "four" in words or "4s" in words:
+        return 4, "fours"
+
+    return None, None
+
 def build_curated_sql(user_question):
     question_lower = user_question.lower()
 
@@ -1105,6 +1279,120 @@ SELECT
 FROM ranked_wickets
 WHERE wicket_rank = 1
 ORDER BY season;
+""".strip()
+
+    # Player/team fours and sixes support
+    boundary_runs, boundary_name = get_boundary_type_from_question(user_question)
+
+    if boundary_runs is not None:
+        is_specific_boundary_record = (
+            "single innings" in question_lower
+            or "single season" in question_lower
+            or "single match" in question_lower
+            or "in a match" in question_lower
+        )
+
+        if not is_specific_boundary_record:
+
+            # Player fours/sixes against a team
+            if "against" in question_lower:
+                player_condition = get_player_condition_from_question(user_question, "d.striker")
+                team_condition = get_team_condition_from_question(user_question, "d.bowling_team")
+
+                if player_condition is not None and team_condition is not None:
+                    return f"""
+SELECT
+    d.striker AS batter,
+    d.bowling_team AS opponent,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+WHERE {player_condition}
+  AND {team_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker, d.bowling_team;
+""".strip()
+
+                if team_condition is not None:
+                    return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    d.bowling_team AS opponent,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+WHERE {team_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker, d.bowling_team
+ORDER BY total_{boundary_name} DESC;
+""".strip()
+
+            # Player fours/sixes for a team
+            if "for" in question_lower:
+                player_condition = get_player_condition_from_question(user_question, "d.striker")
+                team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+
+                if player_condition is not None and team_condition is not None:
+                    return f"""
+SELECT
+    d.striker AS batter,
+    d.batting_team AS team,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+WHERE {player_condition}
+  AND {team_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker, d.batting_team;
+""".strip()
+
+                if team_condition is not None and ("most" in question_lower or "who" in question_lower):
+                    return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team AS team,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+WHERE {team_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker, d.batting_team
+ORDER BY total_{boundary_name} DESC;
+""".strip()
+
+            # Total fours/sixes by a team
+            team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+            player_condition = get_player_condition_from_question(user_question, "d.striker")
+
+            if player_condition is None and team_condition is not None and ("how many" in question_lower or "total" in question_lower):
+                return f"""
+SELECT
+    d.batting_team AS team,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+WHERE {team_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.batting_team;
+""".strip()
+
+            # Total fours/sixes by a player
+            if player_condition is not None:
+                return f"""
+SELECT
+    d.striker AS batter,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+WHERE {player_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker;
+""".strip()
+
+            # Overall most fours/sixes
+            if "most" in question_lower or "who" in question_lower:
+                return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+WHERE d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker
+ORDER BY total_{boundary_name} DESC;
 """.strip()
 
     # Best strike rate for a team with custom minimum balls
@@ -1272,6 +1560,40 @@ GROUP BY match_id, season, start_date, venue
 ORDER BY match_aggregate_runs DESC;
 """.strip()
 
+    # Player total career wickets
+    if "wickets" in question_lower and "for" not in question_lower and "against" not in question_lower:
+        player_condition = get_player_condition_from_question(user_question, "d.bowler")
+
+        if player_condition is not None:
+            return f"""
+SELECT
+    d.bowler,
+    COUNT(*) AS wickets
+FROM deliveries d
+WHERE {player_condition}
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler;
+""".strip()
+
+    # Player wickets against a team
+    if "wickets" in question_lower and "against" in question_lower:
+        player_condition = get_player_condition_from_question(user_question, "d.bowler")
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+
+        if player_condition is not None and team_condition is not None:
+            return f"""
+SELECT
+    d.bowler,
+    d.batting_team AS opponent,
+    COUNT(*) AS wickets
+FROM deliveries d
+WHERE {player_condition}
+  AND {team_condition}
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler, d.batting_team;
+""".strip()
     # Most sixes in a single match
     if "sixes" in question_lower and ("single match" in question_lower or "in a match" in question_lower):
         return """
@@ -1409,6 +1731,19 @@ SELECT TOP 10
 FROM chase_balls
 WHERE 120 - legal_balls_used >= 0
 ORDER BY balls_remaining ASC;
+""".strip()
+        # Player total career runs
+    if "runs" in question_lower and "against" not in question_lower and "for" not in question_lower and "single season" not in question_lower:
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+
+        if player_condition is not None:
+            return f"""
+SELECT
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+WHERE {player_condition}
+GROUP BY d.striker;
 """.strip()
     # 3. Player-specific fifties against a team
     if "fifties" in question_lower and "against" in question_lower:
