@@ -146,6 +146,11 @@ Important cricket definitions:
 - For player fours/sixes for a team, use batting_team as the player's team.
 - The current processed deliveries table does not include fielder names, so catches, wicketkeeper stumpings, and fielder run outs cannot be credited to fielders yet.
 - The current data can only count dismissal events using wicket_type and player_dismissed.
+- For player runs at a venue, filter striker as the player and use venue/city alias rules.
+- For player fours/sixes at a venue, filter striker as the player, runs_off_bat = 4 or 6, and use venue/city alias rules.
+- For player wickets at a venue, filter bowler as the player and use venue/city alias rules.
+- For team runs at a venue, use batting_team.
+- For team wickets at a venue, use bowling_team.
 
 Venue and city alias rules:
 - If the user asks about a venue nickname or city, map it to the actual venue names in the database.
@@ -1186,6 +1191,90 @@ def get_boundary_type_from_question(user_question):
 
     return None, None
 
+def has_venue_context(user_question):
+    question_clean = " " + clean_text_for_matching(user_question) + " "
+
+    return (
+        " at " in question_clean
+        or " in " in question_clean
+        or "venue" in question_clean
+        or "stadium" in question_clean
+        or "ground" in question_clean
+    )
+
+
+def get_venue_condition_from_question(user_question):
+    question_lower = clean_text_for_matching(user_question)
+    words = question_lower.split()
+
+    if "ekana" in question_lower or "lucknow" in words:
+        return "(m.venue LIKE '%Ekana%' OR m.venue LIKE '%Lucknow%' OR m.city = 'Lucknow')"
+
+    if "dy patil" in question_lower:
+        return "(m.venue LIKE '%DY Patil%')"
+
+    if "vizag" in words or "visakhapatnam" in words:
+        return "(m.venue LIKE '%Visakhapatnam%' OR m.venue LIKE '%ACA-VDCA%' OR m.city = 'Visakhapatnam')"
+
+    if "chinnaswamy" in question_lower or "bengaluru" in words or "bangalore" in words:
+        return "(m.venue LIKE '%Chinnaswamy%' OR m.city IN ('Bengaluru', 'Bangalore'))"
+
+    if "chepauk" in words or "chennai" in words:
+        return "(m.venue LIKE '%Chidambaram%' OR m.venue LIKE '%Chepauk%' OR m.city = 'Chennai')"
+
+    if "mullanpur" in words or "new chandigarh" in question_lower:
+        return "(m.venue LIKE '%Mullanpur%' OR m.venue LIKE '%New Chandigarh%')"
+
+    if "mohali" in words or "chandigarh" in words:
+        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Chandigarh%' OR m.city = 'Chandigarh')"
+
+    if "uppal" in words or "hyderabad" in words:
+        return "(m.venue LIKE '%Uppal%' OR m.venue LIKE '%Hyderabad%' OR m.city = 'Hyderabad')"
+
+    if "motera" in words or "ahmedabad" in words or "narendra modi" in question_lower or "sardar patel" in question_lower:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Sardar Patel%' OR m.venue LIKE '%Motera%' OR m.city = 'Ahmedabad')"
+
+    if "wankhede" in words or "mumbai" in words:
+        return "(m.venue LIKE '%Wankhede%' OR m.city = 'Mumbai')"
+
+    if "eden gardens" in question_lower or "kolkata" in words:
+        return "(m.venue LIKE '%Eden Gardens%' OR m.city = 'Kolkata')"
+
+    if "jaipur" in words:
+        return "(m.venue LIKE '%Sawai Mansingh%' OR m.city = 'Jaipur')"
+
+    if "dharamsala" in words:
+        return "(m.venue LIKE '%Himachal Pradesh%' OR m.city = 'Dharamsala')"
+
+    if "pune" in words:
+        return "(m.venue LIKE '%Maharashtra Cricket Association%' OR m.venue LIKE '%Subrata Roy%' OR m.city = 'Pune')"
+
+    if "raipur" in words:
+        return "(m.venue LIKE '%Raipur%' OR m.city = 'Raipur')"
+
+    if "guwahati" in words or "barsapara" in words:
+        return "(m.venue LIKE '%Guwahati%' OR m.venue LIKE '%Barsapara%' OR m.city = 'Guwahati')"
+
+    if "delhi" in words or "kotla" in words or "arun jaitley" in question_lower:
+        return "(m.venue LIKE '%Arun Jaitley%' OR m.venue LIKE '%Feroz Shah Kotla%' OR m.city = 'Delhi')"
+
+    if "rajkot" in words:
+        return "(m.venue LIKE '%Saurashtra%' OR m.city = 'Rajkot')"
+
+    if "abu dhabi" in question_lower or "zayed" in words:
+        return "(m.venue LIKE '%Zayed%' OR m.city = 'Abu Dhabi')"
+
+    if "dubai" in words:
+        return "(m.venue LIKE '%Dubai%' OR m.city = 'Dubai')"
+
+    if "sharjah" in words:
+        return "(m.venue LIKE '%Sharjah%' OR m.city = 'Sharjah')"
+
+    if "wanderers" in words:
+        return "(m.venue LIKE '%Wanderers%')"
+
+    return None
+
 def build_curated_sql(user_question):
     question_lower = user_question.lower()
 
@@ -1234,6 +1323,152 @@ SELECT
     ) AS win_percentage
 FROM team_wins
 CROSS JOIN team_total_matches;
+""".strip()
+    # Venue-specific player/team stats
+    venue_condition = get_venue_condition_from_question(user_question)
+    venue_context = venue_condition is not None and has_venue_context(user_question)
+
+    boundary_runs, boundary_name = get_boundary_type_from_question(user_question)
+
+    # Player or team fours/sixes at a venue
+    if venue_context and boundary_runs is not None:
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+
+        if player_condition is not None:
+            return f"""
+SELECT
+    d.striker AS batter,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {player_condition}
+  AND {venue_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker;
+""".strip()
+
+        if team_condition is not None and ("how many" in question_lower or "total" in question_lower):
+            return f"""
+SELECT
+    d.batting_team AS team,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {team_condition}
+  AND {venue_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.batting_team;
+""".strip()
+
+        if "most" in question_lower or "who" in question_lower:
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    COUNT(*) AS total_{boundary_name}
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {venue_condition}
+  AND d.runs_off_bat = {boundary_runs}
+GROUP BY d.striker
+ORDER BY total_{boundary_name} DESC;
+""".strip()
+
+    # Player or team runs at a venue
+    if venue_context and "runs" in question_lower:
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+
+        if player_condition is not None:
+            return f"""
+SELECT
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {player_condition}
+  AND {venue_condition}
+GROUP BY d.striker;
+""".strip()
+
+        if team_condition is not None and ("how many" in question_lower or "total" in question_lower):
+            return f"""
+SELECT
+    d.batting_team AS team,
+    SUM(d.runs_off_bat + d.extras) AS total_runs
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {team_condition}
+  AND {venue_condition}
+GROUP BY d.batting_team;
+""".strip()
+
+        if "most" in question_lower or "who" in question_lower:
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {venue_condition}
+GROUP BY d.striker
+ORDER BY total_runs DESC;
+""".strip()
+
+    # Player or team wickets at a venue
+    if venue_context and ("wickets" in question_lower or "wicket" in question_lower):
+        player_condition = get_player_condition_from_question(user_question, "d.bowler")
+        team_condition = get_team_condition_from_question(user_question, "d.bowling_team")
+
+        if player_condition is not None:
+            return f"""
+SELECT
+    d.bowler,
+    COUNT(*) AS wickets
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {player_condition}
+  AND {venue_condition}
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler;
+""".strip()
+
+        if team_condition is not None and ("how many" in question_lower or "total" in question_lower):
+            return f"""
+SELECT
+    d.bowling_team AS team,
+    COUNT(*) AS wickets
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {team_condition}
+  AND {venue_condition}
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowling_team;
+""".strip()
+
+        if "most" in question_lower or "who" in question_lower:
+            return f"""
+SELECT TOP 10
+    d.bowler,
+    COUNT(*) AS wickets
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {venue_condition}
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler
+ORDER BY wickets DESC;
 """.strip()
     # Purple Cap winner in a specific season
     if "purple cap" in question_lower:

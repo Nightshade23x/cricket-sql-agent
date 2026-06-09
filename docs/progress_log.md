@@ -76,3 +76,16 @@ corrected it and now results are accurate
 continued testing custom cricket questions in the streamlit app
 expanded evaluation to 32 questions
 reran evaluation and imrpoved the agent based on incorrect sql logic
+
+day 4
+continued manual testing
+focused on making the agent handle more specific and realistic user questions for specific players
+added support for player specific ques such as how many fours has kohli hit etc
+added support for team based records such as most fifties for a team
+added support for orange cap and purple cap
+added support for bowling records such as fifers
+added support for match related records such as most sixes in a game
+improved player name handling so agent can use player surnames rather than having to have each player surname manually added
+added support for player nicknames such as thala or sky
+added venue based ques combining with players such as how many sixes does rohit sharma have at wankhede
+confirmed that the agent can now handle a broad set of questions
