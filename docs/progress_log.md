@@ -90,3 +90,10 @@ added support for player nicknames such as thala or sky
 added venue based ques combining with players such as how many sixes does rohit sharma have at wankhede
 confirmed that the agent can now handle a broad set of questions
 
+day 5
+continued training
+tested more advanced ques involving season milestones,venue milestones,team records etc
+fixed order of functions as some broader templates were triggering before the more specific ones
+added support for most hundreds and fifties by season
+added support for most hundreds and fifties at specific venues
+confirmed that training process is mostly been about asking new questions to the model and if it cannot ans,adding support for it
