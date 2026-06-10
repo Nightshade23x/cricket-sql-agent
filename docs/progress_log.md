@@ -97,3 +97,9 @@ fixed order of functions as some broader templates were triggering before the mo
 added support for most hundreds and fifties by season
 added support for most hundreds and fifties at specific venues
 confirmed that training process is mostly been about asking new questions to the model and if it cannot ans,adding support for it
+added support for season specific total,such as how many runs did dhoni score in 2015
+added support for season specific boundary leaderboards
+added support for player fifties in a specific season
+added support for all time best performances in a season
+added fastest 50/100 support for a team,against a team,at a venue or all cases combined
+fixed rcb error as there was bengaluru and bangalore so joined them
