@@ -312,3 +312,25 @@ not sure if we can add largest victory by runs and also by balls
 same with smallest victory 
 
 need to use player surnames also not specific names
+
+who scored the most hundreds in 2016 season
+couldnt ans
+who has scored the most hundreds at chepauk
+took it as most wickets at chepauk,wrong ans obv
+who has scored most fifties at chepauk...gave most fifties overall
+so yest we added support for sixes and fours at grounds,now we add other milestones such as fifties and hundreds and also fifers etc
+what are the best bowling figures ever...couldnt ans,used fallback ques...so we have highest batting scores now we add best bowling figures overall and per ground as well...bowling figures matter on wickets taken...if wickets taken are the same then tiebreaker is economy rate.
+what is csk's highest score ever...couldnt ans,so we add support for this also,as well as lowest score..overall and per venue as well
+who has the most hundreds for csk...couldnt ans went to fallback
+also need to add support for gujarat lions and pune warriors
+
+lowest score by csk works but it gave 55 which i couldnt find in official records so it must be a rain curtailed game because according to the records,csk lowest score is 79 which appeared as num 3 in my ans...in the ans it gave first result as 55 second as 71 which csk chased against rcb...so i suppose technically it does count as lowest score but we can try and fix this
+
+who has the most runs for deccan chargers failed
+how many runs has dhoni scored against delhi worked but gave 2 ans,so runs against daredevils and runs against capitals...these 2 results must be totalled into 1 since both teams are the same,just name change...same issue with punjab also
+who has the highest individual score for csk gave csk highest ever score...so we need to add support for individual highest score per team and highest score for the team overall...diff is the keyword individual..also support for best score for a team at venues...same with best figures for a team...and best figures for a team at a venue...same with fifties and hundreds,so who has the most fifties for csk at wankhede etc
+
+
+who has the highest individual score for csk failed,tried other teams and it also failed,went to fallback
+who has the most runs for deccan chargers failed...other defunct team such as rps works so idk y deccan chargers is failing again
+what are the best bowling figures for csk against mi failed...so now we add against also...we added per team and venue,now against also so best score for csk against mi...this means any ground..but we also add support for venue here so best score for csk against kkr at eden gardens like that

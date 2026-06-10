@@ -89,3 +89,4 @@ improved player name handling so agent can use player surnames rather than havin
 added support for player nicknames such as thala or sky
 added venue based ques combining with players such as how many sixes does rohit sharma have at wankhede
 confirmed that the agent can now handle a broad set of questions
+
