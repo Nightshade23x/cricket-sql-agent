@@ -355,3 +355,17 @@ also if i ask who hit the most fifties in 2021 it should be able to ans
 
 who has had the best season in terms of runs...so highest ever runs in a season list across all seasons so kohli 973 num 1,gill num 2 in 2023 etc
 same with wickets
+
+what is the biggest win by runs for csk gave biggest win by runs for all teams,we do the same for balls left
+what is the highest ever successful run chase failed,i thought we added this but we can right now...also add lowest ever total successfully defendend...also add by team,by venue and against so highest ever total chased down by csk against mi at chepauk
+can we add hattricks? if yes then list all the hattricks taken ever,then by team also
+what are the worst bowling figures failed...so add support for that so basically most runs conceded ever
+most matches played by a player,per team as well so most matches played for csk
+most consecutive wins in a season,most defeats in a season
+can we list highest partnerships? if yes then we add that...per team as well and for each wicket so highest partnership for the 5th wicket for csk etc
+can we add win percentage per team also,so what is csk win percentage against rcb..so it should show total matches played,matches won by csk and lost by csk against rcb then the win percentage
+also if i ask head to head record of rcb and csk it should give me
+
+what is highest successful chase by csk gave overall,need to fix
+hattricks ques failed
+what is the lowest total successfully defended failed,gave me overall list of lowest totals.

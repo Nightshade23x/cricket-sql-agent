@@ -1525,6 +1525,65 @@ JOIN batter_innings b
     AND m.batter = b.batter
 ORDER BY m.balls_to_milestone ASC, b.final_score DESC;
 """.strip()
+def get_question_fragment_before_keyword(user_question, keyword):
+    question_clean = clean_text_for_matching(user_question)
+    index = question_clean.find(keyword)
+
+    if index == -1:
+        return None
+
+    fragment = question_clean[:index].strip()
+
+    if fragment == "":
+        return None
+
+    return fragment
+
+
+def get_team_condition_before_keyword(user_question, keyword, column_name):
+    fragment = get_question_fragment_before_keyword(user_question, keyword)
+
+    if fragment is None:
+        return None
+
+    return get_team_condition_from_question(fragment, column_name)
+
+
+def get_team_label_before_keyword(user_question, keyword):
+    fragment = get_question_fragment_before_keyword(user_question, keyword)
+
+    if fragment is None:
+        return "Selected team"
+
+    return get_team_label_from_question(fragment)
+
+
+def get_wicket_number_from_question(user_question):
+    question_lower = clean_text_for_matching(user_question)
+
+    ordinal_words = {
+        "first": 1,
+        "second": 2,
+        "third": 3,
+        "fourth": 4,
+        "fifth": 5,
+        "sixth": 6,
+        "seventh": 7,
+        "eighth": 8,
+        "ninth": 9,
+        "tenth": 10,
+    }
+
+    for word, number in ordinal_words.items():
+        if f"{word} wicket" in question_lower:
+            return number
+
+    match = re.search(r"\b(\d+)(?:st|nd|rd|th)?\s+wicket\b", question_lower)
+
+    if match is not None:
+        return int(match.group(1))
+
+    return None
 def get_top_n_from_question(user_question, default_value=10):
     question_lower = clean_text_for_matching(user_question)
 
@@ -1559,6 +1618,881 @@ def build_curated_sql(user_question):
 SELECT
     'This question needs playoff/final metadata, which is not available in the current matches table.' AS message;
 """.strip()
+    # List hat-tricks ever, by team, or at venue
+    if (
+        "hattrick" in question_lower
+        or "hattricks" in question_lower
+        or "hat trick" in question_lower
+        or "hat tricks" in question_lower
+        or "hat-trick" in question_lower
+        or "hat-tricks" in question_lower
+    ):
+        where_clauses = [
+            "d.wides IS NULL",
+            "d.noballs IS NULL"
+        ]
+
+        if "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "d.bowling_team")
+            if team_condition is not None:
+                where_clauses.append(team_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "d.batting_team")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition)
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+WITH legal_bowler_balls AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.bowler,
+        d.bowling_team,
+        d.batting_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.ball,
+        d.delivery_id,
+        d.player_dismissed,
+        CASE
+            WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+            ELSE 0
+        END AS credited_wicket,
+        ROW_NUMBER() OVER (
+            PARTITION BY d.match_id, d.innings, d.bowler
+            ORDER BY d.ball, d.delivery_id
+        ) AS bowler_ball_number
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+),
+hattricks AS (
+    SELECT
+        b1.bowler,
+        b1.bowling_team,
+        b1.opponent,
+        b1.season,
+        b1.start_date,
+        b1.venue,
+        b1.ball AS first_wicket_ball,
+        b1.player_dismissed AS wicket_1,
+        b2.player_dismissed AS wicket_2,
+        b3.player_dismissed AS wicket_3
+    FROM legal_bowler_balls b1
+    JOIN legal_bowler_balls b2
+        ON b1.match_id = b2.match_id
+        AND b1.innings = b2.innings
+        AND b1.bowler = b2.bowler
+        AND b2.bowler_ball_number = b1.bowler_ball_number + 1
+    JOIN legal_bowler_balls b3
+        ON b1.match_id = b3.match_id
+        AND b1.innings = b3.innings
+        AND b1.bowler = b3.bowler
+        AND b3.bowler_ball_number = b1.bowler_ball_number + 2
+    WHERE b1.credited_wicket = 1
+      AND b2.credited_wicket = 1
+      AND b3.credited_wicket = 1
+),
+final_results AS (
+    SELECT
+        CAST(NULL AS VARCHAR(200)) AS message,
+        bowler,
+        bowling_team,
+        opponent,
+        season,
+        start_date,
+        venue,
+        first_wicket_ball,
+        wicket_1,
+        wicket_2,
+        wicket_3
+    FROM hattricks
+
+    UNION ALL
+
+    SELECT
+        'No hat-tricks found for this filter.' AS message,
+        NULL AS bowler,
+        NULL AS bowling_team,
+        NULL AS opponent,
+        NULL AS season,
+        NULL AS start_date,
+        NULL AS venue,
+        NULL AS first_wicket_ball,
+        NULL AS wicket_1,
+        NULL AS wicket_2,
+        NULL AS wicket_3
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM hattricks
+    )
+)
+SELECT *
+FROM final_results
+ORDER BY
+    CASE WHEN message IS NULL THEN 0 ELSE 1 END,
+    season,
+    start_date;
+""".strip()
+    # Biggest win by runs, overall or filtered by winner/opponent/venue
+    if (
+        ("biggest win" in question_lower or "largest win" in question_lower or "biggest victory" in question_lower or "largest victory" in question_lower)
+        and "runs" in question_lower
+    ):
+        where_clauses = ["wm.winner_runs IS NOT NULL", "wm.winner_runs > 0"]
+
+        if "for" in question_lower:
+            winner_condition = get_team_condition_after_keyword(user_question, "for", "wm.winner")
+            if winner_condition is not None:
+                where_clauses.append(winner_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "wm.opponent")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition.replace("m.", "wm."))
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+WITH match_teams AS (
+    SELECT DISTINCT
+        match_id,
+        batting_team AS team
+    FROM deliveries
+),
+winner_matches AS (
+    SELECT
+        m.match_id,
+        m.winner,
+        mt.team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.winner_runs
+    FROM matches m
+    JOIN match_teams mt
+        ON m.match_id = mt.match_id
+    WHERE mt.team <> m.winner
+)
+SELECT TOP 10
+    wm.winner,
+    wm.opponent,
+    wm.season,
+    wm.start_date,
+    wm.venue,
+    wm.winner_runs AS victory_margin_runs
+FROM winner_matches wm
+WHERE {where_sql}
+ORDER BY wm.winner_runs DESC;
+""".strip()
+
+    # Biggest win by balls remaining, overall or filtered by winner/opponent/venue
+    if (
+        ("biggest win" in question_lower or "largest win" in question_lower or "biggest victory" in question_lower or "largest victory" in question_lower)
+        and ("balls" in question_lower or "balls left" in question_lower or "balls remaining" in question_lower)
+    ):
+        where_clauses = ["120 - legal_balls_used >= 0"]
+
+        if "for" in question_lower:
+            winner_condition = get_team_condition_after_keyword(user_question, "for", "winner")
+            if winner_condition is not None:
+                where_clauses.append(winner_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "opponent")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition.replace("m.", ""))
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+WITH chase_balls AS (
+    SELECT
+        d.match_id,
+        m.winner,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls_used
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings = 2
+      AND d.batting_team = m.winner
+    GROUP BY d.match_id, m.winner, d.bowling_team, m.season, m.start_date, m.venue, m.city
+)
+SELECT TOP 10
+    winner,
+    opponent,
+    season,
+    start_date,
+    venue,
+    120 - legal_balls_used AS balls_remaining
+FROM chase_balls
+WHERE {where_sql}
+ORDER BY balls_remaining DESC;
+""".strip()
+    # Biggest win by runs, overall or filtered by winner/opponent/venue
+    if (
+        ("biggest win" in question_lower or "largest win" in question_lower or "biggest victory" in question_lower or "largest victory" in question_lower)
+        and "runs" in question_lower
+    ):
+        where_clauses = ["wm.winner_runs IS NOT NULL", "wm.winner_runs > 0"]
+
+        if "for" in question_lower:
+            winner_condition = get_team_condition_after_keyword(user_question, "for", "wm.winner")
+            if winner_condition is not None:
+                where_clauses.append(winner_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "wm.opponent")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition.replace("m.", "wm."))
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+WITH match_teams AS (
+    SELECT DISTINCT
+        match_id,
+        batting_team AS team
+    FROM deliveries
+),
+winner_matches AS (
+    SELECT
+        m.match_id,
+        m.winner,
+        mt.team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.winner_runs
+    FROM matches m
+    JOIN match_teams mt
+        ON m.match_id = mt.match_id
+    WHERE mt.team <> m.winner
+)
+SELECT TOP 10
+    wm.winner,
+    wm.opponent,
+    wm.season,
+    wm.start_date,
+    wm.venue,
+    wm.winner_runs AS victory_margin_runs
+FROM winner_matches wm
+WHERE {where_sql}
+ORDER BY wm.winner_runs DESC;
+""".strip()
+
+    # Biggest win by balls remaining, overall or filtered by winner/opponent/venue
+    if (
+        ("biggest win" in question_lower or "largest win" in question_lower or "biggest victory" in question_lower or "largest victory" in question_lower)
+        and ("balls" in question_lower or "balls left" in question_lower or "balls remaining" in question_lower)
+    ):
+        where_clauses = ["120 - legal_balls_used >= 0"]
+
+        if "for" in question_lower:
+            winner_condition = get_team_condition_after_keyword(user_question, "for", "winner")
+            if winner_condition is not None:
+                where_clauses.append(winner_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "opponent")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition.replace("m.", ""))
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+WITH chase_balls AS (
+    SELECT
+        d.match_id,
+        m.winner,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls_used
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings = 2
+      AND d.batting_team = m.winner
+    GROUP BY d.match_id, m.winner, d.bowling_team, m.season, m.start_date, m.venue, m.city
+)
+SELECT TOP 10
+    winner,
+    opponent,
+    season,
+    start_date,
+    venue,
+    120 - legal_balls_used AS balls_remaining
+FROM chase_balls
+WHERE {where_sql}
+ORDER BY balls_remaining DESC;
+""".strip()
+
+    # Biggest win by runs, overall or filtered by winner/opponent/venue
+    if (
+        ("biggest win" in question_lower or "largest win" in question_lower or "biggest victory" in question_lower or "largest victory" in question_lower)
+        and "runs" in question_lower
+    ):
+        where_clauses = ["wm.winner_runs IS NOT NULL", "wm.winner_runs > 0"]
+
+        if "for" in question_lower:
+            winner_condition = get_team_condition_after_keyword(user_question, "for", "wm.winner")
+            if winner_condition is not None:
+                where_clauses.append(winner_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "wm.opponent")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition.replace("m.", "wm."))
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+WITH match_teams AS (
+    SELECT DISTINCT
+        match_id,
+        batting_team AS team
+    FROM deliveries
+),
+winner_matches AS (
+    SELECT
+        m.match_id,
+        m.winner,
+        mt.team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.winner_runs
+    FROM matches m
+    JOIN match_teams mt
+        ON m.match_id = mt.match_id
+    WHERE mt.team <> m.winner
+)
+SELECT TOP 10
+    wm.winner,
+    wm.opponent,
+    wm.season,
+    wm.start_date,
+    wm.venue,
+    wm.winner_runs AS victory_margin_runs
+FROM winner_matches wm
+WHERE {where_sql}
+ORDER BY wm.winner_runs DESC;
+""".strip()
+
+    # Biggest win by balls remaining, overall or filtered by winner/opponent/venue
+    if (
+        ("biggest win" in question_lower or "largest win" in question_lower or "biggest victory" in question_lower or "largest victory" in question_lower)
+        and ("balls" in question_lower or "balls left" in question_lower or "balls remaining" in question_lower)
+    ):
+        where_clauses = ["120 - legal_balls_used >= 0"]
+
+        if "for" in question_lower:
+            winner_condition = get_team_condition_after_keyword(user_question, "for", "winner")
+            if winner_condition is not None:
+                where_clauses.append(winner_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "opponent")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition.replace("m.", ""))
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+WITH chase_balls AS (
+    SELECT
+        d.match_id,
+        m.winner,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls_used
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings = 2
+      AND d.batting_team = m.winner
+    GROUP BY d.match_id, m.winner, d.bowling_team, m.season, m.start_date, m.venue, m.city
+)
+SELECT TOP 10
+    winner,
+    opponent,
+    season,
+    start_date,
+    venue,
+    120 - legal_balls_used AS balls_remaining
+FROM chase_balls
+WHERE {where_sql}
+ORDER BY balls_remaining DESC;
+""".strip()
+
+    # Worst bowling figures / most runs conceded in one innings spell
+    if (
+        "worst bowling figures" in question_lower
+        or "worst figures" in question_lower
+        or "most runs conceded in a spell" in question_lower
+        or "most expensive figures" in question_lower
+    ):
+        where_clauses = []
+
+        if "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "d.bowling_team")
+            if team_condition is not None:
+                where_clauses.append(team_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "d.batting_team")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition)
+
+        where_sql = ""
+
+        if len(where_clauses) > 0:
+            where_sql = "WHERE " + " AND ".join(where_clauses)
+
+        return f"""
+SELECT TOP 10
+    bowler,
+    bowling_team,
+    batting_team AS opponent,
+    season,
+    start_date,
+    venue,
+    wickets,
+    runs_conceded,
+    legal_balls,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy_rate
+FROM (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.bowler,
+        d.bowling_team,
+        d.batting_team,
+        m.season,
+        m.start_date,
+        m.venue,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    {where_sql}
+    GROUP BY d.match_id, d.innings, d.bowler, d.bowling_team, d.batting_team, m.season, m.start_date, m.venue
+) AS bowling_figures
+WHERE legal_balls >= 6
+ORDER BY runs_conceded DESC, wickets ASC, economy_rate DESC;
+""".strip()
+
+    # Most matches appeared in delivery data, overall or for a team
+    if (
+        "most matches played" in question_lower
+        or "most appearances" in question_lower
+        or "played the most matches" in question_lower
+    ):
+        team_filter = ""
+        team_select = ""
+
+        if "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "team")
+            team_label = get_team_label_after_keyword(user_question, "for")
+
+            if team_condition is not None:
+                team_filter = f"WHERE {team_condition}"
+                team_select = f", '{team_label}' AS team_group"
+
+        return f"""
+WITH player_match_appearances AS (
+    SELECT DISTINCT
+        match_id,
+        striker AS player,
+        batting_team AS team
+    FROM deliveries
+
+    UNION
+
+    SELECT DISTINCT
+        match_id,
+        non_striker AS player,
+        batting_team AS team
+    FROM deliveries
+
+    UNION
+
+    SELECT DISTINCT
+        match_id,
+        bowler AS player,
+        bowling_team AS team
+    FROM deliveries
+),
+filtered_appearances AS (
+    SELECT *
+    FROM player_match_appearances
+    {team_filter}
+)
+SELECT TOP 10
+    player
+    {team_select},
+    COUNT(DISTINCT match_id) AS matches_appeared_in_data
+FROM filtered_appearances
+GROUP BY player
+ORDER BY matches_appeared_in_data DESC;
+""".strip()
+
+    # Most consecutive wins or defeats in a season
+    if (
+        "most consecutive wins" in question_lower
+        or "longest winning streak" in question_lower
+        or "most consecutive defeats" in question_lower
+        or "longest losing streak" in question_lower
+    ):
+        result_filter = "W"
+
+        if "defeats" in question_lower or "losing" in question_lower or "losses" in question_lower:
+            result_filter = "L"
+
+        team_filter = ""
+
+        if "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "team")
+            if team_condition is not None:
+                team_filter = f"WHERE {team_condition}"
+
+        return f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        d.match_id,
+        m.season,
+        m.start_date,
+        d.batting_team AS team,
+        m.winner
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings IN (1, 2)
+),
+filtered_team_matches AS (
+    SELECT *
+    FROM team_matches
+    {team_filter}
+),
+team_results AS (
+    SELECT
+        match_id,
+        season,
+        start_date,
+        team,
+        CASE
+            WHEN winner = team THEN 'W'
+            ELSE 'L'
+        END AS result
+    FROM filtered_team_matches
+    WHERE winner IS NOT NULL
+),
+numbered_results AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY team, season
+            ORDER BY start_date, match_id
+        ) AS rn_all,
+        ROW_NUMBER() OVER (
+            PARTITION BY team, season, result
+            ORDER BY start_date, match_id
+        ) AS rn_result
+    FROM team_results
+),
+streaks AS (
+    SELECT
+        team,
+        season,
+        result,
+        rn_all - rn_result AS streak_group,
+        COUNT(*) AS streak_length,
+        MIN(start_date) AS streak_start,
+        MAX(start_date) AS streak_end
+    FROM numbered_results
+    GROUP BY team, season, result, rn_all - rn_result
+)
+SELECT TOP 10
+    team,
+    season,
+    result,
+    streak_length,
+    streak_start,
+    streak_end
+FROM streaks
+WHERE result = '{result_filter}'
+ORDER BY streak_length DESC, season;
+""".strip()
+    # Highest partnerships, overall, for team, and/or specific wicket
+    if "partnership" in question_lower or "partnerships" in question_lower:
+        wicket_number = get_wicket_number_from_question(user_question)
+
+        where_clauses = ["d.innings IN (1, 2)"]
+
+        if "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "d.batting_team")
+            if team_condition is not None:
+                where_clauses.append(team_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition)
+
+        where_sql = " AND ".join(where_clauses)
+
+        wicket_filter = ""
+
+        if wicket_number is not None:
+            wicket_filter = f"WHERE ps.wicket_number = {wicket_number}"
+
+        return f"""
+WITH innings_balls AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.delivery_id,
+        d.ball,
+        d.batting_team,
+        d.bowling_team,
+        d.striker,
+        d.non_striker,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.runs_off_bat + d.extras AS total_runs_on_ball,
+        SUM(CASE
+                WHEN d.player_dismissed IS NOT NULL
+                     AND d.wicket_type NOT IN ('retired hurt', 'retired out')
+                THEN 1
+                ELSE 0
+            END) OVER (
+                PARTITION BY d.match_id, d.innings
+                ORDER BY d.ball, d.delivery_id
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+            ) AS wickets_before_ball
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+),
+partnership_balls AS (
+    SELECT
+        *,
+        COALESCE(wickets_before_ball, 0) + 1 AS wicket_number
+    FROM innings_balls
+),
+partnership_scores AS (
+    SELECT
+        match_id,
+        innings,
+        wicket_number,
+        batting_team,
+        bowling_team AS opponent,
+        season,
+        start_date,
+        venue,
+        SUM(total_runs_on_ball) AS partnership_runs
+    FROM partnership_balls
+    GROUP BY match_id, innings, wicket_number, batting_team, bowling_team, season, start_date, venue
+),
+partnership_players_raw AS (
+    SELECT DISTINCT
+        match_id,
+        innings,
+        wicket_number,
+        striker AS player
+    FROM partnership_balls
+
+    UNION
+
+    SELECT DISTINCT
+        match_id,
+        innings,
+        wicket_number,
+        non_striker AS player
+    FROM partnership_balls
+),
+partnership_players AS (
+    SELECT
+        match_id,
+        innings,
+        wicket_number,
+        MIN(player) AS player_1,
+        MAX(player) AS player_2
+    FROM partnership_players_raw
+    GROUP BY match_id, innings, wicket_number
+)
+SELECT TOP 10
+    pp.player_1,
+    pp.player_2,
+    ps.batting_team,
+    ps.opponent,
+    ps.wicket_number,
+    ps.season,
+    ps.start_date,
+    ps.venue,
+    ps.partnership_runs
+FROM partnership_scores ps
+JOIN partnership_players pp
+    ON ps.match_id = pp.match_id
+    AND ps.innings = pp.innings
+    AND ps.wicket_number = pp.wicket_number
+{wicket_filter}
+ORDER BY ps.partnership_runs DESC;
+""".strip()
+
+    # Team win percentage against another team
+    if "win percentage" in question_lower and "against" in question_lower:
+        team_condition = get_team_condition_before_keyword(user_question, "win percentage", "team")
+        team_winner_condition = get_team_condition_before_keyword(user_question, "win percentage", "winner")
+        team_label = get_team_label_before_keyword(user_question, "win percentage")
+
+        opponent_condition = get_team_condition_after_keyword(user_question, "against", "team")
+        opponent_winner_condition = get_team_condition_after_keyword(user_question, "against", "winner")
+        opponent_label = get_team_label_after_keyword(user_question, "against")
+
+        if team_condition is not None and opponent_condition is not None:
+            return f"""
+WITH match_teams AS (
+    SELECT DISTINCT
+        d.match_id,
+        d.batting_team AS team
+    FROM deliveries d
+),
+head_to_head_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.winner
+    FROM matches m
+    WHERE EXISTS (
+        SELECT 1
+        FROM match_teams t
+        WHERE t.match_id = m.match_id
+          AND {team_condition}
+    )
+    AND EXISTS (
+        SELECT 1
+        FROM match_teams t
+        WHERE t.match_id = m.match_id
+          AND {opponent_condition}
+    )
+)
+SELECT
+    '{team_label}' AS team,
+    '{opponent_label}' AS opponent,
+    COUNT(*) AS matches_played,
+    SUM(CASE WHEN {team_winner_condition} THEN 1 ELSE 0 END) AS matches_won,
+    SUM(CASE WHEN {opponent_winner_condition} THEN 1 ELSE 0 END) AS matches_lost,
+    ROUND(
+        SUM(CASE WHEN {team_winner_condition} THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS win_percentage
+FROM head_to_head_matches;
+""".strip()
+    # Head-to-head record of two teams
+    if "head to head" in question_lower or "head-to-head" in question_lower:
+        question_clean = clean_text_for_matching(user_question)
+
+        if " and " in question_clean:
+            left_fragment, right_fragment = question_clean.split(" and ", 1)
+
+            team_1_condition = get_team_condition_from_question(left_fragment, "team")
+            team_2_condition = get_team_condition_from_question(right_fragment, "team")
+
+            team_1_winner_condition = get_team_condition_from_question(left_fragment, "winner")
+            team_2_winner_condition = get_team_condition_from_question(right_fragment, "winner")
+
+            team_1_label = get_team_label_from_question(left_fragment)
+            team_2_label = get_team_label_from_question(right_fragment)
+
+            if team_1_condition is not None and team_2_condition is not None:
+                return f"""
+WITH match_teams AS (
+    SELECT DISTINCT
+        d.match_id,
+        d.batting_team AS team
+    FROM deliveries d
+),
+head_to_head_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.winner
+    FROM matches m
+    WHERE EXISTS (
+        SELECT 1
+        FROM match_teams t
+        WHERE t.match_id = m.match_id
+          AND {team_1_condition}
+    )
+    AND EXISTS (
+        SELECT 1
+        FROM match_teams t
+        WHERE t.match_id = m.match_id
+          AND {team_2_condition}
+    )
+)
+SELECT
+    '{team_1_label}' AS team_1,
+    '{team_2_label}' AS team_2,
+    COUNT(*) AS matches_played,
+    SUM(CASE WHEN {team_1_winner_condition} THEN 1 ELSE 0 END) AS team_1_wins,
+    SUM(CASE WHEN {team_2_winner_condition} THEN 1 ELSE 0 END) AS team_2_wins,
+    COUNT(*)
+        - SUM(CASE WHEN {team_1_winner_condition} THEN 1 ELSE 0 END)
+        - SUM(CASE WHEN {team_2_winner_condition} THEN 1 ELSE 0 END) AS no_result_or_other
+FROM head_to_head_matches;
+""".strip()
     # Player runs in a specific season
     if "runs" in question_lower:
         season = get_season_from_question(user_question)
@@ -1591,6 +2525,8 @@ WHERE {player_condition}
   {extra_filters}
 GROUP BY d.striker, d.season;
 """.strip()
+
+
     # Best batting season ever by total runs, overall or for a team
     if (
         get_season_from_question(user_question) is None
@@ -2687,6 +3623,56 @@ WHERE {team_condition}
 GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
 ORDER BY team_score DESC;
 """.strip()
+    # Lowest total successfully defended, optionally by team/opponent/venue
+    if (
+        "lowest total successfully defended" in question_lower
+        or "lowest score successfully defended" in question_lower
+        or "lowest ever total successfully defended" in question_lower
+        or "lowest defended total" in question_lower
+        or ("lowest total" in question_lower and "defended" in question_lower)
+        or ("lowest score" in question_lower and "defended" in question_lower)
+    ):
+        where_clauses = [
+            "d.innings = 1",
+            "d.batting_team = m.winner"
+        ]
+
+        team_condition = None
+
+        if "by" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "by", "d.batting_team")
+
+        if team_condition is None and "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "d.batting_team")
+
+        if team_condition is not None:
+            where_clauses.append(team_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "d.bowling_team")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition)
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+SELECT TOP 10
+    d.batting_team AS defending_team,
+    d.bowling_team AS chasing_team,
+    m.season,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS defended_score
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {where_sql}
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
+ORDER BY defended_score ASC;
+""".strip()
 
     # 6. Team lowest score overall or at a venue
     if ("lowest score" in question_lower or "lowest total" in question_lower) and not has_player_reference(user_question):
@@ -3774,9 +4760,45 @@ ORDER BY runs_conceded DESC;
 """.strip()
 
     # 42. Highest successful chases
-    if "successful chase" in question_lower or "successful chases" in question_lower or "highest chase" in question_lower:
-        return """
-SELECT TOP 5
+    # Highest successful chase, optionally by team/opponent/venue
+    if (
+        "successful chase" in question_lower
+        or "successful run chase" in question_lower
+        or "highest chase" in question_lower
+        or "highest ever successful run chase" in question_lower
+        or "highest successful chase" in question_lower
+        or "highest total chased" in question_lower
+        or "highest total chased down" in question_lower
+        or "highest ever total chased down" in question_lower
+    ):
+        where_clauses = [
+            "d.innings = 2",
+            "d.batting_team = m.winner"
+        ]
+
+        team_condition = None
+
+        if "by" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "by", "d.batting_team")
+
+        if team_condition is None and "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "d.batting_team")
+
+        if team_condition is not None:
+            where_clauses.append(team_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "d.bowling_team")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition)
+
+        where_sql = " AND ".join(where_clauses)
+
+        return f"""
+SELECT TOP 10
     d.batting_team AS chasing_team,
     d.bowling_team AS defending_team,
     m.season,
@@ -3786,12 +4808,10 @@ SELECT TOP 5
 FROM deliveries d
 JOIN matches m
     ON d.match_id = m.match_id
-WHERE d.innings = 2
-  AND d.batting_team = m.winner
+WHERE {where_sql}
 GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.season, m.start_date, m.venue
 ORDER BY chase_score DESC;
-""".strip()
-
+""".strip()   
     # 43. Most runs in a single season
     if "most runs" in question_lower and "single season" in question_lower:
         return """
