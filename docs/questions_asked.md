@@ -346,3 +346,12 @@ same with list all the fifers ever taken...if no fifer was taken in a season it 
 when i search who has scored the fastest fifty for rcb,romario shepard doesnt show up even tho he is num 1,but when i search fastest fifty overall,he comes up there
 we also add highest score against a team,so who has the highest score against csk...also list the top 5 highest individual scores for csk against mi,team score comes but we need individual also...
 also when i search list the 5 highest scores for rcb against csk,the 250 scored this year doesnt show up...also list the top 5 highest scores against csk doesnt work,it gives csk's highest scores...so we add this...also top 5 highest scores against csk at chepauk etc as well
+
+How many runs did dhoni score in 2015
+Who hit the most sixes in 2026
+
+how many fifties did kohli score in 2016 also needs to be added...same with hundreds
+also if i ask who hit the most fifties in 2021 it should be able to ans
+
+who has had the best season in terms of runs...so highest ever runs in a season list across all seasons so kohli 973 num 1,gill num 2 in 2023 etc
+same with wickets
