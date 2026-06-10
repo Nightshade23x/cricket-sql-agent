@@ -103,3 +103,5 @@ added support for player fifties in a specific season
 added support for all time best performances in a season
 added fastest 50/100 support for a team,against a team,at a venue or all cases combined
 fixed rcb error as there was bengaluru and bangalore so joined them
+added support for hattricks and extras
+highest chases by teams,lowest defended scores by teams
