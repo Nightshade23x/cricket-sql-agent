@@ -369,3 +369,5 @@ also if i ask head to head record of rcb and csk it should give me
 what is highest successful chase by csk gave overall,need to fix
 hattricks ques failed
 what is the lowest total successfully defended failed,gave me overall list of lowest totals.
+
+who has bowled the most wides,no balls overall,per team,and who has bowled the most extras means total all the extras,again by team and overall

@@ -1744,6 +1744,78 @@ ORDER BY
     season,
     start_date;
 """.strip()
+
+    # Most wides / no-balls / extras bowled, overall or for a team
+    if (
+        "wides" in question_lower
+        or "wide balls" in question_lower
+        or "no balls" in question_lower
+        or "noballs" in question_lower
+        or "no-balls" in question_lower
+        or "extras" in question_lower
+    ):
+        metric_name = None
+        metric_expression = None
+
+        if "wides" in question_lower or "wide balls" in question_lower:
+            metric_name = "wides"
+            metric_expression = "COALESCE(d.wides, 0)"
+
+        elif "no balls" in question_lower or "noballs" in question_lower or "no-balls" in question_lower:
+            metric_name = "no_balls"
+            metric_expression = "COALESCE(d.noballs, 0)"
+
+        elif "extras" in question_lower:
+            metric_name = "extras"
+            metric_expression = "COALESCE(d.extras, 0)"
+
+        if metric_name is not None:
+            team_condition = None
+            team_label = None
+
+            if "for" in question_lower:
+                team_condition = get_team_condition_after_keyword(user_question, "for", "d.bowling_team")
+                team_label = get_team_label_after_keyword(user_question, "for")
+
+            # Team leaderboard: which team bowled/conceded the most wides/no-balls/extras
+            if (
+                "which team" in question_lower
+                or "team has" in question_lower
+                or "teams have" in question_lower
+                or "by team" in question_lower
+                or "per team" in question_lower
+            ):
+                return f"""
+SELECT TOP 10
+    d.bowling_team AS team,
+    SUM({metric_expression}) AS total_{metric_name}
+FROM deliveries d
+GROUP BY d.bowling_team
+ORDER BY total_{metric_name} DESC;
+""".strip()
+
+            # Bowler leaderboard for a selected team
+            if team_condition is not None:
+                return f"""
+SELECT TOP 10
+    d.bowler,
+    '{team_label}' AS team_group,
+    SUM({metric_expression}) AS total_{metric_name}
+FROM deliveries d
+WHERE {team_condition}
+GROUP BY d.bowler
+ORDER BY total_{metric_name} DESC;
+""".strip()
+
+            # Overall bowler leaderboard
+            return f"""
+SELECT TOP 10
+    d.bowler,
+    SUM({metric_expression}) AS total_{metric_name}
+FROM deliveries d
+GROUP BY d.bowler
+ORDER BY total_{metric_name} DESC;
+""".strip()
     # Biggest win by runs, overall or filtered by winner/opponent/venue
     if (
         ("biggest win" in question_lower or "largest win" in question_lower or "biggest victory" in question_lower or "largest victory" in question_lower)
