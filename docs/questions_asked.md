@@ -334,3 +334,15 @@ who has the highest individual score for csk gave csk highest ever score...so we
 who has the highest individual score for csk failed,tried other teams and it also failed,went to fallback
 who has the most runs for deccan chargers failed...other defunct team such as rps works so idk y deccan chargers is failing again
 what are the best bowling figures for csk against mi failed...so now we add against also...we added per team and venue,now against also so best score for csk against mi...this means any ground..but we also add support for venue here so best score for csk against kkr at eden gardens like that
+
+
+who has scored the fastest fifty for csk needs to be added...so fastest fifty for a team like fastest fifty for mi...fastest fifty against a team so who has scored the fastest fifty against csk,and fastest fifty for csk at chepauk,so venue based also...and venue plus against also so fastest fifty for csk against mi at wankhede...same support needs to be added for fastests 100 also
+
+other than fastest fifty,simply fifty and hundred against a team needs to be added also...so who has the most fifties against csk,same with most hundreds against csk...who has scored the most fifties for csk against mi is working correctly so we added support for that already and also venue wise we added...
+
+also if i ask list all the hundreds scored in the 2014 season,it should be able to,same with fifties...and if i say list all the hundreds ever scored,it should list that...fifties are too long so no need
+same with list all the fifers ever taken...if no fifer was taken in a season it should say no fifer taken this season etc
+
+when i search who has scored the fastest fifty for rcb,romario shepard doesnt show up even tho he is num 1,but when i search fastest fifty overall,he comes up there
+we also add highest score against a team,so who has the highest score against csk...also list the top 5 highest individual scores for csk against mi,team score comes but we need individual also...
+also when i search list the 5 highest scores for rcb against csk,the 250 scored this year doesnt show up...also list the top 5 highest scores against csk doesnt work,it gives csk's highest scores...so we add this...also top 5 highest scores against csk at chepauk etc as well
