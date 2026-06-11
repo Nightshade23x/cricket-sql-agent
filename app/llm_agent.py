@@ -171,6 +171,11 @@ Important cricket definitions:
 - If the user asks who hit the most fifties/hundreds in a season, return the top batters for that season.
 - If the user asks who hit the most runs in a season, group by striker and season.
 - If the user asks who took the most wickets in a season, group by bowler and season.
+- Slowest fifty means the most balls taken by a batter to reach 50 in an innings.
+- Slowest hundred means the most balls taken by a batter to reach 100 in an innings.
+- Slowest milestone queries should use running batter runs and running balls faced.
+- For slowest milestone queries, order by balls_to_milestone descending.
+- Slowest milestone queries can be filtered by batting_team, bowling_team, venue, and season if mentioned.
 
 Venue and city alias rules:
 - If the user asks about a venue nickname or city, map it to the actual venue names in the database.
@@ -1604,6 +1609,101 @@ def get_top_n_from_question(user_question, default_value=10):
 
     return default_value
 
+def build_slowest_milestone_sql_with_filters(milestone_runs, milestone_name, user_question):
+    question_lower = user_question.lower()
+
+    where_clauses = []
+
+    if "for" in question_lower:
+        team_condition = get_team_condition_after_keyword(user_question, "for", "d.batting_team")
+        if team_condition is not None:
+            where_clauses.append(team_condition)
+
+    if "against" in question_lower:
+        opponent_condition = get_team_condition_after_keyword(user_question, "against", "d.bowling_team")
+        if opponent_condition is not None:
+            where_clauses.append(opponent_condition)
+
+    venue_condition = get_venue_condition_from_question(user_question)
+    venue_context = venue_condition is not None and has_venue_context(user_question)
+
+    if venue_context:
+        where_clauses.append(venue_condition)
+
+    where_sql = ""
+
+    if len(where_clauses) > 0:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    return f"""
+WITH batter_ball_progress AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        d.delivery_id,
+        d.ball,
+        SUM(d.runs_off_bat) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_runs,
+        SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball, d.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    {where_sql}
+),
+batter_innings AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        batting_team,
+        opponent,
+        season,
+        start_date,
+        venue,
+        MAX(running_runs) AS final_score
+    FROM batter_ball_progress
+    GROUP BY match_id, innings, batter, batting_team, opponent, season, start_date, venue
+),
+milestones AS (
+    SELECT
+        match_id,
+        innings,
+        batter,
+        MIN(running_balls) AS balls_to_milestone
+    FROM batter_ball_progress
+    WHERE running_runs >= {milestone_runs}
+    GROUP BY match_id, innings, batter
+)
+SELECT TOP 10
+    b.batter,
+    b.batting_team,
+    b.opponent,
+    b.season,
+    b.start_date,
+    b.venue,
+    b.final_score,
+    m.balls_to_milestone AS balls_to_{milestone_name}
+FROM milestones m
+JOIN batter_innings b
+    ON m.match_id = b.match_id
+    AND m.innings = b.innings
+    AND m.batter = b.batter
+ORDER BY m.balls_to_milestone DESC, b.final_score ASC;
+""".strip()
+
 def build_curated_sql(user_question):
     question_lower = user_question.lower()
 
@@ -1618,6 +1718,30 @@ def build_curated_sql(user_question):
 SELECT
     'This question needs playoff/final metadata, which is not available in the current matches table.' AS message;
 """.strip()
+    # Slowest fifty/hundred overall, for team, against team, at venue, or combined filters
+    if (
+        "slowest fifty" in question_lower
+        or "slowest 50" in question_lower
+        or "slowest half century" in question_lower
+        or "slowest half-century" in question_lower
+        or "slowest hundred" in question_lower
+        or "slowest 100" in question_lower
+        or "slowest century" in question_lower
+    ):
+        if (
+            "slowest fifty" in question_lower
+            or "slowest 50" in question_lower
+            or "slowest half century" in question_lower
+            or "slowest half-century" in question_lower
+        ):
+            return build_slowest_milestone_sql_with_filters(50, "fifty", user_question)
+
+        if (
+            "slowest hundred" in question_lower
+            or "slowest 100" in question_lower
+            or "slowest century" in question_lower
+        ):
+            return build_slowest_milestone_sql_with_filters(100, "hundred", user_question)
     # List hat-tricks ever, by team, or at venue
     if (
         "hattrick" in question_lower
