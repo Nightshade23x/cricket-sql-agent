@@ -51,6 +51,26 @@ columns:
 -other_wicket_type
 -other_player_dismissed
 
+Table: match_stages
+Columns:
+- match_id
+- season
+- season_year
+- start_date
+- team_1
+- team_2
+- winner
+- venue
+- city
+- match_stage
+- is_playoff
+- is_final
+
+Use match_stages when the user asks about playoffs, finals, semi finals, qualifiers, eliminators, third place playoff, champions, titles, or clutch matches.
+Join match_stages to matches or deliveries using match_id.
+For finals only, filter is_final = 1.
+For all playoff matches, filter is_playoff = 1.
+
 Important cricket definitions:
 -total batter runs=SUM(runs_off_bat)
 -total team runs=sum(runs_off_bat+extras)
@@ -898,6 +918,31 @@ ORDER BY player_name;
 
     return [str(name) for name in result["player_name"].dropna().tolist()]
 
+def get_stage_condition_from_question(user_question, table_alias="ms"):
+    question_lower = clean_text_for_matching(user_question)
+
+    if "final" in question_lower or "finals" in question_lower:
+        return f"{table_alias}.is_final = 1"
+
+    if "playoff" in question_lower or "playoffs" in question_lower or "knockout" in question_lower or "clutch" in question_lower:
+        return f"{table_alias}.is_playoff = 1"
+
+    if "qualifier 1" in question_lower or "q1" in question_lower:
+        return f"{table_alias}.match_stage = 'Qualifier 1'"
+
+    if "qualifier 2" in question_lower or "q2" in question_lower:
+        return f"{table_alias}.match_stage = 'Qualifier 2'"
+
+    if "eliminator" in question_lower:
+        return f"{table_alias}.match_stage = 'Eliminator'"
+
+    if "semi final" in question_lower or "semi-final" in question_lower or "semifinal" in question_lower:
+        return f"{table_alias}.match_stage IN ('Semi Final 1', 'Semi Final 2')"
+
+    if "third place" in question_lower:
+        return f"{table_alias}.match_stage = 'Third Place Playoff'"
+
+    return None
 
 def clean_text_for_matching(text):
     text = text.lower()
@@ -1198,6 +1243,7 @@ ORDER BY m.balls_to_{milestone_name} ASC, b.final_score DESC;
 """.strip()
 def has_player_reference(user_question):
     return get_player_condition_from_question(user_question,"dummy_column") is not None
+
 def get_minimum_runs_from_question(user_question, default_value):
     question_lower = user_question.lower()
 
@@ -1712,12 +1758,141 @@ def build_curated_sql(user_question):
 
     boundary_runs, boundary_name = get_boundary_type_from_question(user_question)
 
-    # 1. Unsupported title/final questions for now
-    if "title" in question_lower or "trophy" in question_lower or "champion" in question_lower:
+    # IPL champions / titles
+    if (
+        "champion" in question_lower
+        or "champions" in question_lower
+        or "title" in question_lower
+        or "titles" in question_lower
+        or "trophy" in question_lower
+    ):
+        season = get_season_from_question(user_question)
+
+        if season is not None:
+            return f"""
+SELECT
+    ms.season_year,
+    ms.team_1,
+    ms.team_2,
+    ms.winner AS champion,
+    ms.venue,
+    ms.start_date
+FROM match_stages ms
+WHERE ms.is_final = 1
+  AND ms.season_year = {season};
+""".strip()
+
         return """
 SELECT
-    'This question needs playoff/final metadata, which is not available in the current matches table.' AS message;
+    winner AS team,
+    COUNT(*) AS titles
+FROM match_stages
+WHERE is_final = 1
+GROUP BY winner
+ORDER BY titles DESC;
 """.strip()
+    # Most runs in playoffs/finals/stage matches
+    if "runs" in question_lower:
+        stage_condition = get_stage_condition_from_question(user_question, "ms")
+
+        if stage_condition is not None and ("most" in question_lower or "who" in question_lower):
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs
+FROM deliveries d
+JOIN match_stages ms
+    ON d.match_id = ms.match_id
+WHERE {stage_condition}
+GROUP BY d.striker
+ORDER BY total_runs DESC;
+""".strip()
+    # Most wickets in playoffs/finals/stage matches
+    if "wickets" in question_lower or "wicket" in question_lower:
+        stage_condition = get_stage_condition_from_question(user_question, "ms")
+
+        if stage_condition is not None and ("most" in question_lower or "who" in question_lower):
+            return f"""
+SELECT TOP 10
+    d.bowler,
+    COUNT(*) AS wickets
+FROM deliveries d
+JOIN match_stages ms
+    ON d.match_id = ms.match_id
+WHERE {stage_condition}
+  AND d.wicket_type IS NOT NULL
+  AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY d.bowler
+ORDER BY wickets DESC;
+""".strip()
+        
+    # Highest individual score in playoffs/finals/stage matches
+    if "highest score" in question_lower or "highest individual score" in question_lower or "best score" in question_lower:
+        stage_condition = get_stage_condition_from_question(user_question, "ms")
+
+        if stage_condition is not None and ("individual" in question_lower or "player" in question_lower or "who" in question_lower):
+            return f"""
+SELECT TOP 10
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    ms.season_year,
+    ms.match_stage,
+    ms.venue,
+    SUM(d.runs_off_bat) AS runs_in_innings
+FROM deliveries d
+JOIN match_stages ms
+    ON d.match_id = ms.match_id
+WHERE {stage_condition}
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, ms.season_year, ms.match_stage, ms.venue
+ORDER BY runs_in_innings DESC;
+""".strip()
+        
+    # Best bowling figures in playoffs/finals/stage matches
+    if "best bowling figures" in question_lower or "best figures" in question_lower:
+        stage_condition = get_stage_condition_from_question(user_question, "ms")
+
+        if stage_condition is not None:
+            return f"""
+SELECT TOP 10
+    bowler,
+    bowling_team,
+    batting_team AS opponent,
+    season_year,
+    match_stage,
+    venue,
+    wickets,
+    runs_conceded,
+    legal_balls,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy_rate
+FROM (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.bowler,
+        d.bowling_team,
+        d.batting_team,
+        ms.season_year,
+        ms.match_stage,
+        ms.venue,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+    FROM deliveries d
+    JOIN match_stages ms
+        ON d.match_id = ms.match_id
+    WHERE {stage_condition}
+    GROUP BY d.match_id, d.innings, d.bowler, d.bowling_team, d.batting_team, ms.season_year, ms.match_stage, ms.venue
+) AS bowling_figures
+WHERE wickets > 0
+ORDER BY wickets DESC, economy_rate ASC, runs_conceded ASC;
+""".strip()
+
+
     # Slowest fifty/hundred overall, for team, against team, at venue, or combined filters
     if (
         "slowest fifty" in question_lower
