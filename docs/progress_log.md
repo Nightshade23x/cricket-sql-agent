@@ -105,3 +105,9 @@ added fastest 50/100 support for a team,against a team,at a venue or all cases c
 fixed rcb error as there was bengaluru and bangalore so joined them
 added support for hattricks and extras
 highest chases by teams,lowest defended scores by teams
+
+day 6
+added support for slowest fifties overall,per team,per venue
+added support for playoffs
+so made new table in ssms based on dates...also added labels
+will continue testing playoffs tom
