@@ -3,6 +3,8 @@ from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
 from functools import lru_cache
+from app.analysis import analyze_player_dismissals, analyze_team_title_chances
+from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -2867,8 +2869,7 @@ FROM head_to_head_matches;
     # Player runs in a specific season
     if "runs" in question_lower:
         season = get_season_from_question(user_question)
-        player_condition = get_player_condition_from_question(user_question, "d.striker")
-
+        player_condition = get_player_condition_from_question(user_question, "pd.batter")
         if season is not None and player_condition is not None:
             extra_filters = ""
 
@@ -2993,7 +2994,7 @@ ORDER BY wickets DESC;
         and get_season_from_question(user_question) is not None
     ):
         season = get_season_from_question(user_question)
-        player_condition = get_player_condition_from_question(user_question, "d.striker")
+        player_condition = get_player_condition_from_question(user_question, "pd.batter")
 
         milestone_name = "hundreds"
         milestone_filter = "runs_in_innings >= 100"
@@ -5652,6 +5653,93 @@ WHERE {team_condition};
 
     return None
 
+def build_analysis_response(user_question):
+    question_lower = user_question.lower()
+
+    # Prediction / next season winner analysis
+    if (
+        "who will win next year" in question_lower
+        or "who will win next season" in question_lower
+        or "predict next season" in question_lower
+        or "predict winner" in question_lower
+        or "likely to win" in question_lower
+        or "title chances" in question_lower
+        or "win next year" in question_lower
+        or "win next season" in question_lower
+    ):
+        analysis_result = analyze_team_title_chances()
+
+        return {
+            "method": "analysis_layer",
+            "matched_question": "Team title chance analysis",
+            "sql_query": analysis_result["sql_query"],
+            "result": analysis_result["summary"],
+            "error": None
+        }
+
+    # Player dismissal analysis
+    if (
+        "dismissal" in question_lower
+        or "dismissals" in question_lower
+        or "gets out" in question_lower
+        or "get out" in question_lower
+        or "got out" in question_lower
+        or "weakness" in question_lower
+        or "analyse" in question_lower
+        or "analyze" in question_lower
+    ):
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+
+        if player_condition is not None:
+            analysis_result = analyze_player_dismissals(player_condition)
+
+            combined_sql = "\n\n--- wicket_types ---\n" + analysis_result["sql_queries"]["wicket_types"]
+            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
+            combined_sql += "\n\n--- bowlers ---\n" + analysis_result["sql_queries"]["bowlers"]
+            combined_sql += "\n\n--- opponents ---\n" + analysis_result["sql_queries"]["opponents"]
+            combined_sql += "\n\n--- venues ---\n" + analysis_result["sql_queries"]["venues"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Player dismissal analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "error": None
+            }
+        # Bowler matchup analysis
+    if (
+        "bowler" in question_lower
+        or "bowling" in question_lower
+        or "batsman" in question_lower
+        or "batter" in question_lower
+        or "matchup" in question_lower
+        or "matchups" in question_lower
+        or "most success against" in question_lower
+        or "hits them for the most runs" in question_lower
+        or "highest average against" in question_lower
+        or "highest strike rate against" in question_lower
+    ):
+        bowler_condition = get_player_condition_from_question(user_question, "d.bowler")
+
+        if bowler_condition is not None:
+            analysis_result = analyze_bowler_matchups(bowler_condition)
+
+            combined_sql = "\n\n--- most_dismissed ---\n" + analysis_result["sql_queries"]["most_dismissed"]
+            combined_sql += "\n\n--- most_runs ---\n" + analysis_result["sql_queries"]["most_runs"]
+            combined_sql += "\n\n--- highest_average ---\n" + analysis_result["sql_queries"]["highest_average"]
+            combined_sql += "\n\n--- highest_strike_rate ---\n" + analysis_result["sql_queries"]["highest_strike_rate"]
+            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Bowler matchup analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "error": None
+            }
+
+    return None
+
 def answer_question_with_fallback(user_question):
     if needs_team_clarification(user_question):
         return {
@@ -5662,11 +5750,15 @@ def answer_question_with_fallback(user_question):
             "error": "DC is ambiguous. Please specify whether you mean Delhi Capitals or Deccan Chargers."
         }
 
+    analysis_response = build_analysis_response(user_question)
+
+    if analysis_response is not None:
+        return analysis_response
+
     curated_sql = build_curated_sql(user_question)
 
     if curated_sql is not None:
         result = run_query(curated_sql)
-
         return {
             "method": "curated_template",
             "matched_question": None,
@@ -5677,7 +5769,6 @@ def answer_question_with_fallback(user_question):
 
     try:
         sql_query, result = answer_question_with_llm(user_question)
-
         return {
             "method": "llm",
             "matched_question": None,
@@ -5688,7 +5779,6 @@ def answer_question_with_fallback(user_question):
 
     except Exception as error:
         examples = load_examples()
-
         best_example, score = find_best_example(user_question, examples)
 
         if best_example is None or score == 0:
@@ -5701,7 +5791,6 @@ def answer_question_with_fallback(user_question):
             }
 
         sql_query = best_example["sql"]
-
         result = run_query(sql_query)
 
         return {
