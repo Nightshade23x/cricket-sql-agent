@@ -126,8 +126,25 @@ ORDER BY pd.season_year;
     top_bowler = safe_first_value(bowler_df, "bowler", "unknown")
     top_opponent = safe_first_value(opponent_df, "opponent", "unknown")
     top_venue = safe_first_value(venue_df, "venue", "unknown")
+    player_name = extract_player_name_from_condition(player_condition)
 
+    if wicket_type_df is not None and not wicket_type_df.empty:
+        total_dismissals = int(wicket_type_df["dismissals"].sum())
+    else:
+        total_dismissals = 0
+
+    paragraph = (
+        f"{player_name}'s dismissal profile shows {total_dismissals} recorded dismissals in the dataset. "
+        f"The most common dismissal type is {top_wicket_type}, and most dismissals happen in the {top_phase}. "
+        f"The bowler with the most dismissals is {top_bowler}, while the opponent and venue patterns point to "
+        f"{top_opponent} and {top_venue}. This is based on dismissal type, phase, bowler, opponent, and venue data, "
+        f"not shot-type video data."
+    )
     summary_rows = [
+        {
+            "analysis_area": "Overall insight",
+            "insight": paragraph,
+        },
         {
             "analysis_area": "Main dismissal type",
             "insight": f"Most dismissals are by {top_wicket_type}.",
@@ -153,6 +170,7 @@ ORDER BY pd.season_year;
     summary_df = pd.DataFrame(summary_rows)
 
     return {
+        "paragraph": paragraph,
         "summary": summary_df,
         "wicket_types": wicket_type_df,
         "phases": phase_df,
@@ -297,8 +315,19 @@ ORDER BY wickets DESC, economy_rate ASC;
     top_average_batter = safe_first_value(highest_average_df, "batter", "unknown")
     top_strike_rate_batter = safe_first_value(highest_strike_rate_df, "batter", "unknown")
     best_phase = safe_first_value(phase_df, "phase", "unknown")
+    bowler_name = extract_player_name_from_condition(bowler_condition)
 
+    paragraph = (
+        f"{bowler_name}'s bowler matchup profile suggests that {top_success_batter} is the batter he has dismissed "
+        f"most often. {top_runs_batter} has scored the most runs against him, while {top_average_batter} has the "
+        f"highest batting average and {top_strike_rate_batter} has the highest strike rate against him among the "
+        f"filtered batters. Phase-wise, his strongest wicket-taking phase appears to be the {best_phase}."
+    )
     summary_rows = [
+        {
+            "analysis_area": "Overall insight",
+            "insight": paragraph,
+        },
         {
             "analysis_area": "Best matchup",
             "insight": f"The bowler has dismissed {top_success_batter} the most times.",
@@ -324,6 +353,7 @@ ORDER BY wickets DESC, economy_rate ASC;
     summary_df = pd.DataFrame(summary_rows)
 
     return {
+        "paragraph": paragraph,
         "summary": summary_df,
         "most_dismissed": most_dismissed_df,
         "most_runs": most_runs_df,
@@ -785,7 +815,24 @@ ORDER BY title_chance_score DESC;
 
     result = run_query(sql_query)
 
+    top_team = safe_first_value(result, "team", "unknown team")
+    top_score = safe_first_value(result, "title_chance_score", None)
+    top_win_percentage = safe_first_value(result, "win_percentage", None)
+    top_avg_score = safe_first_value(result, "avg_score", None)
+    top_avg_runs_conceded = safe_first_value(result, "avg_runs_conceded", None)
+    top_playoff_wins = safe_first_value(result, "playoff_wins", 0)
+
+    paragraph = (
+        f"The explainable title-chance model ranks {top_team} highest with a score of "
+        f"{format_metric(top_score)}. This is not a guaranteed prediction; it is a data-based ranking using "
+        f"historical win percentage, batting strength, bowling strength, and playoff wins. {top_team}'s profile "
+        f"includes a win rate of {format_metric(top_win_percentage)}%, an average score of "
+        f"{format_metric(top_avg_score)}, average runs conceded of {format_metric(top_avg_runs_conceded)}, "
+        f"and {format_metric(top_playoff_wins, 0)} playoff wins."
+    )
+
     return {
+        "paragraph": paragraph,
         "summary": result,
         "sql_query": sql_query,
     }

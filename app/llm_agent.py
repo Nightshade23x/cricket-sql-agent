@@ -5673,77 +5673,11 @@ def build_analysis_response(user_question):
             "matched_question": "Team title chance analysis",
             "sql_query": analysis_result["sql_query"],
             "result": analysis_result["summary"],
+            "analysis_paragraph": analysis_result.get("paragraph"),
             "error": None
         }
 
-    # Player dismissal analysis
-    # Player dismissal analysis
-    if (
-        "dismissal" in question_lower
-        or "dismissals" in question_lower
-        or "gets out" in question_lower
-        or "get out" in question_lower
-        or "got out" in question_lower
-        or "weakness" in question_lower
-    ):
-        player_condition = get_player_condition_from_question(user_question, "d.striker")
-
-        if player_condition is not None:
-            analysis_result = analyze_player_dismissals(player_condition)
-
-            combined_sql = "\n\n--- wicket_types ---\n" + analysis_result["sql_queries"]["wicket_types"]
-            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
-            combined_sql += "\n\n--- bowlers ---\n" + analysis_result["sql_queries"]["bowlers"]
-            combined_sql += "\n\n--- opponents ---\n" + analysis_result["sql_queries"]["opponents"]
-            combined_sql += "\n\n--- venues ---\n" + analysis_result["sql_queries"]["venues"]
-
-            return {
-                "method": "analysis_layer",
-                "matched_question": "Player dismissal analysis",
-                "sql_query": combined_sql,
-                "result": analysis_result["summary"],
-                "error": None
-            }
-    # Full player profile analysis
-    if (
-        "analyse" in question_lower
-        or "analyze" in question_lower
-        or "profile" in question_lower
-        or "full analysis" in question_lower
-        or "player report" in question_lower
-        or "scouting report" in question_lower
-    ):
-        player_condition = get_player_condition_from_question(user_question, "d.striker")
-
-        if player_condition is not None:
-            analysis_result = analyze_player_profile(player_condition)
-
-            combined_sql = "\n\n--- career ---\n" + analysis_result["sql_queries"]["career"]
-            combined_sql += "\n\n--- season_trend ---\n" + analysis_result["sql_queries"]["season_trend"]
-            combined_sql += "\n\n--- phase_performance ---\n" + analysis_result["sql_queries"]["phase_performance"]
-            combined_sql += "\n\n--- opponent_performance ---\n" + analysis_result["sql_queries"]["opponent_performance"]
-            combined_sql += "\n\n--- venue_performance ---\n" + analysis_result["sql_queries"]["venue_performance"]
-            combined_sql += "\n\n--- playoff_performance ---\n" + analysis_result["sql_queries"]["playoff_performance"]
-            combined_sql += "\n\n--- dismissal_types ---\n" + analysis_result["sql_queries"]["dismissal_types"]
-
-            return {
-                "method": "analysis_layer",
-                "matched_question": "Full player profile analysis",
-                "sql_query": combined_sql,
-                "result": analysis_result["summary"],
-                "analysis_paragraph": analysis_result["paragraph"],
-                "extra_tables": {
-                    "career": analysis_result["career"],
-                    "season_trend": analysis_result["season_trend"],
-                    "phase_performance": analysis_result["phase_performance"],
-                    "opponent_performance": analysis_result["opponent_performance"],
-                    "venue_performance": analysis_result["venue_performance"],
-                    "playoff_performance": analysis_result["playoff_performance"],
-                    "dismissal_types": analysis_result["dismissal_types"],
-                },
-                "error": None
-            }
-        # Bowler matchup analysis
+    # Bowler matchup analysis
     if (
         "bowler" in question_lower
         or "bowling" in question_lower
@@ -5772,6 +5706,94 @@ def build_analysis_response(user_question):
                 "matched_question": "Bowler matchup analysis",
                 "sql_query": combined_sql,
                 "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "most_dismissed": analysis_result["most_dismissed"],
+                    "most_runs": analysis_result["most_runs"],
+                    "highest_average": analysis_result["highest_average"],
+                    "highest_strike_rate": analysis_result["highest_strike_rate"],
+                    "phases": analysis_result["phases"],
+                },
+                "error": None
+            }
+
+    # Player dismissal analysis
+    if (
+        "dismissal" in question_lower
+        or "dismissals" in question_lower
+        or "gets out" in question_lower
+        or "get out" in question_lower
+        or "got out" in question_lower
+        or "weakness" in question_lower
+    ):
+        player_condition = get_player_condition_from_question(user_question, "pd.batter")
+
+        if player_condition is not None:
+            analysis_result = analyze_player_dismissals(player_condition)
+
+            combined_sql = "\n\n--- wicket_types ---\n" + analysis_result["sql_queries"]["wicket_types"]
+            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
+            combined_sql += "\n\n--- bowlers ---\n" + analysis_result["sql_queries"]["bowlers"]
+            combined_sql += "\n\n--- opponents ---\n" + analysis_result["sql_queries"]["opponents"]
+            combined_sql += "\n\n--- venues ---\n" + analysis_result["sql_queries"]["venues"]
+
+            if "seasons" in analysis_result["sql_queries"]:
+                combined_sql += "\n\n--- seasons ---\n" + analysis_result["sql_queries"]["seasons"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Player dismissal analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "wicket_types": analysis_result["wicket_types"],
+                    "phases": analysis_result["phases"],
+                    "bowlers": analysis_result["bowlers"],
+                    "opponents": analysis_result["opponents"],
+                    "venues": analysis_result["venues"],
+                    "seasons": analysis_result.get("seasons"),
+                },
+                "error": None
+            }
+
+    # Full player profile analysis
+    if (
+        "analyse" in question_lower
+        or "analyze" in question_lower
+        or "profile" in question_lower
+        or "full analysis" in question_lower
+        or "player report" in question_lower
+        or "scouting report" in question_lower
+    ):
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+
+        if player_condition is not None:
+            analysis_result = analyze_player_profile(player_condition)
+
+            combined_sql = "\n\n--- career ---\n" + analysis_result["sql_queries"]["career"]
+            combined_sql += "\n\n--- season_trend ---\n" + analysis_result["sql_queries"]["season_trend"]
+            combined_sql += "\n\n--- phase_performance ---\n" + analysis_result["sql_queries"]["phase_performance"]
+            combined_sql += "\n\n--- opponent_performance ---\n" + analysis_result["sql_queries"]["opponent_performance"]
+            combined_sql += "\n\n--- venue_performance ---\n" + analysis_result["sql_queries"]["venue_performance"]
+            combined_sql += "\n\n--- playoff_performance ---\n" + analysis_result["sql_queries"]["playoff_performance"]
+            combined_sql += "\n\n--- dismissal_types ---\n" + analysis_result["sql_queries"]["dismissal_types"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Full player profile analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "career": analysis_result["career"],
+                    "season_trend": analysis_result["season_trend"],
+                    "phase_performance": analysis_result["phase_performance"],
+                    "opponent_performance": analysis_result["opponent_performance"],
+                    "venue_performance": analysis_result["venue_performance"],
+                    "playoff_performance": analysis_result["playoff_performance"],
+                    "dismissal_types": analysis_result["dismissal_types"],
+                },
                 "error": None
             }
 
