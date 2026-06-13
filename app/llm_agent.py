@@ -3,8 +3,7 @@ from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
 from functools import lru_cache
-from app.analysis import analyze_player_dismissals, analyze_team_title_chances
-from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups
+from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -5678,6 +5677,7 @@ def build_analysis_response(user_question):
         }
 
     # Player dismissal analysis
+    # Player dismissal analysis
     if (
         "dismissal" in question_lower
         or "dismissals" in question_lower
@@ -5685,8 +5685,6 @@ def build_analysis_response(user_question):
         or "get out" in question_lower
         or "got out" in question_lower
         or "weakness" in question_lower
-        or "analyse" in question_lower
-        or "analyze" in question_lower
     ):
         player_condition = get_player_condition_from_question(user_question, "d.striker")
 
@@ -5704,6 +5702,45 @@ def build_analysis_response(user_question):
                 "matched_question": "Player dismissal analysis",
                 "sql_query": combined_sql,
                 "result": analysis_result["summary"],
+                "error": None
+            }
+    # Full player profile analysis
+    if (
+        "analyse" in question_lower
+        or "analyze" in question_lower
+        or "profile" in question_lower
+        or "full analysis" in question_lower
+        or "player report" in question_lower
+        or "scouting report" in question_lower
+    ):
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+
+        if player_condition is not None:
+            analysis_result = analyze_player_profile(player_condition)
+
+            combined_sql = "\n\n--- career ---\n" + analysis_result["sql_queries"]["career"]
+            combined_sql += "\n\n--- season_trend ---\n" + analysis_result["sql_queries"]["season_trend"]
+            combined_sql += "\n\n--- phase_performance ---\n" + analysis_result["sql_queries"]["phase_performance"]
+            combined_sql += "\n\n--- opponent_performance ---\n" + analysis_result["sql_queries"]["opponent_performance"]
+            combined_sql += "\n\n--- venue_performance ---\n" + analysis_result["sql_queries"]["venue_performance"]
+            combined_sql += "\n\n--- playoff_performance ---\n" + analysis_result["sql_queries"]["playoff_performance"]
+            combined_sql += "\n\n--- dismissal_types ---\n" + analysis_result["sql_queries"]["dismissal_types"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Full player profile analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result["paragraph"],
+                "extra_tables": {
+                    "career": analysis_result["career"],
+                    "season_trend": analysis_result["season_trend"],
+                    "phase_performance": analysis_result["phase_performance"],
+                    "opponent_performance": analysis_result["opponent_performance"],
+                    "venue_performance": analysis_result["venue_performance"],
+                    "playoff_performance": analysis_result["playoff_performance"],
+                    "dismissal_types": analysis_result["dismissal_types"],
+                },
                 "error": None
             }
         # Bowler matchup analysis
