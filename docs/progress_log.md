@@ -112,4 +112,7 @@ added support for playoffs
 so made new table in ssms based on dates...also added labels
 will continue testing playoffs tom
 
-add future content...deeper analysis is needed...agent should act like a consultant,an ai ,should be able to 
+day 7
+exteneded the agent beyond normal analysis
+added matchups for both bowlers and batsman
+added paragraphs that describe the analysis
