@@ -3,7 +3,7 @@ from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
 from functools import lru_cache
-from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile, analyze_player_shots, analyze_bowler_strategy
+from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile, analyze_player_shots, analyze_bowler_strategy,analyze_match_summaries
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -999,6 +999,8 @@ def get_player_condition_from_question(user_question, column_name):
         "bumrah": "JJ Bumrah",
         "yuzi chahal": "YS Chahal",
         "chahal": "YS Chahal",
+        "malinga": "SL Malinga",
+        "rashid": "Rashid Khan",
 
         "pant": "RR Pant",
         "rishabh pant": "RR Pant",
@@ -1758,6 +1760,84 @@ def build_curated_sql(user_question):
     venue_context = venue_condition is not None and has_venue_context(user_question)
 
     boundary_runs, boundary_name = get_boundary_type_from_question(user_question)
+    # Last season a batter crossed a run threshold, e.g. Rohit's last 500-run season
+    if (
+        ("last" in question_lower or "when was" in question_lower or "when did" in question_lower)
+        and "season" in question_lower
+        and ("run" in question_lower or "runs" in question_lower)
+    ):
+        player_condition = get_player_condition_from_question(user_question, "d.striker")
+
+        if player_condition is not None:
+            run_threshold_match = re.search(r"\b(\d+)\s*runs?\b", question_lower)
+
+            if run_threshold_match is not None:
+                run_threshold = int(run_threshold_match.group(1))
+            else:
+                run_threshold = 500
+
+            return f"""
+SELECT TOP 1
+    d.striker AS batter,
+    YEAR(CAST(m.start_date AS date)) AS season_year,
+    SUM(d.runs_off_bat) AS runs
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {player_condition}
+GROUP BY d.striker, YEAR(CAST(m.start_date AS date))
+HAVING SUM(d.runs_off_bat) >= {run_threshold}
+ORDER BY season_year DESC;
+""".strip()
+        
+    # Last season a bowler crossed a wicket threshold, e.g. Bumrah's last 20-wicket season
+    if (
+        ("last" in question_lower or "when was" in question_lower or "when did" in question_lower)
+        and "season" in question_lower
+        and ("wicket" in question_lower or "wickets" in question_lower)
+    ):
+        bowler_condition = get_player_condition_from_question(user_question, "d.bowler")
+
+        # Handles informal possessive spellings like "bumrahs"
+        if bowler_condition is None:
+            cleaned_question = user_question.lower()
+            cleaned_question = cleaned_question.replace("bumrahs", "bumrah")
+            cleaned_question = cleaned_question.replace("chahals", "chahal")
+            cleaned_question = cleaned_question.replace("bravos", "bravo")
+            cleaned_question = cleaned_question.replace("rashids", "rashid")
+            cleaned_question = cleaned_question.replace("malingas", "malinga")
+            bowler_condition = get_player_condition_from_question(cleaned_question, "d.bowler")
+
+        if bowler_condition is not None:
+            wicket_threshold_match = re.search(r"\b(\d+)\s*wickets?\b", question_lower)
+
+            if wicket_threshold_match is not None:
+                wicket_threshold = int(wicket_threshold_match.group(1))
+            else:
+                wicket_threshold = 20
+
+            return f"""
+SELECT TOP 1
+    d.bowler,
+    YEAR(CAST(m.start_date AS date)) AS season_year,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS wickets
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {bowler_condition}
+GROUP BY d.bowler, YEAR(CAST(m.start_date AS date))
+HAVING COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) >= {wicket_threshold}
+ORDER BY season_year DESC;
+""".strip()
+
 
     # IPL champions / titles
     if (
@@ -5654,7 +5734,33 @@ WHERE {team_condition};
 
 def build_analysis_response(user_question):
     question_lower = user_question.lower()
+    # Final / specific final match summary
+    if "final" in question_lower:
+        season = get_season_from_question(user_question)
 
+        if season is not None:
+            match_filter_sql = f"""
+ms.is_final = 1
+AND ms.season_year = {season}
+""".strip()
+
+            analysis_result = analyze_match_summaries(
+                match_filter_sql=match_filter_sql,
+                context_label=f"{season} final",
+                limit=1,
+            )
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Final match summary",
+                "sql_query": analysis_result["sql_query"],
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "match_summaries": analysis_result["match_summaries"],
+                },
+                "error": None
+            }
     # Prediction / next season winner analysis
     if (
         "who will win next year" in question_lower
@@ -5782,7 +5888,8 @@ def build_analysis_response(user_question):
             combined_sql += "\n\n--- playoff ---\n" + analysis_result["sql_queries"]["playoff"]
             combined_sql += "\n\n--- venues ---\n" + analysis_result["sql_queries"]["venues"]
             combined_sql += "\n\n--- phase_batting ---\n" + analysis_result["sql_queries"]["phase_batting"]
-
+            combined_sql += "\n\n--- top_run_scorers ---\n" + analysis_result["sql_queries"]["top_run_scorers"]
+            combined_sql += "\n\n--- top_wicket_takers ---\n" + analysis_result["sql_queries"]["top_wicket_takers"]
             return {
                 "method": "analysis_layer",
                 "matched_question": "Full team profile analysis",
@@ -5798,6 +5905,8 @@ def build_analysis_response(user_question):
                     "playoff": analysis_result["playoff"],
                     "venues": analysis_result["venues"],
                     "phase_batting": analysis_result["phase_batting"],
+                    "top_run_scorers": analysis_result["top_run_scorers"],
+                    "top_wicket_takers": analysis_result["top_wicket_takers"],
                 },
                 "error": None
             }
@@ -5902,7 +6011,11 @@ def build_analysis_response(user_question):
             combined_sql += "\n\n--- venue_performance ---\n" + analysis_result["sql_queries"]["venue_performance"]
             combined_sql += "\n\n--- playoff_performance ---\n" + analysis_result["sql_queries"]["playoff_performance"]
             combined_sql += "\n\n--- dismissal_types ---\n" + analysis_result["sql_queries"]["dismissal_types"]
-
+            combined_sql += "\n\n--- bowler_success ---\n" + analysis_result["sql_queries"]["bowler_success"]
+            combined_sql += "\n\n--- bowler_dismissals ---\n" + analysis_result["sql_queries"]["bowler_dismissals"]
+            combined_sql += "\n\n--- quiet_bowlers ---\n" + analysis_result["sql_queries"]["quiet_bowlers"]
+            combined_sql += "\n\n--- preferred_bowler_types ---\n" + analysis_result["sql_queries"]["preferred_bowler_types"]
+            combined_sql += "\n\n--- difficult_bowler_types ---\n" + analysis_result["sql_queries"]["difficult_bowler_types"]
             return {
                 "method": "analysis_layer",
                 "matched_question": "Full player profile analysis",
@@ -5917,6 +6030,70 @@ def build_analysis_response(user_question):
                     "venue_performance": analysis_result["venue_performance"],
                     "playoff_performance": analysis_result["playoff_performance"],
                     "dismissal_types": analysis_result["dismissal_types"],
+                    "bowler_success": analysis_result["bowler_success"],
+                    "bowler_dismissals": analysis_result["bowler_dismissals"],
+                    "quiet_bowlers": analysis_result["quiet_bowlers"],
+                    "preferred_bowler_types": analysis_result["preferred_bowler_types"],
+                    "difficult_bowler_types": analysis_result["difficult_bowler_types"],
+                },
+                "error": None
+            }
+    # Last N encounters between two teams, e.g. last 5 encounters of MI vs CSK
+    if (
+        ("last" in question_lower or "recent" in question_lower)
+        and (
+            "encounter" in question_lower
+            or "encounters" in question_lower
+            or "meeting" in question_lower
+            or "meetings" in question_lower
+            or "matches" in question_lower
+            or "games" in question_lower
+        )
+        and "vs" in question_lower
+    ):
+        limit_match = re.search(r"\blast\s+(\d+)\b", question_lower)
+
+        if limit_match is not None:
+            match_limit = int(limit_match.group(1))
+        else:
+            match_limit = 5
+
+        team_one_condition = get_team_condition_before_keyword(user_question, "vs", "dx.batting_team")
+        team_two_condition = get_team_condition_after_keyword(user_question, "vs", "dy.batting_team")
+
+        team_one_label = get_team_label_before_keyword(user_question, "vs")
+        team_two_label = get_team_label_after_keyword(user_question, "vs")
+
+        if team_one_condition is not None and team_two_condition is not None:
+            match_filter_sql = f"""
+EXISTS (
+    SELECT 1
+    FROM deliveries dx
+    WHERE dx.match_id = m.match_id
+      AND {team_one_condition}
+)
+AND EXISTS (
+    SELECT 1
+    FROM deliveries dy
+    WHERE dy.match_id = m.match_id
+      AND {team_two_condition}
+)
+""".strip()
+
+            analysis_result = analyze_match_summaries(
+                match_filter_sql=match_filter_sql,
+                context_label=f"last {match_limit} encounters of {team_one_label} vs {team_two_label}",
+                limit=match_limit,
+            )
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Last team encounters summary",
+                "sql_query": analysis_result["sql_query"],
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "match_summaries": analysis_result["match_summaries"],
                 },
                 "error": None
             }

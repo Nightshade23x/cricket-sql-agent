@@ -371,3 +371,13 @@ hattricks ques failed
 what is the lowest total successfully defended failed,gave me overall list of lowest totals.
 
 who has bowled the most wides,no balls overall,per team,and who has bowled the most extras means total all the extras,again by team and overall
+
+when we say analyse csk,it should also list csk all time highest run scorers and wicket takers
+which team has the best title chance needs to be edited to take recent results into account also,maybe from 2024...because it gives csk as num1 but last 2 seasons csk have been quite bad and rcb have been excellent as they have won back to back...
+in analyse virat kohli,we should also add which bowler kohli has the best success against,and also which bowler dissmisses kohli the most and keeps him quiet as in strike rate is quite low...doesnt neccessarily need to be dismissals also...also we add the category of bowler which keeps kohli quiet the most...such as leg spinner or right hand spinner...same with which type bowler kohli prefers the most...we add this for all batsman
+in opponent performance,we need to add rps,gl,kt,deccan chargers..and combine punjab together into 1 and also same with delhi
+when was rohit sharmas last 500 run season..so it finds the last time rohit sharma crossed 500 runs in a season...same for bowlers so when was the last time bumrah crossed 20 wickets in a season
+the summary table is cutting off text(image shown)
+under team report for rcb...chinnaswamy appears 3 diff times so we need to combine it...also chepauk stats seem wrong,coz it shows theyve only played 5 games there and won 4...so we check if there was some another name for chepauk which we didnt add
+who won the 2016 final failed...add support for this and also whenever such is asked,a short summary of the game,like who was top scroer,top wicket taker etc...we do this for each game asked
+so if i ask,list the last 5 encounters of mi vs csk...it gives results and short summary per game as listed above

@@ -70,6 +70,60 @@ def convert_team_condition_two_columns(team_condition, column_one, column_two):
 
     return f"({condition_one} OR {condition_two})"
 
+def canonical_team_sql(column_name):
+    clean_column = f"LOWER(LTRIM(RTRIM(CAST({column_name} AS NVARCHAR(255)))))"
+
+    return f"""
+CASE
+    WHEN {clean_column} IN ('delhi capitals', 'delhi daredevils') THEN 'Delhi Capitals'
+    WHEN {clean_column} IN ('punjab kings', 'kings xi punjab') THEN 'Punjab Kings'
+    WHEN {clean_column} IN ('royal challengers bangalore', 'royal challengers bengaluru') THEN 'Royal Challengers Bengaluru'
+
+    WHEN {clean_column} IN ('rising pune supergiant', 'rising pune supergiants') THEN 'Rising Pune Supergiant'
+    WHEN {clean_column} IN ('pune warriors', 'pune warriors india') THEN 'Pune Warriors'
+    WHEN {clean_column} = 'kochi tuskers kerala' THEN 'Kochi Tuskers Kerala'
+    WHEN {clean_column} = 'gujarat lions' THEN 'Gujarat Lions'
+    WHEN {clean_column} = 'deccan chargers' THEN 'Deccan Chargers'
+
+    ELSE {column_name}
+END
+""".strip()
+
+
+def canonical_venue_sql(column_name):
+    return f"""
+CASE
+    WHEN LOWER({column_name}) LIKE '%chinnaswamy%' THEN 'M Chinnaswamy Stadium'
+    WHEN LOWER({column_name}) LIKE '%m chinnaswamy%' THEN 'M Chinnaswamy Stadium'
+    WHEN LOWER({column_name}) LIKE '%bengaluru%' AND LOWER({column_name}) LIKE '%chinnaswamy%' THEN 'M Chinnaswamy Stadium'
+
+    WHEN LOWER({column_name}) LIKE '%chidambaram%' THEN 'MA Chidambaram Stadium, Chepauk'
+    WHEN LOWER({column_name}) LIKE '%chepauk%' THEN 'MA Chidambaram Stadium, Chepauk'
+
+    WHEN LOWER({column_name}) LIKE '%wankhede%' THEN 'Wankhede Stadium'
+    WHEN LOWER({column_name}) LIKE '%eden gardens%' THEN 'Eden Gardens'
+    WHEN LOWER({column_name}) LIKE '%arun jaitley%' THEN 'Arun Jaitley Stadium'
+    WHEN LOWER({column_name}) LIKE '%feroz shah kotla%' THEN 'Arun Jaitley Stadium'
+    WHEN LOWER({column_name}) LIKE '%kotla%' THEN 'Arun Jaitley Stadium'
+
+    WHEN LOWER({column_name}) LIKE '%rajiv gandhi%' THEN 'Rajiv Gandhi International Stadium, Uppal'
+    WHEN LOWER({column_name}) LIKE '%uppal%' THEN 'Rajiv Gandhi International Stadium, Uppal'
+
+    WHEN LOWER({column_name}) LIKE '%narendra modi%' THEN 'Narendra Modi Stadium'
+    WHEN LOWER({column_name}) LIKE '%motera%' THEN 'Narendra Modi Stadium'
+    WHEN LOWER({column_name}) LIKE '%sardar patel%' THEN 'Narendra Modi Stadium'
+
+    WHEN LOWER({column_name}) LIKE '%dy patil%' THEN 'Dr DY Patil Sports Academy'
+    WHEN LOWER({column_name}) LIKE '%d y patil%' THEN 'Dr DY Patil Sports Academy'
+
+    WHEN LOWER({column_name}) LIKE '%punjab cricket association%' THEN 'Punjab Cricket Association Stadium'
+    WHEN LOWER({column_name}) LIKE '%mohali%' THEN 'Punjab Cricket Association Stadium'
+    WHEN LOWER({column_name}) LIKE '%mullanpur%' THEN 'Maharaja Yadavindra Singh International Cricket Stadium, Mullanpur'
+
+    ELSE {column_name}
+END
+""".strip()
+
 
 def analyze_player_dismissals(player_condition):
     """
@@ -413,6 +467,7 @@ def analyze_player_profile(player_condition):
 
     condition_d = player_condition.replace("pd.batter", "d.striker")
     condition_pd = condition_d.replace("d.striker", "pd.batter")
+    condition_se = condition_d.replace("d.striker", "se.striker")
 
     player_name = extract_player_name_from_condition(condition_d)
 
@@ -523,10 +578,10 @@ GROUP BY
     END
 ORDER BY runs DESC;
 """.strip()
-
+    opponent_team_name = canonical_team_sql("d.bowling_team")
     opponent_sql = f"""
-SELECT TOP 10
-    d.bowling_team AS opponent,
+SELECT
+    {opponent_team_name} AS opponent,
     SUM(d.runs_off_bat) AS runs,
     SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
     COUNT(CASE
@@ -552,8 +607,7 @@ SELECT TOP 10
     ) AS strike_rate
 FROM deliveries d
 WHERE {condition_d}
-GROUP BY d.bowling_team
-HAVING SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) >= 20
+GROUP BY {opponent_team_name}
 ORDER BY runs DESC;
 """.strip()
 
@@ -662,6 +716,13 @@ ORDER BY dismissals DESC;
     venue_df = run_query(venue_sql)
     playoff_df = run_query(playoff_sql)
     dismissal_df = run_query(dismissal_sql)
+    bowler_matchup_result = analyze_batter_bowler_matchups(condition_se)
+
+    bowler_success_df = bowler_matchup_result["bowler_success"]
+    bowler_dismissals_df = bowler_matchup_result["bowler_dismissals"]
+    quiet_bowlers_df = bowler_matchup_result["quiet_bowlers"]
+    preferred_bowler_types_df = bowler_matchup_result["preferred_bowler_types"]
+    difficult_bowler_types_df = bowler_matchup_result["difficult_bowler_types"]
 
     total_runs = safe_first_value(career_df, "total_runs", 0)
     batting_average = safe_first_value(career_df, "batting_average", None)
@@ -674,14 +735,21 @@ ORDER BY dismissals DESC;
     top_opponent = safe_first_value(opponent_df, "opponent", "unknown opponent")
     top_venue = safe_first_value(venue_df, "venue", "unknown venue")
     main_dismissal = safe_first_value(dismissal_df, "wicket_type", "unknown dismissal type")
-
+    top_success_bowler = safe_first_value(bowler_success_df, "bowler", "unknown bowler")
+    top_dismissal_bowler = safe_first_value(bowler_dismissals_df, "bowler", "unknown bowler")
+    quiet_bowler = safe_first_value(quiet_bowlers_df, "bowler", "unknown bowler")
+    preferred_bowler_type = safe_first_value(preferred_bowler_types_df, "bowling_style", "unknown bowling type")
+    difficult_bowler_type = safe_first_value(difficult_bowler_types_df, "bowling_style", "unknown bowling type")
     paragraph = (
         f"{player_name}'s IPL profile shows {total_runs} runs, a highest score of {highest_score}, "
         f"{fifties} fifties and {hundreds} hundreds. The overall batting average is "
         f"{format_metric(batting_average)} with a strike rate of {format_metric(strike_rate)}. "
         f"The data suggests the strongest scoring phase is {top_phase}, with the most runs coming against "
-        f"{top_opponent} and at {top_venue}. The most common dismissal type is {main_dismissal}, "
-        f"which helps identify the player's main dismissal pattern."
+        f"{top_opponent} and at {top_venue}. The most common dismissal type is {main_dismissal}. "
+        f"Against individual bowlers, the strongest scoring matchup appears to be against {top_success_bowler}, "
+        f"while {top_dismissal_bowler} has dismissed the player most often. The bowler who keeps the player quietest "
+        f"by strike rate is {quiet_bowler}. By bowling type, the player scores fastest against {preferred_bowler_type}, "
+        f"while {difficult_bowler_type} appears to be the most restrictive bowling type."
     )
 
     summary_rows = [
@@ -701,6 +769,18 @@ ORDER BY dismissals DESC;
             "analysis_area": "Venue pattern",
             "insight": f"Most runs have come at {top_venue}.",
         },
+                {
+            "analysis_area": "Best bowler matchup",
+            "insight": f"The strongest scoring matchup appears to be against {top_success_bowler}.",
+        },
+        {
+            "analysis_area": "Most difficult bowler",
+            "insight": f"{top_dismissal_bowler} has dismissed the player most often, while {quiet_bowler} keeps the scoring rate lowest.",
+        },
+        {
+            "analysis_area": "Bowling type preference",
+            "insight": f"The player scores fastest against {preferred_bowler_type} and is most restricted by {difficult_bowler_type}.",
+        },
         {
             "analysis_area": "Dismissal pattern",
             "insight": f"Most common dismissal type is {main_dismissal}.",
@@ -719,6 +799,11 @@ ORDER BY dismissals DESC;
         "venue_performance": venue_df,
         "playoff_performance": playoff_df,
         "dismissal_types": dismissal_df,
+        "bowler_success": bowler_success_df,
+        "bowler_dismissals": bowler_dismissals_df,
+        "quiet_bowlers": quiet_bowlers_df,
+        "preferred_bowler_types": preferred_bowler_types_df,
+        "difficult_bowler_types": difficult_bowler_types_df,
         "sql_queries": {
             "career": career_sql,
             "season_trend": season_sql,
@@ -727,123 +812,344 @@ ORDER BY dismissals DESC;
             "venue_performance": venue_sql,
             "playoff_performance": playoff_sql,
             "dismissal_types": dismissal_sql,
+            "bowler_success": bowler_matchup_result["sql_queries"]["bowler_success"],
+            "bowler_dismissals": bowler_matchup_result["sql_queries"]["bowler_dismissals"],
+            "quiet_bowlers": bowler_matchup_result["sql_queries"]["quiet_bowlers"],
+            "preferred_bowler_types": bowler_matchup_result["sql_queries"]["preferred_bowler_types"],
+            "difficult_bowler_types": bowler_matchup_result["sql_queries"]["difficult_bowler_types"],
         },
     }
+
+def analyze_batter_bowler_matchups(player_condition):
+    """
+    Analyse which bowlers a batter succeeds against, struggles against,
+    gets dismissed by, and which bowling styles suit/limit the batter.
+
+    player_condition should be something like:
+    se.striker = 'V Kohli'
+    """
+
+    condition_se = player_condition
+    condition_se = condition_se.replace("d.striker", "se.striker")
+    condition_se = condition_se.replace("pd.batter", "se.striker")
+
+    bowler_success_sql = f"""
+WITH bowler_matchups AS (
+    SELECT
+        se.bowler,
+        COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN se.player_dismissed = se.striker
+                 AND se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+    GROUP BY se.bowler, COALESCE(se.bowling_style_bowler, 'Unknown')
+)
+SELECT TOP 10
+    bowler,
+    bowling_style,
+    balls_faced,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate,
+    ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average
+FROM bowler_matchups
+WHERE balls_faced >= 15
+ORDER BY runs DESC, strike_rate DESC;
+""".strip()
+
+    bowler_dismissals_sql = f"""
+SELECT TOP 10
+    se.bowler,
+    COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+    COUNT(*) AS dismissals
+FROM dbo.shot_events se
+WHERE {condition_se}
+  AND se.player_dismissed = se.striker
+  AND se.wicket_type IS NOT NULL
+  AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY se.bowler, COALESCE(se.bowling_style_bowler, 'Unknown')
+ORDER BY dismissals DESC;
+""".strip()
+
+    quiet_bowlers_sql = f"""
+WITH bowler_matchups AS (
+    SELECT
+        se.bowler,
+        COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN se.player_dismissed = se.striker
+                 AND se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+    GROUP BY se.bowler, COALESCE(se.bowling_style_bowler, 'Unknown')
+)
+SELECT TOP 10
+    bowler,
+    bowling_style,
+    balls_faced,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate,
+    ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average
+FROM bowler_matchups
+WHERE balls_faced >= 15
+ORDER BY strike_rate ASC, balls_faced DESC;
+""".strip()
+
+    preferred_bowler_types_sql = f"""
+WITH type_matchups AS (
+    SELECT
+        COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN se.player_dismissed = se.striker
+                 AND se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND se.bowling_style_bowler IS NOT NULL
+    GROUP BY COALESCE(se.bowling_style_bowler, 'Unknown')
+)
+SELECT
+    bowling_style,
+    balls_faced,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate,
+    ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average
+FROM type_matchups
+WHERE balls_faced >= 30
+ORDER BY strike_rate DESC, runs DESC;
+""".strip()
+
+    difficult_bowler_types_sql = f"""
+WITH type_matchups AS (
+    SELECT
+        COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN se.player_dismissed = se.striker
+                 AND se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND se.bowling_style_bowler IS NOT NULL
+    GROUP BY COALESCE(se.bowling_style_bowler, 'Unknown')
+)
+SELECT
+    bowling_style,
+    balls_faced,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate,
+    ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average
+FROM type_matchups
+WHERE balls_faced >= 30
+ORDER BY strike_rate ASC, dismissals DESC;
+""".strip()
+
+    bowler_success_df = run_query(bowler_success_sql)
+    bowler_dismissals_df = run_query(bowler_dismissals_sql)
+    quiet_bowlers_df = run_query(quiet_bowlers_sql)
+    preferred_bowler_types_df = run_query(preferred_bowler_types_sql)
+    difficult_bowler_types_df = run_query(difficult_bowler_types_sql)
+
+    return {
+        "bowler_success": bowler_success_df,
+        "bowler_dismissals": bowler_dismissals_df,
+        "quiet_bowlers": quiet_bowlers_df,
+        "preferred_bowler_types": preferred_bowler_types_df,
+        "difficult_bowler_types": difficult_bowler_types_df,
+        "sql_queries": {
+            "bowler_success": bowler_success_sql,
+            "bowler_dismissals": bowler_dismissals_sql,
+            "quiet_bowlers": quiet_bowlers_sql,
+            "preferred_bowler_types": preferred_bowler_types_sql,
+            "difficult_bowler_types": difficult_bowler_types_sql,
+        },
+    }
+
 def analyze_team_title_chances():
     """
-    Simple explainable team rating based on recent wins, playoff record,
-    batting strength, and bowling strength.
+    Explainable team rating based on all-time record, recent form,
+    batting strength, bowling strength, and playoff/title record.
+
+    Recent form is weighted more strongly than historical record.
     """
 
     sql_query = """
-WITH recent_matches AS (
-    SELECT *
+WITH match_years AS (
+    SELECT
+        match_id,
+        YEAR(CAST(start_date AS date)) AS season_year
     FROM matches
-    WHERE TRY_CAST(season AS VARCHAR(20)) IS NOT NULL
+),
+max_year AS (
+    SELECT MAX(season_year) AS latest_season_year
+    FROM match_years
 ),
 team_matches AS (
     SELECT DISTINCT
         d.match_id,
         d.batting_team AS team,
         m.winner,
-        m.season,
-        m.start_date
+        YEAR(CAST(m.start_date AS date)) AS season_year
     FROM deliveries d
     JOIN matches m
         ON d.match_id = m.match_id
 ),
-team_win_rates AS (
+all_time_win_rates AS (
     SELECT
         team,
-        COUNT(*) AS matches_played,
-        SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) AS wins,
+        COUNT(*) AS all_time_matches,
+        SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) AS all_time_wins,
         ROUND(
             SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) * 100.0 /
             NULLIF(COUNT(*), 0),
             2
-        ) AS win_percentage
+        ) AS all_time_win_percentage
     FROM team_matches
     GROUP BY team
 ),
-batting_strength AS (
+recent_win_rates AS (
+    SELECT
+        tm.team,
+        COUNT(*) AS recent_matches,
+        SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) AS recent_wins,
+        ROUND(
+            SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) * 100.0 /
+            NULLIF(COUNT(*), 0),
+            2
+        ) AS recent_win_percentage
+    FROM team_matches tm
+    CROSS JOIN max_year my
+    WHERE tm.season_year >= my.latest_season_year - 1
+    GROUP BY tm.team
+),
+recent_batting_strength AS (
     SELECT
         batting_team AS team,
-        ROUND(AVG(team_score * 1.0), 2) AS avg_score
+        ROUND(AVG(team_score * 1.0), 2) AS recent_avg_score
     FROM (
         SELECT
-            match_id,
-            innings,
-            batting_team,
-            SUM(runs_off_bat + extras) AS team_score
-        FROM deliveries
-        WHERE innings IN (1, 2)
-        GROUP BY match_id, innings, batting_team
+            d.match_id,
+            d.innings,
+            d.batting_team,
+            YEAR(CAST(m.start_date AS date)) AS season_year,
+            SUM(d.runs_off_bat + d.extras) AS team_score
+        FROM deliveries d
+        JOIN matches m
+            ON d.match_id = m.match_id
+        CROSS JOIN max_year my
+        WHERE d.innings IN (1, 2)
+          AND YEAR(CAST(m.start_date AS date)) >= my.latest_season_year - 1
+        GROUP BY d.match_id, d.innings, d.batting_team, YEAR(CAST(m.start_date AS date))
     ) AS innings_scores
     GROUP BY batting_team
 ),
-bowling_strength AS (
+recent_bowling_strength AS (
     SELECT
         bowling_team AS team,
-        ROUND(AVG(team_score * 1.0), 2) AS avg_runs_conceded
+        ROUND(AVG(team_score * 1.0), 2) AS recent_avg_runs_conceded
     FROM (
         SELECT
-            match_id,
-            innings,
-            bowling_team,
-            SUM(runs_off_bat + extras) AS team_score
-        FROM deliveries
-        WHERE innings IN (1, 2)
-        GROUP BY match_id, innings, bowling_team
+            d.match_id,
+            d.innings,
+            d.bowling_team,
+            YEAR(CAST(m.start_date AS date)) AS season_year,
+            SUM(d.runs_off_bat + d.extras) AS team_score
+        FROM deliveries d
+        JOIN matches m
+            ON d.match_id = m.match_id
+        CROSS JOIN max_year my
+        WHERE d.innings IN (1, 2)
+          AND YEAR(CAST(m.start_date AS date)) >= my.latest_season_year - 1
+        GROUP BY d.match_id, d.innings, d.bowling_team, YEAR(CAST(m.start_date AS date))
     ) AS innings_scores
     GROUP BY bowling_team
 ),
-playoff_strength AS (
+recent_playoff_strength AS (
     SELECT
         team,
-        COUNT(*) AS playoff_matches,
-        SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) AS playoff_wins
+        COUNT(*) AS recent_playoff_matches,
+        SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) AS recent_playoff_wins,
+        SUM(CASE WHEN is_final = 1 AND winner = team THEN 1 ELSE 0 END) AS recent_titles
     FROM (
         SELECT
             ms.match_id,
+            ms.season_year,
             ms.winner,
-            ms.team_1 AS team
+            ms.team_1 AS team,
+            ms.is_final
         FROM match_stages ms
+        CROSS JOIN max_year my
         WHERE ms.is_playoff = 1
+          AND ms.season_year >= my.latest_season_year - 1
 
         UNION ALL
 
         SELECT
             ms.match_id,
+            ms.season_year,
             ms.winner,
-            ms.team_2 AS team
+            ms.team_2 AS team,
+            ms.is_final
         FROM match_stages ms
+        CROSS JOIN max_year my
         WHERE ms.is_playoff = 1
+          AND ms.season_year >= my.latest_season_year - 1
     ) AS playoff_teams
     GROUP BY team
 )
 SELECT TOP 10
-    tw.team,
-    tw.matches_played,
-    tw.wins,
-    tw.win_percentage,
-    bs.avg_score,
-    bw.avg_runs_conceded,
-    COALESCE(ps.playoff_matches, 0) AS playoff_matches,
-    COALESCE(ps.playoff_wins, 0) AS playoff_wins,
+    aw.team,
+    aw.all_time_matches,
+    aw.all_time_wins,
+    aw.all_time_win_percentage,
+    COALESCE(rw.recent_matches, 0) AS recent_matches,
+    COALESCE(rw.recent_wins, 0) AS recent_wins,
+    COALESCE(rw.recent_win_percentage, 0) AS recent_win_percentage,
+    COALESCE(rb.recent_avg_score, 0) AS recent_avg_score,
+    COALESCE(rbo.recent_avg_runs_conceded, 0) AS recent_avg_runs_conceded,
+    COALESCE(rp.recent_playoff_matches, 0) AS recent_playoff_matches,
+    COALESCE(rp.recent_playoff_wins, 0) AS recent_playoff_wins,
+    COALESCE(rp.recent_titles, 0) AS recent_titles,
     ROUND(
-        tw.win_percentage * 0.40
-        + bs.avg_score * 0.20
-        - bw.avg_runs_conceded * 0.15
-        + COALESCE(ps.playoff_wins, 0) * 2.5,
+        COALESCE(rw.recent_win_percentage, 0) * 0.45
+        + aw.all_time_win_percentage * 0.15
+        + COALESCE(rb.recent_avg_score, 0) * 0.12
+        - COALESCE(rbo.recent_avg_runs_conceded, 0) * 0.10
+        + COALESCE(rp.recent_playoff_wins, 0) * 3.0
+        + COALESCE(rp.recent_titles, 0) * 8.0,
         2
     ) AS title_chance_score
-FROM team_win_rates tw
-JOIN batting_strength bs
-    ON tw.team = bs.team
-JOIN bowling_strength bw
-    ON tw.team = bw.team
-LEFT JOIN playoff_strength ps
-    ON tw.team = ps.team
+FROM all_time_win_rates aw
+LEFT JOIN recent_win_rates rw
+    ON aw.team = rw.team
+LEFT JOIN recent_batting_strength rb
+    ON aw.team = rb.team
+LEFT JOIN recent_bowling_strength rbo
+    ON aw.team = rbo.team
+LEFT JOIN recent_playoff_strength rp
+    ON aw.team = rp.team
+WHERE COALESCE(rw.recent_matches, 0) > 0
 ORDER BY title_chance_score DESC;
 """.strip()
 
@@ -851,18 +1157,21 @@ ORDER BY title_chance_score DESC;
 
     top_team = safe_first_value(result, "team", "unknown team")
     top_score = safe_first_value(result, "title_chance_score", None)
-    top_win_percentage = safe_first_value(result, "win_percentage", None)
-    top_avg_score = safe_first_value(result, "avg_score", None)
-    top_avg_runs_conceded = safe_first_value(result, "avg_runs_conceded", None)
-    top_playoff_wins = safe_first_value(result, "playoff_wins", 0)
+    recent_win_percentage = safe_first_value(result, "recent_win_percentage", None)
+    all_time_win_percentage = safe_first_value(result, "all_time_win_percentage", None)
+    recent_avg_score = safe_first_value(result, "recent_avg_score", None)
+    recent_avg_runs_conceded = safe_first_value(result, "recent_avg_runs_conceded", None)
+    recent_titles = safe_first_value(result, "recent_titles", 0)
 
     paragraph = (
-        f"The explainable title-chance model ranks {top_team} highest with a score of "
-        f"{format_metric(top_score)}. This is not a guaranteed prediction; it is a data-based ranking using "
-        f"historical win percentage, batting strength, bowling strength, and playoff wins. {top_team}'s profile "
-        f"includes a win rate of {format_metric(top_win_percentage)}%, an average score of "
-        f"{format_metric(top_avg_score)}, average runs conceded of {format_metric(top_avg_runs_conceded)}, "
-        f"and {format_metric(top_playoff_wins, 0)} playoff wins."
+        f"The updated title-chance model ranks {top_team} highest with a score of "
+        f"{format_metric(top_score)}. This version gives more weight to recent seasons than all-time history, "
+        f"so recent wins, recent batting strength, recent bowling strength, and recent playoff/title performance "
+        f"matter more than older dominance. {top_team}'s recent win rate is {format_metric(recent_win_percentage)}%, "
+        f"compared with an all-time win rate of {format_metric(all_time_win_percentage)}%. The team has a recent "
+        f"average score of {format_metric(recent_avg_score)}, recent average runs conceded of "
+        f"{format_metric(recent_avg_runs_conceded)}, and {format_metric(recent_titles, 0)} recent titles. "
+        f"This is an explainable ranking, not a guaranteed prediction."
     )
 
     return {
@@ -1083,6 +1392,8 @@ FROM playoff_team_matches tm
 WHERE {team_match_condition};
 """.strip()
 
+    venue_name = canonical_venue_sql("tm.venue")
+
     venue_sql = f"""
 WITH team_matches AS (
     SELECT DISTINCT
@@ -1095,7 +1406,7 @@ WITH team_matches AS (
         ON d.match_id = m.match_id
 )
 SELECT TOP 10
-    tm.venue,
+    {venue_name} AS venue,
     COUNT(*) AS matches_played,
     SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) AS wins,
     ROUND(
@@ -1105,7 +1416,7 @@ SELECT TOP 10
     ) AS win_percentage
 FROM team_matches tm
 WHERE {team_match_condition}
-GROUP BY tm.venue
+GROUP BY {venue_name}
 HAVING COUNT(*) >= 3
 ORDER BY wins DESC, win_percentage DESC;
 """.strip()
@@ -1136,6 +1447,50 @@ GROUP BY
     END
 ORDER BY runs DESC;
 """.strip()
+    
+    top_run_scorers_sql = f"""
+SELECT TOP 10
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS runs,
+    SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    COUNT(DISTINCT d.match_id) AS matches,
+    ROUND(
+        SUM(d.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM deliveries d
+WHERE {batting_condition}
+GROUP BY d.striker
+ORDER BY runs DESC;
+""".strip()
+
+    top_wicket_takers_sql = f"""
+SELECT TOP 10
+    d.bowler,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS wickets,
+    COUNT(DISTINCT d.match_id) AS matches,
+    SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+    ROUND(
+        SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) * 6.0 /
+        NULLIF(SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS economy_rate
+FROM deliveries d
+WHERE {bowling_condition}
+GROUP BY d.bowler
+HAVING COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) > 0
+ORDER BY wickets DESC, economy_rate ASC;
+""".strip()
 
     overall_df = run_query(overall_sql)
     season_df = run_query(season_sql)
@@ -1145,6 +1500,8 @@ ORDER BY runs DESC;
     playoff_df = run_query(playoff_sql)
     venue_df = run_query(venue_sql)
     phase_batting_df = run_query(phase_batting_sql)
+    top_run_scorers_df = run_query(top_run_scorers_sql)
+    top_wicket_takers_df = run_query(top_wicket_takers_sql)
 
     matches_played = safe_first_value(overall_df, "matches_played", 0)
     wins = safe_first_value(overall_df, "wins", 0)
@@ -1213,6 +1570,8 @@ ORDER BY runs DESC;
         "playoff": playoff_df,
         "venues": venue_df,
         "phase_batting": phase_batting_df,
+        "top_run_scorers": top_run_scorers_df,
+        "top_wicket_takers": top_wicket_takers_df,
         "sql_queries": {
             "overall": overall_sql,
             "season_trend": season_sql,
@@ -1222,6 +1581,8 @@ ORDER BY runs DESC;
             "playoff": playoff_sql,
             "venues": venue_sql,
             "phase_batting": phase_batting_sql,
+            "top_run_scorers": top_run_scorers_sql,
+            "top_wicket_takers": top_wicket_takers_sql,
         },
     }
 
@@ -1732,4 +2093,201 @@ ORDER BY wickets DESC, economy_rate ASC;
             "handedness": handedness_sql,
             "phases": phase_sql,
         },
+    }
+def analyze_match_summaries(match_filter_sql, context_label, limit=5):
+    """
+    Return match summaries with result, scoreline, top scorer, and top wicket-taker.
+
+    match_filter_sql should use aliases:
+    - m for matches
+    - ms for match_stages
+    """
+
+    limit = int(max(1, min(limit, 20)))
+
+    summary_sql = f"""
+WITH selected_matches AS (
+    SELECT TOP {limit}
+        m.match_id,
+        COALESCE(ms.season_year, YEAR(CAST(m.start_date AS date))) AS season_year,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.winner,
+        m.winner_runs,
+        m.winner_wickets,
+        ms.match_stage,
+        ms.is_final,
+        CASE
+            WHEN m.winner_runs IS NOT NULL THEN CONCAT('won by ', CAST(CAST(m.winner_runs AS INT) AS VARCHAR(20)), ' runs')
+            WHEN m.winner_wickets IS NOT NULL THEN CONCAT('won by ', CAST(CAST(m.winner_wickets AS INT) AS VARCHAR(20)), ' wickets')
+            ELSE 'result recorded'
+        END AS margin
+    FROM matches m
+    LEFT JOIN match_stages ms
+        ON m.match_id = ms.match_id
+    WHERE {match_filter_sql}
+    ORDER BY m.start_date DESC, m.match_id DESC
+),
+match_teams AS (
+    SELECT
+        d.match_id,
+        MIN(d.batting_team) AS team_1,
+        MAX(d.batting_team) AS team_2
+    FROM (
+        SELECT DISTINCT
+            match_id,
+            batting_team
+        FROM deliveries
+    ) d
+    JOIN selected_matches sm
+        ON d.match_id = sm.match_id
+    GROUP BY d.match_id
+),
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        SUM(d.runs_off_bat + d.extras) AS team_score,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('retired hurt', 'retired out')
+            THEN 1
+        END) AS wickets_lost
+    FROM deliveries d
+    JOIN selected_matches sm
+        ON d.match_id = sm.match_id
+    WHERE d.innings IN (1, 2)
+    GROUP BY d.match_id, d.innings, d.batting_team
+),
+scoreline AS (
+    SELECT
+        match_id,
+        MAX(CASE WHEN innings = 1 THEN batting_team END) AS innings_1_team,
+        MAX(CASE WHEN innings = 1 THEN team_score END) AS innings_1_score,
+        MAX(CASE WHEN innings = 1 THEN wickets_lost END) AS innings_1_wickets,
+        MAX(CASE WHEN innings = 2 THEN batting_team END) AS innings_2_team,
+        MAX(CASE WHEN innings = 2 THEN team_score END) AS innings_2_score,
+        MAX(CASE WHEN innings = 2 THEN wickets_lost END) AS innings_2_wickets
+    FROM innings_scores
+    GROUP BY match_id
+),
+batter_innings AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        SUM(d.runs_off_bat) AS runs,
+        SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) AS balls
+    FROM deliveries d
+    JOIN selected_matches sm
+        ON d.match_id = sm.match_id
+    GROUP BY d.match_id, d.innings, d.striker, d.batting_team
+),
+ranked_batters AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY match_id
+            ORDER BY runs DESC, balls ASC
+        ) AS batter_rank
+    FROM batter_innings
+),
+bowler_figures AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.bowler,
+        d.bowling_team,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(d.runs_off_bat + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+    FROM deliveries d
+    JOIN selected_matches sm
+        ON d.match_id = sm.match_id
+    GROUP BY d.match_id, d.innings, d.bowler, d.bowling_team
+),
+ranked_bowlers AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY match_id
+            ORDER BY wickets DESC, runs_conceded ASC, legal_balls DESC
+        ) AS bowler_rank
+    FROM bowler_figures
+    WHERE wickets > 0
+)
+SELECT
+    sm.match_id,
+    sm.season_year,
+    sm.start_date,
+    COALESCE(sm.match_stage, 'League Match') AS match_stage,
+    mt.team_1,
+    mt.team_2,
+    sm.winner,
+    sm.margin,
+    sm.venue,
+    sc.innings_1_team,
+    sc.innings_1_score,
+    sc.innings_1_wickets,
+    sc.innings_2_team,
+    sc.innings_2_score,
+    sc.innings_2_wickets,
+    rb.batter AS top_scorer,
+    rb.batting_team AS top_scorer_team,
+    rb.runs AS top_scorer_runs,
+    rb.balls AS top_scorer_balls,
+    rbo.bowler AS top_wicket_taker,
+    rbo.bowling_team AS top_wicket_taker_team,
+    rbo.wickets AS top_wicket_taker_wickets,
+    rbo.runs_conceded AS top_wicket_taker_runs_conceded,
+    CONCAT(
+        sm.winner,
+        ' ',
+        sm.margin,
+        '. Top scorer: ',
+        COALESCE(rb.batter, 'N/A'),
+        ' with ',
+        COALESCE(CAST(rb.runs AS VARCHAR(20)), '0'),
+        ' runs. Top wicket-taker: ',
+        COALESCE(rbo.bowler, 'N/A'),
+        ' with ',
+        COALESCE(CAST(rbo.wickets AS VARCHAR(20)), '0'),
+        ' wickets.'
+    ) AS game_summary
+FROM selected_matches sm
+LEFT JOIN match_teams mt
+    ON sm.match_id = mt.match_id
+LEFT JOIN scoreline sc
+    ON sm.match_id = sc.match_id
+LEFT JOIN ranked_batters rb
+    ON sm.match_id = rb.match_id
+    AND rb.batter_rank = 1
+LEFT JOIN ranked_bowlers rbo
+    ON sm.match_id = rbo.match_id
+    AND rbo.bowler_rank = 1
+ORDER BY sm.start_date DESC, sm.match_id DESC;
+""".strip()
+
+    result = run_query(summary_sql)
+
+    if result is None or result.empty:
+        paragraph = f"No matches found for {context_label}."
+    elif limit == 1:
+        paragraph = str(result.iloc[0]["game_summary"])
+    else:
+        paragraph = f"Found {len(result)} matches for {context_label}. The latest match summary is: {result.iloc[0]['game_summary']}"
+
+    return {
+        "paragraph": paragraph,
+        "summary": result,
+        "match_summaries": result,
+        "sql_query": summary_sql,
     }

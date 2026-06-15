@@ -1,124 +1,241 @@
 import streamlit as st
-import app.llm_agent as llm_agent
-st.caption(f"Using agent file: {llm_agent.__file__}")
+import html
 from app.llm_agent import answer_question_with_fallback
 
-def show_chart_if_possible(result):
-    if result is None:
+
+st.set_page_config(
+    page_title="Cricket SQL Agent",
+    page_icon="🏏",
+    layout="wide",
+)
+
+
+def prettify_name(name):
+    return str(name).replace("_", " ").title()
+
+
+def is_empty_table(dataframe):
+    if dataframe is None:
+        return True
+
+    if hasattr(dataframe, "empty") and dataframe.empty:
+        return True
+
+    return False
+
+
+def show_dataframe(title, dataframe):
+    if is_empty_table(dataframe):
         return
-    if result.empty:
+
+    st.markdown(f"#### {title}")
+    st.dataframe(dataframe, use_container_width=True)
+
+
+def show_summary(result):
+    if is_empty_table(result):
         return
-    if len(result) < 2:
+
+    if "analysis_area" in result.columns and "insight" in result.columns:
+        st.markdown("#### Summary")
+
+        for _, row in result.iterrows():
+            area = html.escape(str(row["analysis_area"]))
+            insight = html.escape(str(row["insight"]))
+
+            st.markdown(
+                f"""
+<div style="
+    border: 1px solid rgba(250, 250, 250, 0.15);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    background-color: rgba(255, 255, 255, 0.03);
+    white-space: normal;
+    overflow-wrap: break-word;
+    line-height: 1.5;
+">
+    <div style="font-weight: 700; margin-bottom: 6px;">{area}</div>
+    <div>{insight}</div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
         return
-    numeric_columns=result.select_dtypes(include="number").columns.tolist()
-    if len(numeric_columns)==0:
+
+    show_dataframe("Summary", result)
+
+
+def show_answer(answer):
+    method = answer.get("method")
+    matched_question = answer.get("matched_question")
+    error = answer.get("error")
+    result = answer.get("result")
+    sql_query = answer.get("sql_query")
+    analysis_paragraph = answer.get("analysis_paragraph")
+    extra_tables = answer.get("extra_tables")
+
+    if error is not None and method != "fallback_question_bank":
+        st.error(error)
         return
-    preferred_value_columns=[
-        "total_runs",
-        "wickets",
-        "death_overs_runs",
-        "powerplay_overs_runs",
-        "chasing_wins",
-        "average_first_innings_score",
-        "strike_rate",
-        "economy_rate",
-        "match_count",
-        "wins",
-        "runs_in_innings",
-        "total_runs_conceded",
-        "runs_conceded",
+
+    if matched_question:
+        st.caption(f"Matched mode: {matched_question}")
+    elif method:
+        st.caption(f"Method: {method}")
+
+    if error is not None and method == "fallback_question_bank":
+        st.warning("The LLM query failed, so the app used the closest fallback question from the question bank.")
+
+    if analysis_paragraph:
+        st.markdown("### Insight")
+        st.info(analysis_paragraph)
+
+    show_summary(result)
+
+    if extra_tables:
+        st.markdown("### Detailed Analysis")
+
+        for table_name, table_data in extra_tables.items():
+            if is_empty_table(table_data):
+                continue
+
+            with st.expander(prettify_name(table_name), expanded=False):
+                st.dataframe(table_data, use_container_width=True)
+
+    if sql_query:
+        with st.expander("SQL used", expanded=False):
+            st.code(sql_query, language="sql")
+
+
+def set_example_question(question):
+    st.session_state["question_input"] = question
+
+
+if "question_input" not in st.session_state:
+    st.session_state["question_input"] = ""
+
+
+with st.sidebar:
+    st.title("Demo Questions")
+
+    st.markdown("### Basic SQL")
+    basic_questions = [
+        "Who has the most runs in IPL?",
+        "Who has the most wickets in IPL?",
+        "What is the highest individual score?",
+        "Who has the fastest fifty?",
+        "Who has the best bowling figures?",
     ]
-    value_column=None
-    for column in preferred_value_columns:
-        if column in result.columns:
-            value_column=column
-            break
-    if value_column is None:
-        value_column=numeric_columns[-1]
-    label_column=None
-    for column in result.columns:
-        if column!=value_column and column not in numeric_columns:
-            label_column=column
-            break
-    if label_column is None:
-        return
-    chart_data=result[[label_column,value_column]].copy()
-    chart_data=chart_data.set_index(label_column)
-    st.subheader("chart")
-    st.bar_chart(chart_data)
 
-def main():
-    st.set_page_config(page_title="Cricket SQL Agent", layout="wide")
+    for question in basic_questions:
+        st.button(
+            question,
+            key=f"basic_{question}",
+            on_click=set_example_question,
+            args=(question,),
+            use_container_width=True,
+        )
 
-    st.title("Local Cricket Analytics SQL Agent")
-
-    st.write("Ask cricket analytics questions using the local IPL database.")
-
-    st.write("This app runs locally using Ollama, Python, and SQL Server.")
-
-    example_questions = [
-        "Who are the top 10 run scorers?",
-        "Who are the top 10 wicket takers?",
-        "Who scored the most runs in death overs?",
-        "Who has taken the most wickets in the powerplay?",
-        "Which teams have the most wins while chasing?",
-        "Which venues have the highest average first innings score?",
-        "Which batters have the best strike rate with at least 300 balls faced?",
-        "Which bowlers have the best economy rate with at least 300 legal balls bowled?",
+    st.markdown("### Player Intelligence")
+    player_questions = [
+        "Analyse Virat Kohli",
+        "Analyse Kohli dismissals",
+        "Analyse Virat Kohli shots",
+        "What shot should Kohli avoid playing?",
+        "Which shot gets Kohli out the most?",
     ]
 
-    selected_example = st.selectbox(
-        "Choose an example question:",
-        example_questions
+    for question in player_questions:
+        st.button(
+            question,
+            key=f"player_{question}",
+            on_click=set_example_question,
+            args=(question,),
+            use_container_width=True,
+        )
+
+    st.markdown("### Bowler Intelligence")
+    bowler_questions = [
+        "Analyse Bumrah bowling matchups",
+        "Analyse Bumrah bowling strategy",
+        "What line and length works best for Chahal?",
+        "What should Bumrah avoid bowling?",
+        "Which batsman has Bumrah dismissed the most?",
+    ]
+
+    for question in bowler_questions:
+        st.button(
+            question,
+            key=f"bowler_{question}",
+            on_click=set_example_question,
+            args=(question,),
+            use_container_width=True,
+        )
+
+    st.markdown("### Team Intelligence")
+    team_questions = [
+        "Analyse CSK",
+        "Team report for RCB",
+        "Analyse Mumbai Indians as a team",
+        "Which team has won the most titles?",
+        "Who won the 2016 final?",
+    ]
+
+    for question in team_questions:
+        st.button(
+            question,
+            key=f"team_{question}",
+            on_click=set_example_question,
+            args=(question,),
+            use_container_width=True,
+        )
+
+    st.markdown("### Prediction")
+    prediction_questions = [
+        "Who will win next season based on data?",
+        "Which team has the best title chances?",
+    ]
+
+    for question in prediction_questions:
+        st.button(
+            question,
+            key=f"prediction_{question}",
+            on_click=set_example_question,
+            args=(question,),
+            use_container_width=True,
+        )
+
+
+st.title("Cricket SQL Agent")
+st.caption(
+    "Ask IPL analytics questions using SQL, curated logic, and deeper cricket intelligence layers."
+)
+
+st.markdown(
+    """
+This app can answer direct cricket database questions and also perform deeper analysis such as player profiles,
+dismissal patterns, shot selection, bowler matchups, team reports, bowling strategy, playoff analysis, and title-chance prediction.
+"""
+)
+
+with st.form("question_form"):
+    user_question = st.text_area(
+        "Ask a cricket analytics question",
+        key="question_input",
+        height=100,
+        placeholder="Example: Analyse Virat Kohli shots",
     )
 
-    question = st.text_input(
-        "Or type your own question:",
-        value=selected_example
-    )
+    submitted = st.form_submit_button("Ask")
 
-    run_button = st.button("Ask Agent")
+if submitted:
+    if user_question.strip() == "":
+        st.warning("Please enter a question.")
+    else:
+        with st.spinner("Analysing..."):
+            answer = answer_question_with_fallback(user_question.strip())
 
-    if run_button:
-        if question.strip() == "":
-            st.warning("Please enter a question.")
-        else:
-            with st.spinner("Generating SQL and querying the database..."):
-                response = answer_question_with_fallback(question)
-
-            st.subheader("Method Used")
-            st.write(response["method"])
-
-            if response["matched_question"] is not None:
-                st.subheader("Matched Fallback Question")
-                st.write(response["matched_question"])
-
-            if response["error"] is not None:
-                st.subheader("Original LLM Error")
-                st.write(response["error"])
-
-            st.subheader("SQL Used")
-
-            if response["sql_query"] is not None:
-                st.code(response["sql_query"], language="sql")
-            else:
-                st.write("No SQL query was generated.")
-
-            st.subheader("Result")
-
-            if response["result"] is not None:
-                result = response["result"].copy()
-
-                result.index = result.index + 1
-
-                st.dataframe(result, use_container_width=True)
-
-                show_chart_if_possible(result)
-            else:
-                st.info("No result table to display.")
-
-
-                                
-
-
-main()
+        st.markdown("---")
+        show_answer(answer)
