@@ -130,3 +130,5 @@ added deper batter vs bowler intelligence...now gives better analysis
 added curated support for season milestone questions
 added match summary intelligence
 added summaries for questions such as list last 5 encounters of mi vs csk
+added fastest to 1000 runs etc,fastest to 50 wickets as well
+added stats for most runs scored in pp,death overs etc
