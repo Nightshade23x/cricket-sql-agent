@@ -116,3 +116,9 @@ day 7
 exteneded the agent beyond normal analysis
 added matchups for both bowlers and batsman
 added paragraphs that describe the analysis
+
+day 8
+added new datasource from kaggle which will help to support more advanced cricket analysis based on shot selection,line,lenght and batting bowling pattenrs
+created new func to help with batter shot patterns
+did the same for bowling
+updated the routing in llm agent as well so shot selection ques route to the new player shot analysis func,same with the bowling func
