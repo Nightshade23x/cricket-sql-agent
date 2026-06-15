@@ -3,7 +3,7 @@ from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
 from functools import lru_cache
-from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile,analyze_player_shots
+from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile, analyze_player_shots, analyze_bowler_strategy
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -5676,6 +5676,47 @@ def build_analysis_response(user_question):
             "analysis_paragraph": analysis_result.get("paragraph"),
             "error": None
         }
+
+    # Bowler strategy analysis using line, length, shots, handedness, and phase
+    if (
+        "bowling strategy" in question_lower
+        or "bowling plan" in question_lower
+        or "line and length" in question_lower
+        or "line length" in question_lower
+        or "what should" in question_lower and "bowl" in question_lower
+        or "avoid bowling" in question_lower
+        or "bowl more" in question_lower
+        or "ball type" in question_lower
+        or "bowling pattern" in question_lower
+    ):
+        bowler_condition = get_player_condition_from_question(user_question, "se.bowler")
+
+        if bowler_condition is not None:
+            analysis_result = analyze_bowler_strategy(bowler_condition)
+
+            combined_sql = "\n\n--- effective_line_length ---\n" + analysis_result["sql_queries"]["effective_line_length"]
+            combined_sql += "\n\n--- expensive_line_length ---\n" + analysis_result["sql_queries"]["expensive_line_length"]
+            combined_sql += "\n\n--- shots_conceded ---\n" + analysis_result["sql_queries"]["shots_conceded"]
+            combined_sql += "\n\n--- wicket_shots ---\n" + analysis_result["sql_queries"]["wicket_shots"]
+            combined_sql += "\n\n--- handedness ---\n" + analysis_result["sql_queries"]["handedness"]
+            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Bowler strategy analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "effective_line_length": analysis_result["effective_line_length"],
+                    "expensive_line_length": analysis_result["expensive_line_length"],
+                    "shots_conceded": analysis_result["shots_conceded"],
+                    "wicket_shots": analysis_result["wicket_shots"],
+                    "handedness": analysis_result["handedness"],
+                    "phases": analysis_result["phases"],
+                },
+                "error": None
+            }
 
     # Bowler matchup analysis
     if (

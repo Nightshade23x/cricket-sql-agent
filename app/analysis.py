@@ -1477,3 +1477,259 @@ ORDER BY dismissals DESC, runs DESC;
             "phase_shots": phase_shot_sql,
         },
     }
+
+def analyze_bowler_strategy(bowler_condition):
+    """
+    Analyse a bowler's strategy using shot_events.
+
+    bowler_condition should be something like:
+    se.bowler = 'JJ Bumrah'
+    """
+
+    condition_se = bowler_condition
+    condition_se = condition_se.replace("d.bowler", "se.bowler")
+
+    bowler_name = extract_player_name_from_condition(condition_se)
+
+    effective_line_length_sql = f"""
+WITH line_length_stats AS (
+    SELECT
+        se.ball_length,
+        se.ball_line,
+        COUNT(*) AS deliveries,
+        SUM(CASE WHEN se.wides IS NULL AND se.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+        SUM(se.runs_off_bat + COALESCE(se.wides, 0) + COALESCE(se.noballs, 0)) AS runs_conceded,
+        COUNT(CASE
+            WHEN se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND se.ball_length IS NOT NULL
+      AND se.ball_line IS NOT NULL
+    GROUP BY se.ball_length, se.ball_line
+)
+SELECT TOP 10
+    ball_length,
+    ball_line,
+    deliveries,
+    legal_balls,
+    runs_conceded,
+    wickets,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy_rate,
+    ROUND(legal_balls * 1.0 / NULLIF(wickets, 0), 2) AS balls_per_wicket
+FROM line_length_stats
+WHERE legal_balls >= 10
+ORDER BY wickets DESC, economy_rate ASC, balls_per_wicket ASC;
+""".strip()
+
+    expensive_line_length_sql = f"""
+WITH line_length_stats AS (
+    SELECT
+        se.ball_length,
+        se.ball_line,
+        COUNT(*) AS deliveries,
+        SUM(CASE WHEN se.wides IS NULL AND se.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+        SUM(se.runs_off_bat + COALESCE(se.wides, 0) + COALESCE(se.noballs, 0)) AS runs_conceded,
+        COUNT(CASE
+            WHEN se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND se.ball_length IS NOT NULL
+      AND se.ball_line IS NOT NULL
+    GROUP BY se.ball_length, se.ball_line
+)
+SELECT TOP 10
+    ball_length,
+    ball_line,
+    deliveries,
+    legal_balls,
+    runs_conceded,
+    wickets,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy_rate
+FROM line_length_stats
+WHERE legal_balls >= 10
+ORDER BY economy_rate DESC, runs_conceded DESC;
+""".strip()
+
+    shots_conceded_sql = f"""
+SELECT TOP 15
+    se.shot_played,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    SUM(se.runs_off_bat) AS runs_scored,
+    SUM(CASE WHEN se.runs_off_bat IN (4, 6) THEN 1 ELSE 0 END) AS boundaries,
+    COUNT(CASE
+        WHEN se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS wickets,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS batting_strike_rate_against
+FROM dbo.shot_events se
+WHERE {condition_se}
+  AND se.shot_played IS NOT NULL
+  AND se.shot_played <> ''
+GROUP BY se.shot_played
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 10
+ORDER BY runs_scored DESC, batting_strike_rate_against DESC;
+""".strip()
+
+    wicket_shots_sql = f"""
+SELECT TOP 15
+    se.shot_played,
+    se.wicket_type,
+    COUNT(*) AS wickets
+FROM dbo.shot_events se
+WHERE {condition_se}
+  AND se.shot_played IS NOT NULL
+  AND se.shot_played <> ''
+  AND se.wicket_type IS NOT NULL
+  AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+GROUP BY se.shot_played, se.wicket_type
+ORDER BY wickets DESC;
+""".strip()
+
+    handedness_sql = f"""
+SELECT
+    se.batting_style_striker AS batter_type,
+    SUM(CASE WHEN se.wides IS NULL AND se.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat + COALESCE(se.wides, 0) + COALESCE(se.noballs, 0)) AS runs_conceded,
+    COUNT(CASE
+        WHEN se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS wickets,
+    ROUND(
+        SUM(se.runs_off_bat + COALESCE(se.wides, 0) + COALESCE(se.noballs, 0)) * 6.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL AND se.noballs IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS economy_rate,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS batting_strike_rate_against
+FROM dbo.shot_events se
+WHERE {condition_se}
+  AND se.batting_style_striker IS NOT NULL
+GROUP BY se.batting_style_striker
+ORDER BY wickets DESC, economy_rate ASC;
+""".strip()
+
+    phase_sql = f"""
+SELECT
+    CASE
+        WHEN FLOOR(se.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(se.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(se.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END AS phase,
+    SUM(CASE WHEN se.wides IS NULL AND se.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat + COALESCE(se.wides, 0) + COALESCE(se.noballs, 0)) AS runs_conceded,
+    COUNT(CASE
+        WHEN se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS wickets,
+    ROUND(
+        SUM(se.runs_off_bat + COALESCE(se.wides, 0) + COALESCE(se.noballs, 0)) * 6.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL AND se.noballs IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS economy_rate,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS batting_strike_rate_against
+FROM dbo.shot_events se
+WHERE {condition_se}
+GROUP BY
+    CASE
+        WHEN FLOOR(se.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(se.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(se.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END
+ORDER BY wickets DESC, economy_rate ASC;
+""".strip()
+
+    effective_line_length_df = run_query(effective_line_length_sql)
+    expensive_line_length_df = run_query(expensive_line_length_sql)
+    shots_conceded_df = run_query(shots_conceded_sql)
+    wicket_shots_df = run_query(wicket_shots_sql)
+    handedness_df = run_query(handedness_sql)
+    phase_df = run_query(phase_sql)
+
+    best_length = safe_first_value(effective_line_length_df, "ball_length", "unknown length")
+    best_line = safe_first_value(effective_line_length_df, "ball_line", "unknown line")
+
+    worst_length = safe_first_value(expensive_line_length_df, "ball_length", "unknown length")
+    worst_line = safe_first_value(expensive_line_length_df, "ball_line", "unknown line")
+
+    most_scored_shot = safe_first_value(shots_conceded_df, "shot_played", "unknown shot")
+    wicket_shot = safe_first_value(wicket_shots_df, "shot_played", "unknown shot")
+    best_phase = safe_first_value(phase_df, "phase", "unknown phase")
+
+    paragraph = (
+        f"{bowler_name}'s bowling strategy profile suggests that the most effective line-and-length pattern is "
+        f"{best_length} on {best_line}, based on wickets, economy rate, and balls per wicket. The most expensive "
+        f"pattern appears to be {worst_length} on {worst_line}. Batters score most often through the {most_scored_shot} "
+        f"against this bowler, while wickets are most often linked with batters playing the {wicket_shot}. Phase-wise, "
+        f"the strongest wicket-taking phase appears to be the {best_phase}. This should be treated as a data-based "
+        f"tactical suggestion rather than a guaranteed bowling plan."
+    )
+
+    summary_rows = [
+        {
+            "analysis_area": "Overall bowling strategy",
+            "insight": paragraph,
+        },
+        {
+            "analysis_area": "Best line and length",
+            "insight": f"The most effective pattern is {best_length} on {best_line}.",
+        },
+        {
+            "analysis_area": "Pattern to avoid",
+            "insight": f"The most expensive pattern is {worst_length} on {worst_line}.",
+        },
+        {
+            "analysis_area": "Shot conceded most",
+            "insight": f"Batters score most often through the {most_scored_shot}.",
+        },
+        {
+            "analysis_area": "Wicket shot pattern",
+            "insight": f"Wickets are most often linked with batters playing the {wicket_shot}.",
+        },
+        {
+            "analysis_area": "Best phase",
+            "insight": f"The strongest wicket-taking phase appears to be the {best_phase}.",
+        },
+    ]
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "effective_line_length": effective_line_length_df,
+        "expensive_line_length": expensive_line_length_df,
+        "shots_conceded": shots_conceded_df,
+        "wicket_shots": wicket_shots_df,
+        "handedness": handedness_df,
+        "phases": phase_df,
+        "sql_queries": {
+            "effective_line_length": effective_line_length_sql,
+            "expensive_line_length": expensive_line_length_sql,
+            "shots_conceded": shots_conceded_sql,
+            "wicket_shots": wicket_shots_sql,
+            "handedness": handedness_sql,
+            "phases": phase_sql,
+        },
+    }
