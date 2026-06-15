@@ -122,3 +122,11 @@ added new datasource from kaggle which will help to support more advanced cricke
 created new func to help with batter shot patterns
 did the same for bowling
 updated the routing in llm agent as well so shot selection ques route to the new player shot analysis func,same with the bowling func
+improved venue and team normalisation...some teams and venues appeared under diff names so combined them
+improved frontend,looks cleaner now...also fixed summary table as it kept cutting off
+enhanced team profile analysis
+improved title predictin model
+added deper batter vs bowler intelligence...now gives better analysis
+added curated support for season milestone questions
+added match summary intelligence
+added summaries for questions such as list last 5 encounters of mi vs csk
