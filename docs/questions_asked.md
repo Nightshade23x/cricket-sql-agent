@@ -381,3 +381,12 @@ the summary table is cutting off text(image shown)
 under team report for rcb...chinnaswamy appears 3 diff times so we need to combine it...also chepauk stats seem wrong,coz it shows theyve only played 5 games there and won 4...so we check if there was some another name for chepauk which we didnt add
 who won the 2016 final failed...add support for this and also whenever such is asked,a short summary of the game,like who was top scroer,top wicket taker etc...we do this for each game asked
 so if i ask,list the last 5 encounters of mi vs csk...it gives results and short summary per game as listed above
+
+what is the highest individual score failed...maybe need to rewrite curated_sql func again
+add fastest to 1000 runs milestones...overall,per team as well,per venue if possible...same with wickets,so fastest to 50 wickets etc
+add which team has reached the playoffs most times,and give years..remember to include semi finals as before 2011 that was the system
+also which teams have appeared in the finals the most times also add the years
+maybe add most times out in the nineties as well
+most runs scored in the powerplay by a team,most runs scored in the middle overs(7-15) and most runs scored by a team in death overs...add the same for players,per match and overall...i think death overs we have,add for middle overs and pp
+also add most runs scored in final over to win a game,and most runs scored in last 5 overs to win
+

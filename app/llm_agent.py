@@ -1753,6 +1753,341 @@ JOIN batter_innings b
 ORDER BY m.balls_to_milestone DESC, b.final_score ASC;
 """.strip()
 
+def get_phase_condition_from_question(user_question, table_alias="d"):
+    question_lower = clean_text_for_matching(user_question)
+
+    if "powerplay" in question_lower or "power play" in question_lower:
+        return f"FLOOR({table_alias}.ball) BETWEEN 0 AND 5", "powerplay"
+
+    if "middle over" in question_lower or "middle overs" in question_lower:
+        return f"FLOOR({table_alias}.ball) BETWEEN 6 AND 14", "middle_overs"
+
+    if "death over" in question_lower or "death overs" in question_lower:
+        return f"FLOOR({table_alias}.ball) BETWEEN 15 AND 19", "death_overs"
+
+    if "final over" in question_lower or "last over" in question_lower:
+        return f"FLOOR({table_alias}.ball) = 19", "final_over"
+
+    if "last 5 overs" in question_lower or "last five overs" in question_lower:
+        return f"FLOOR({table_alias}.ball) BETWEEN 15 AND 19", "last_5_overs"
+
+    return None, None
+
+def get_numeric_threshold_from_question(user_question, default_value):
+    question_lower = user_question.lower()
+
+    match = re.search(r"\b(\d+)\s*(?:runs?|wickets?)\b", question_lower)
+    if match is not None:
+        return int(match.group(1))
+
+    match = re.search(r"\bto\s+(\d+)\b", question_lower)
+    if match is not None:
+        return int(match.group(1))
+
+    return default_value
+
+
+def get_group_mode_from_question(user_question):
+    question_lower = clean_text_for_matching(user_question)
+
+    if (
+        "per team" in question_lower
+        or "by team" in question_lower
+        or "each team" in question_lower
+        or "for each team" in question_lower
+    ):
+        return "team"
+
+    if (
+        "per venue" in question_lower
+        or "by venue" in question_lower
+        or "each venue" in question_lower
+        or "for each venue" in question_lower
+    ):
+        return "venue"
+
+    return "overall"
+
+
+def build_fastest_runs_milestone_sql(user_question):
+    run_threshold = get_numeric_threshold_from_question(user_question, 1000)
+    group_mode = get_group_mode_from_question(user_question)
+
+    where_clauses = []
+
+    if group_mode != "team" and "for" in user_question.lower():
+        team_condition = get_team_condition_after_keyword(user_question, "for", "d.batting_team")
+        if team_condition is not None:
+            where_clauses.append(team_condition)
+
+    venue_condition = get_venue_condition_from_question(user_question)
+    if group_mode != "venue" and venue_condition is not None and has_venue_context(user_question):
+        where_clauses.append(venue_condition)
+
+    where_sql = ""
+    if len(where_clauses) > 0:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    if group_mode == "team":
+        group_expr = "d.batting_team"
+        final_filter = "WHERE group_rank = 1"
+        top_limit = 50
+    elif group_mode == "venue":
+        group_expr = "m.venue"
+        final_filter = "WHERE group_rank = 1"
+        top_limit = 50
+    else:
+        group_expr = "'Overall'"
+        final_filter = ""
+        top_limit = 10
+
+    return f"""
+WITH filtered_deliveries AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.delivery_id,
+        d.ball,
+        d.striker,
+        d.batting_team,
+        d.bowling_team,
+        d.runs_off_bat,
+        d.wides,
+        d.noballs,
+        m.start_date,
+        YEAR(CAST(m.start_date AS date)) AS season_year,
+        m.venue,
+        {group_expr} AS group_name
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    {where_sql}
+),
+batter_innings AS (
+    SELECT
+        group_name,
+        striker,
+        match_id,
+        innings,
+        MIN(start_date) AS innings_date,
+        MIN(delivery_id) AS first_delivery_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY group_name, striker
+            ORDER BY MIN(start_date), match_id, innings
+        ) AS innings_number
+    FROM filtered_deliveries
+    GROUP BY group_name, striker, match_id, innings
+),
+ball_progress AS (
+    SELECT
+        fd.group_name,
+        fd.striker AS batter,
+        fd.batting_team,
+        fd.bowling_team AS opponent,
+        fd.match_id,
+        fd.innings,
+        fd.season_year,
+        fd.start_date,
+        fd.venue,
+        fd.ball,
+        fd.delivery_id,
+        bi.innings_number,
+        SUM(fd.runs_off_bat) OVER (
+            PARTITION BY fd.group_name, fd.striker
+            ORDER BY fd.start_date, fd.match_id, fd.innings, fd.ball, fd.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS cumulative_runs,
+        SUM(CASE WHEN fd.wides IS NULL AND fd.noballs IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY fd.group_name, fd.striker
+            ORDER BY fd.start_date, fd.match_id, fd.innings, fd.ball, fd.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS balls_faced_to_milestone
+    FROM filtered_deliveries fd
+    JOIN batter_innings bi
+        ON fd.group_name = bi.group_name
+        AND fd.striker = bi.striker
+        AND fd.match_id = bi.match_id
+        AND fd.innings = bi.innings
+),
+milestone_rows AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY group_name, batter
+            ORDER BY start_date, match_id, innings, ball, delivery_id
+        ) AS milestone_rank
+    FROM ball_progress
+    WHERE cumulative_runs >= {run_threshold}
+),
+first_milestones AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY group_name
+            ORDER BY innings_number ASC, balls_faced_to_milestone ASC, start_date ASC
+        ) AS group_rank
+    FROM milestone_rows
+    WHERE milestone_rank = 1
+)
+SELECT TOP {top_limit}
+    group_name AS milestone_scope,
+    batter,
+    batting_team AS team_at_milestone,
+    opponent,
+    season_year,
+    start_date,
+    venue,
+    innings_number AS innings_to_{run_threshold}_runs,
+    balls_faced_to_milestone AS balls_faced_to_{run_threshold}_runs,
+    cumulative_runs AS runs_at_milestone
+FROM first_milestones
+{final_filter}
+ORDER BY innings_to_{run_threshold}_runs ASC, balls_faced_to_{run_threshold}_runs ASC;
+""".strip()
+
+
+def build_fastest_wickets_milestone_sql(user_question):
+    wicket_threshold = get_numeric_threshold_from_question(user_question, 50)
+    group_mode = get_group_mode_from_question(user_question)
+
+    where_clauses = []
+
+    if group_mode != "team" and "for" in user_question.lower():
+        team_condition = get_team_condition_after_keyword(user_question, "for", "d.bowling_team")
+        if team_condition is not None:
+            where_clauses.append(team_condition)
+
+    venue_condition = get_venue_condition_from_question(user_question)
+    if group_mode != "venue" and venue_condition is not None and has_venue_context(user_question):
+        where_clauses.append(venue_condition)
+
+    where_sql = ""
+    if len(where_clauses) > 0:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    if group_mode == "team":
+        group_expr = "d.bowling_team"
+        final_filter = "WHERE group_rank = 1"
+        top_limit = 50
+    elif group_mode == "venue":
+        group_expr = "m.venue"
+        final_filter = "WHERE group_rank = 1"
+        top_limit = 50
+    else:
+        group_expr = "'Overall'"
+        final_filter = ""
+        top_limit = 10
+
+    return f"""
+WITH filtered_deliveries AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.delivery_id,
+        d.ball,
+        d.bowler,
+        d.bowling_team,
+        d.batting_team AS opponent,
+        d.runs_off_bat,
+        d.wides,
+        d.noballs,
+        d.wicket_type,
+        m.start_date,
+        YEAR(CAST(m.start_date AS date)) AS season_year,
+        m.venue,
+        {group_expr} AS group_name
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    {where_sql}
+),
+bowler_innings AS (
+    SELECT
+        group_name,
+        bowler,
+        match_id,
+        innings,
+        MIN(start_date) AS innings_date,
+        MIN(delivery_id) AS first_delivery_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY group_name, bowler
+            ORDER BY MIN(start_date), match_id, innings
+        ) AS innings_number
+    FROM filtered_deliveries
+    GROUP BY group_name, bowler, match_id, innings
+),
+ball_progress AS (
+    SELECT
+        fd.group_name,
+        fd.bowler,
+        fd.bowling_team AS team_at_milestone,
+        fd.opponent,
+        fd.match_id,
+        fd.innings,
+        fd.season_year,
+        fd.start_date,
+        fd.venue,
+        fd.ball,
+        fd.delivery_id,
+        bi.innings_number,
+        SUM(CASE
+            WHEN fd.wicket_type IS NOT NULL
+                 AND fd.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+            ELSE 0
+        END) OVER (
+            PARTITION BY fd.group_name, fd.bowler
+            ORDER BY fd.start_date, fd.match_id, fd.innings, fd.ball, fd.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS cumulative_wickets,
+        SUM(CASE WHEN fd.wides IS NULL AND fd.noballs IS NULL THEN 1 ELSE 0 END) OVER (
+            PARTITION BY fd.group_name, fd.bowler
+            ORDER BY fd.start_date, fd.match_id, fd.innings, fd.ball, fd.delivery_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS legal_balls_to_milestone
+    FROM filtered_deliveries fd
+    JOIN bowler_innings bi
+        ON fd.group_name = bi.group_name
+        AND fd.bowler = bi.bowler
+        AND fd.match_id = bi.match_id
+        AND fd.innings = bi.innings
+),
+milestone_rows AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY group_name, bowler
+            ORDER BY start_date, match_id, innings, ball, delivery_id
+        ) AS milestone_rank
+    FROM ball_progress
+    WHERE cumulative_wickets >= {wicket_threshold}
+),
+first_milestones AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY group_name
+            ORDER BY innings_number ASC, legal_balls_to_milestone ASC, start_date ASC
+        ) AS group_rank
+    FROM milestone_rows
+    WHERE milestone_rank = 1
+)
+SELECT TOP {top_limit}
+    group_name AS milestone_scope,
+    bowler,
+    team_at_milestone,
+    opponent,
+    season_year,
+    start_date,
+    venue,
+    innings_number AS innings_to_{wicket_threshold}_wickets,
+    legal_balls_to_milestone AS balls_bowled_to_{wicket_threshold}_wickets,
+    cumulative_wickets AS wickets_at_milestone
+FROM first_milestones
+{final_filter}
+ORDER BY innings_to_{wicket_threshold}_wickets ASC, balls_bowled_to_{wicket_threshold}_wickets ASC;
+""".strip()
+
 def build_curated_sql(user_question):
     question_lower = user_question.lower()
 
@@ -1760,6 +2095,384 @@ def build_curated_sql(user_question):
     venue_context = venue_condition is not None and has_venue_context(user_question)
 
     boundary_runs, boundary_name = get_boundary_type_from_question(user_question)
+    # Fastest batting milestone, e.g. fastest to 1000 runs
+    if (
+        "fastest" in question_lower
+        and ("run" in question_lower or "runs" in question_lower)
+        and (
+            "to" in question_lower
+            or "reach" in question_lower
+            or "milestone" in question_lower
+        )
+    ):
+        return build_fastest_runs_milestone_sql(user_question)
+
+    # Fastest bowling milestone, e.g. fastest to 50 wickets / 100 wickets
+    if (
+        "fastest" in question_lower
+        and ("wicket" in question_lower or "wickets" in question_lower)
+        and (
+            "to" in question_lower
+            or "reach" in question_lower
+            or "milestone" in question_lower
+        )
+    ):
+        return build_fastest_wickets_milestone_sql(user_question)
+    
+    # Highest individual score overall, by team, against team, or at venue
+    if (
+        "highest individual score" in question_lower
+        or "highest score by a player" in question_lower
+        or "highest player score" in question_lower
+        or (
+            "highest score" in question_lower
+            and "team score" not in question_lower
+            and "team total" not in question_lower
+            and "total" not in question_lower
+        )
+    ):
+        where_clauses = []
+
+        if "for" in question_lower:
+            team_condition = get_team_condition_after_keyword(user_question, "for", "d.batting_team")
+            if team_condition is not None:
+                where_clauses.append(team_condition)
+
+        if "against" in question_lower:
+            opponent_condition = get_team_condition_after_keyword(user_question, "against", "d.bowling_team")
+            if opponent_condition is not None:
+                where_clauses.append(opponent_condition)
+
+        if venue_context:
+            where_clauses.append(venue_condition)
+
+        season = get_season_from_question(user_question)
+        if season is not None:
+            where_clauses.append(f"YEAR(CAST(m.start_date AS date)) = {season}")
+
+        where_sql = ""
+
+        if len(where_clauses) > 0:
+            where_sql = "WHERE " + " AND ".join(where_clauses)
+
+        top_n = get_top_n_from_question(user_question, 10)
+
+        return f"""
+SELECT TOP {top_n}
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    YEAR(CAST(m.start_date AS date)) AS season_year,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs,
+    SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    ROUND(
+        SUM(d.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN d.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+{where_sql}
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, YEAR(CAST(m.start_date AS date)), m.start_date, m.venue
+ORDER BY runs DESC, balls_faced ASC;
+""".strip()
+    
+    # Teams with most playoff appearances, including pre-2011 semi-finals
+    if (
+        "playoffs most times" in question_lower
+        or "most playoff appearances" in question_lower
+        or "reached the playoffs most" in question_lower
+        or "qualified for playoffs most" in question_lower
+        or "playoff appearances" in question_lower
+    ):
+        return """
+WITH playoff_teams AS (
+    SELECT
+        match_id,
+        season_year,
+        team_1 AS team
+    FROM match_stages
+    WHERE is_playoff = 1
+
+    UNION ALL
+
+    SELECT
+        match_id,
+        season_year,
+        team_2 AS team
+    FROM match_stages
+    WHERE is_playoff = 1
+),
+team_years AS (
+    SELECT DISTINCT
+        team,
+        season_year
+    FROM playoff_teams
+)
+SELECT
+    team,
+    COUNT(*) AS playoff_seasons,
+    STRING_AGG(CAST(season_year AS VARCHAR(10)), ', ') AS years
+FROM team_years
+GROUP BY team
+ORDER BY playoff_seasons DESC, team;
+""".strip()
+    
+    # Teams with most final appearances
+    if (
+        "most final appearances" in question_lower
+        or "final appearances" in question_lower
+        or "appeared in the finals most" in question_lower
+        or "appeared in the finals the most" in question_lower
+        or "appeared in finals most" in question_lower
+        or "appeared in finals the most" in question_lower
+        or "played the most finals" in question_lower
+        or "most finals" in question_lower
+        or "most times in the final" in question_lower
+        or "most times in finals" in question_lower
+    ):
+        return """
+WITH final_teams AS (
+    SELECT
+        match_id,
+        season_year,
+        team_1 AS team
+    FROM match_stages
+    WHERE is_final = 1
+
+    UNION ALL
+
+    SELECT
+        match_id,
+        season_year,
+        team_2 AS team
+    FROM match_stages
+    WHERE is_final = 1
+),
+team_years AS (
+    SELECT DISTINCT
+        team,
+        season_year
+    FROM final_teams
+)
+SELECT
+    team,
+    COUNT(*) AS final_appearances,
+    STRING_AGG(CAST(season_year AS VARCHAR(10)), ', ') AS years
+FROM team_years
+GROUP BY team
+ORDER BY final_appearances DESC, team;
+""".strip()
+    
+    # Most times out in the nineties
+    if (
+        "out in the nineties" in question_lower
+        or "out in nineties" in question_lower
+        or "dismissed in the nineties" in question_lower
+        or "dismissed in nineties" in question_lower
+        or "most nineties" in question_lower
+    ):
+        return """
+WITH batter_innings AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        YEAR(CAST(m.start_date AS date)) AS season_year,
+        SUM(d.runs_off_bat) AS runs,
+        MAX(CASE
+            WHEN d.player_dismissed = d.striker
+                 AND d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('retired hurt', 'retired out')
+            THEN 1
+            ELSE 0
+        END) AS dismissed
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    GROUP BY d.match_id, d.innings, d.striker, d.batting_team, YEAR(CAST(m.start_date AS date))
+)
+SELECT TOP 10
+    batter,
+    COUNT(*) AS times_out_in_nineties
+FROM batter_innings
+WHERE runs BETWEEN 90 AND 99
+  AND dismissed = 1
+GROUP BY batter
+ORDER BY times_out_in_nineties DESC, batter;
+""".strip()
+    
+    # Most runs in a phase: powerplay, middle overs, death overs
+    # Default meaning = in a single match/innings.
+    # Use "overall", "all time", "aggregate", or "total" for cumulative totals.
+    phase_condition, phase_label = get_phase_condition_from_question(user_question, "d")
+
+    if (
+        phase_condition is not None
+        and "runs" in question_lower
+        and (
+            "most" in question_lower
+            or "highest" in question_lower
+            or "maximum" in question_lower
+        )
+        and "to win" not in question_lower
+    ):
+        top_n = get_top_n_from_question(user_question, 10)
+
+        wants_overall = (
+            "overall" in question_lower
+            or "all time" in question_lower
+            or "all-time" in question_lower
+            or "aggregate" in question_lower
+            or "total" in question_lower
+        )
+
+        if "team" in question_lower or "teams" in question_lower:
+            if wants_overall:
+                return f"""
+SELECT TOP {top_n}
+    d.batting_team,
+    SUM(d.runs_off_bat + d.extras) AS total_runs_in_{phase_label}
+FROM deliveries d
+WHERE {phase_condition}
+GROUP BY d.batting_team
+ORDER BY total_runs_in_{phase_label} DESC;
+""".strip()
+
+            return f"""
+SELECT TOP {top_n}
+    d.batting_team,
+    d.bowling_team AS opponent,
+    YEAR(CAST(m.start_date AS date)) AS season_year,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat + d.extras) AS runs_in_{phase_label}
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {phase_condition}
+GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, YEAR(CAST(m.start_date AS date)), m.start_date, m.venue
+ORDER BY runs_in_{phase_label} DESC;
+""".strip()
+
+        if (
+            "player" in question_lower
+            or "batter" in question_lower
+            or "batsman" in question_lower
+            or "who" in question_lower
+        ):
+            if wants_overall:
+                return f"""
+SELECT TOP {top_n}
+    d.striker AS batter,
+    SUM(d.runs_off_bat) AS total_runs_in_{phase_label}
+FROM deliveries d
+WHERE {phase_condition}
+GROUP BY d.striker
+ORDER BY total_runs_in_{phase_label} DESC;
+""".strip()
+
+            return f"""
+SELECT TOP {top_n}
+    d.striker AS batter,
+    d.batting_team,
+    d.bowling_team AS opponent,
+    YEAR(CAST(m.start_date AS date)) AS season_year,
+    m.start_date,
+    m.venue,
+    SUM(d.runs_off_bat) AS runs_in_{phase_label}
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {phase_condition}
+GROUP BY d.match_id, d.innings, d.striker, d.batting_team, d.bowling_team, YEAR(CAST(m.start_date AS date)), m.start_date, m.venue
+ORDER BY runs_in_{phase_label} DESC;
+""".strip()
+        
+    # Most runs in final over / last 5 overs to win a game
+    phase_condition, phase_label = get_phase_condition_from_question(user_question, "d")
+
+    if (
+        phase_condition is not None
+        and "to win" in question_lower
+        and ("runs" in question_lower or "scored" in question_lower)
+    ):
+        return f"""
+WITH chase_innings AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team AS chasing_team,
+        d.bowling_team AS defending_team,
+        SUM(d.runs_off_bat + d.extras) AS chase_total
+    FROM deliveries d
+    GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team
+),
+phase_runs AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team AS chasing_team,
+        d.bowling_team AS defending_team,
+        SUM(d.runs_off_bat + d.extras) AS runs_scored_in_{phase_label}
+    FROM deliveries d
+    WHERE {phase_condition}
+    GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team
+),
+before_phase_runs AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team AS chasing_team,
+        SUM(d.runs_off_bat + d.extras) AS runs_before_{phase_label}
+    FROM deliveries d
+    WHERE NOT ({phase_condition})
+      AND d.innings = 2
+    GROUP BY d.match_id, d.innings, d.batting_team
+),
+target_scores AS (
+    SELECT
+        d.match_id,
+        SUM(d.runs_off_bat + d.extras) + 1 AS target
+    FROM deliveries d
+    WHERE d.innings = 1
+    GROUP BY d.match_id
+)
+SELECT TOP 10
+    pr.chasing_team,
+    pr.defending_team,
+    YEAR(CAST(m.start_date AS date)) AS season_year,
+    m.start_date,
+    m.venue,
+    ts.target,
+    COALESCE(bpr.runs_before_{phase_label}, 0) AS runs_before_{phase_label},
+    ts.target - COALESCE(bpr.runs_before_{phase_label}, 0) AS runs_required_at_start_of_{phase_label},
+    pr.runs_scored_in_{phase_label},
+    m.winner,
+    CASE
+        WHEN m.winner_runs IS NOT NULL THEN CONCAT('won by ', CAST(CAST(m.winner_runs AS INT) AS VARCHAR(20)), ' runs')
+        WHEN m.winner_wickets IS NOT NULL THEN CONCAT('won by ', CAST(CAST(m.winner_wickets AS INT) AS VARCHAR(20)), ' wickets')
+        ELSE 'result recorded'
+    END AS result_margin
+FROM phase_runs pr
+JOIN matches m
+    ON pr.match_id = m.match_id
+JOIN target_scores ts
+    ON pr.match_id = ts.match_id
+LEFT JOIN before_phase_runs bpr
+    ON pr.match_id = bpr.match_id
+    AND pr.innings = bpr.innings
+    AND pr.chasing_team = bpr.chasing_team
+WHERE pr.innings = 2
+  AND pr.chasing_team = m.winner
+ORDER BY pr.runs_scored_in_{phase_label} DESC;
+""".strip()
+    
+
     # Last season a batter crossed a run threshold, e.g. Rohit's last 500-run season
     if (
         ("last" in question_lower or "when was" in question_lower or "when did" in question_lower)
