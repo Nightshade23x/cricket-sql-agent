@@ -3,7 +3,7 @@ from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
 from functools import lru_cache
-from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile
+from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile,analyze_player_shots
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -5717,6 +5717,89 @@ def build_analysis_response(user_question):
                 "error": None
             }
 
+    # Full team profile analysis
+    if (
+        "team report" in question_lower
+        or "team profile" in question_lower
+        or "analyse team" in question_lower
+        or "analyze team" in question_lower
+        or "analyse" in question_lower
+        or "analyze" in question_lower
+        or "profile" in question_lower
+    ):
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+
+        if team_condition is not None:
+            team_label = get_team_label_from_question(user_question)
+            analysis_result = analyze_team_profile(team_condition, team_label)
+
+            combined_sql = "\n\n--- overall ---\n" + analysis_result["sql_queries"]["overall"]
+            combined_sql += "\n\n--- season_trend ---\n" + analysis_result["sql_queries"]["season_trend"]
+            combined_sql += "\n\n--- batting ---\n" + analysis_result["sql_queries"]["batting"]
+            combined_sql += "\n\n--- bowling ---\n" + analysis_result["sql_queries"]["bowling"]
+            combined_sql += "\n\n--- chase_defend ---\n" + analysis_result["sql_queries"]["chase_defend"]
+            combined_sql += "\n\n--- playoff ---\n" + analysis_result["sql_queries"]["playoff"]
+            combined_sql += "\n\n--- venues ---\n" + analysis_result["sql_queries"]["venues"]
+            combined_sql += "\n\n--- phase_batting ---\n" + analysis_result["sql_queries"]["phase_batting"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Full team profile analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "overall": analysis_result["overall"],
+                    "season_trend": analysis_result["season_trend"],
+                    "batting": analysis_result["batting"],
+                    "bowling": analysis_result["bowling"],
+                    "chase_defend": analysis_result["chase_defend"],
+                    "playoff": analysis_result["playoff"],
+                    "venues": analysis_result["venues"],
+                    "phase_batting": analysis_result["phase_batting"],
+                },
+                "error": None
+            }
+
+    # Player shot selection analysis
+    if (
+        "shot" in question_lower
+        or "shots" in question_lower
+        or "shot selection" in question_lower
+        or "shouldn't play" in question_lower
+        or "shouldnt play" in question_lower
+        or "avoid playing" in question_lower
+        or "avoid shot" in question_lower
+        or "batting pattern" in question_lower
+    ):
+        player_condition = get_player_condition_from_question(user_question, "se.striker")
+
+        if player_condition is not None:
+            analysis_result = analyze_player_shots(player_condition)
+
+            combined_sql = "\n\n--- shot_summary ---\n" + analysis_result["sql_queries"]["shot_summary"]
+            combined_sql += "\n\n--- shot_dismissals ---\n" + analysis_result["sql_queries"]["shot_dismissals"]
+            combined_sql += "\n\n--- risky_shots ---\n" + analysis_result["sql_queries"]["risky_shots"]
+            combined_sql += "\n\n--- best_shots ---\n" + analysis_result["sql_queries"]["best_shots"]
+            combined_sql += "\n\n--- line_length ---\n" + analysis_result["sql_queries"]["line_length"]
+            combined_sql += "\n\n--- phase_shots ---\n" + analysis_result["sql_queries"]["phase_shots"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Player shot selection analysis",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "shot_summary": analysis_result["shot_summary"],
+                    "shot_dismissals": analysis_result["shot_dismissals"],
+                    "risky_shots": analysis_result["risky_shots"],
+                    "best_shots": analysis_result["best_shots"],
+                    "line_length": analysis_result["line_length"],
+                    "phase_shots": analysis_result["phase_shots"],
+                },
+                "error": None
+            }
     # Player dismissal analysis
     if (
         "dismissal" in question_lower

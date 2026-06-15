@@ -1,0 +1,187 @@
+Root folder: E:\Downloads 15 June 2026
+Files found: 6
+====================================================================================================
+
+====================================================================================================
+FILE: E:\Downloads 15 June 2026\Hridhaan 2.xlsx
+SIZE: 0.11 MB
+TYPE: .xlsx
+Could not read sample.
+
+====================================================================================================
+FILE: E:\Downloads 15 June 2026\Hridhaan_2_answered.xlsx
+SIZE: 0.11 MB
+TYPE: .xlsx
+Could not read sample.
+
+====================================================================================================
+FILE: E:\Downloads 15 June 2026\cricbuzz\IPL_Match_Highlights_Commentary.csv
+SIZE: 3.55 MB
+TYPE: .csv
+Columns:
+  - Match_id
+  - Team
+  - Over_num
+  - Commentary
+  - batsman
+  - score
+
+Important-looking columns:
+  - Match_id
+  - Over_num
+  - Commentary
+  - batsman
+
+Sample rows:
+ Match_id         Team  Over_num                                                                                                                                                                                                                                                           Commentary                   batsman score
+  4281444 RCB 1st Inns       0.5                                              Nehra to Mandeep, FOUR, first boundary for Mandeep and RCB. Full and on the pads, needed to be put away and Mandeep did just that, picked it up and dispatched it over mid-wicket, couple of bounces and into the fence          Nehra to Mandeep  FOUR
+  4281444 RCB 1st Inns       1.0 Nehra to Mandeep, FOUR, back-to-back boundaries to end the first over. Again, Nehra is a tad short in his length, Mandeep had the width to cut and he didn't try to hit it hard, just placed it behind point and Bhuvi at third man gave up the chase pretty quickly          Nehra to Mandeep  FOUR
+  4281444 RCB 1st Inns      10.0                     Henriques to Kedar Jadhav, FOUR, hit straight back at Henriques and he was late to get his hand up. Once more the off-cutter which almost fooled Jadhav, who shimmied down and checked his drive, middled it alright to beat the mid-off fielder Henriques to Kedar Jadhav  FOUR
+
+====================================================================================================
+FILE: E:\Downloads 15 June 2026\cricbuzz\IPL_SCHEDULE_2008_2020.csv
+SIZE: 0.19 MB
+TYPE: .csv
+Columns:
+  - Match_id
+  - IPL_year
+  - Match_Info
+  - Match_Date
+  - Match_Team
+  - Match_Result
+  - Match_Cricbuzz_URL
+  - Stadium
+  - Location
+  - Highlights_available
+
+Important-looking columns:
+  - Match_id
+  - Match_Info
+  - Match_Date
+  - Match_Team
+  - Match_Result
+  - Match_Cricbuzz_URL
+
+Sample rows:
+ Match_id  IPL_year Match_Info Match_Date                                           Match_Team                                                Match_Result                                                                             Match_Cricbuzz_URL                                      Stadium  Location  Highlights_available
+  5686059      2008  1st match 2008-04-18 ROYAL CHALLENGERS BANGALORE vs KOLKATA KNIGHT RIDERS                       Kolkata Knight Riders won by 140 runs  https://www.cricbuzz.com/cricket-scores/10557/rcb-vs-kkr-1st-match-indian-premier-league-2008                        M.Chinnaswamy Stadium Bengaluru                 False
+  7762380      2008  2nd match 2008-04-19               KINGS XI PUNJAB vs CHENNAI SUPER KINGS                          Chennai Super Kings won by 33 runs https://www.cricbuzz.com/cricket-scores/10556/kxip-vs-csk-2nd-match-indian-premier-league-2008 Punjab Cricket Association IS Bindra Stadium    Mohali                 False
+  1491263      2008  3rd match 2008-04-19                   DELHI CAPITALS vs RAJASTHAN ROYALS Delhi Daredevils won by 9 wickets (with 29 balls remaining)    https://www.cricbuzz.com/cricket-scores/10555/dc-vs-rr-3rd-match-indian-premier-league-2008                         Arun Jaitley Stadium     Delhi                 False
+
+====================================================================================================
+FILE: E:\Downloads 15 June 2026\ipl 2024\IPL24_All_Matches_Dataset.xlsx
+SIZE: 2.97 MB
+TYPE: .xlsx
+Could not read sample.
+
+====================================================================================================
+FILE: E:\Downloads 15 June 2026\ultimate ball by ball\ball_by_ball_data.csv
+SIZE: 4208.76 MB
+TYPE: .csv
+Columns:
+  - match_id
+  - season
+  - start_date
+  - venue
+  - innings
+  - ball
+  - batting_team
+  - bowling_team
+  - striker
+  - non_striker
+  - bowler
+  - ball_length
+  - ball_line
+  - shot_played
+  - shot_direction
+  - runs_off_bat
+  - extras
+  - wides
+  - noballs
+  - byes
+  - legbyes
+  - penalty
+  - wicket_type
+  - player_dismissed
+  - other_wicket_type
+  - other_player_dismissed
+  - wicket
+  - striker balls faced
+  - total striker runs
+  - player out runs
+  - player out balls faced
+  - gender
+  - event
+  - match_number
+  - toss_winner
+  - toss_decision
+  - player_of_match
+  - player_of_match.1
+  - winner
+  - winner_runs
+  - winner_wickets
+  - outcome
+  - format
+  - type
+  - full name_striker
+  - country_striker
+  - batting style_striker
+  - bowling style_striker
+  - playing role_striker
+  - major teams_striker
+  - image url_striker
+  - full name_bowler
+  - country_bowler
+  - batting style_bowler
+  - bowling style_bowler
+  - playing role_bowler
+  - major teams_bowler
+  - image url_bowler
+
+Important-looking columns:
+  - match_id
+  - innings
+  - ball
+  - striker
+  - non_striker
+  - bowler
+  - ball_length
+  - ball_line
+  - shot_played
+  - shot_direction
+  - runs_off_bat
+  - noballs
+  - wicket_type
+  - player_dismissed
+  - other_wicket_type
+  - other_player_dismissed
+  - wicket
+  - striker balls faced
+  - total striker runs
+  - player out runs
+  - player out balls faced
+  - match_number
+  - player_of_match
+  - player_of_match.1
+  - winner_runs
+  - winner_wickets
+  - full name_striker
+  - country_striker
+  - batting style_striker
+  - bowling style_striker
+  - playing role_striker
+  - major teams_striker
+  - image url_striker
+  - full name_bowler
+  - country_bowler
+  - batting style_bowler
+  - bowling style_bowler
+  - playing role_bowler
+  - major teams_bowler
+  - image url_bowler
+
+Sample rows:
+ match_id  season start_date                                     venue  innings  ball        batting_team                bowling_team   striker non_striker   bowler    ball_length   ball_line shot_played shot_direction  runs_off_bat  extras  wides  noballs  byes  legbyes  penalty  wicket_type  player_dismissed  other_wicket_type  other_player_dismissed  wicket  striker balls faced  total striker runs  player out runs  player out balls faced gender                 event  match_number                 toss_winner toss_decision player_of_match  player_of_match.1              winner  winner_runs  winner_wickets  outcome format      type   full name_striker country_striker batting style_striker bowling style_striker playing role_striker                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         major teams_striker                                                                                            image url_striker    full name_bowler country_bowler batting style_bowler bowling style_bowler playing role_bowler                                                                                                                                                                                                                                                                                                                                                                          major teams_bowler                                                                                             image url_bowler
+  1082591    2017 2017-04-05 Rajiv Gandhi International Stadium, Uppal        1   0.1 Sunrisers Hyderabad Royal Challengers Bangalore DA Warner    S Dhawan TS Mills          short outside off         cut          cover             0       0    NaN      NaN   NaN      NaN      NaN          NaN               NaN                NaN                     NaN       0                  1.0                 0.0              NaN                     NaN   male Indian Premier League           1.0 Royal Challengers Bangalore         field    Yuvraj Singh                NaN Sunrisers Hyderabad         35.0             NaN      NaN    T20 Fran(IPL) David Andrew Warner       Australia         Left hand Bat              Legbreak       Opening Batter Australia, Australia A, Australia Centre of Excellence, Australia Under-19s, Australian Cricketers Association All-Stars, Australian Institute of Sport, Australian XI, Brad Haddin XII, Brampton Wolves, Cricket Australia Chairman's XI, Delhi Capitals, Dubai Capitals, Durham, Karachi Kings, Middlesex, New South Wales, New South Wales Institute of Sport, New South Wales Second XI, New South Wales Under-19s, New South Wales Under-23s, Northern Districts, St Lucia Stars, Sunrisers Hyderabad, Sydney Sixers, Sydney South East, Sydney Thunder, Sylhet Sixers, Winnipeg Hawks https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_320,q_50/lsci/db/PICTURES/CMS/316500/316589.1.png Tymal Solomon Mills        England       Right hand Bat        Left arm Fast              Bowler England, Auckland, Brisbane Heat, Chittagong Vikings, Desert Vipers, England Lions, England Performance Programme, England Under-19s, Essex, Essex 2nd XI, Gulf Giants, Hobart Hurricanes, ICC World XI, Islamabad United, Karachi Kings, Mumbai Indians, Perth Scorchers, Quetta Gladiators, Royal Challengers Bangalore, Southern Brave (Men), Suffolk, Sussex, Team Abu Dhabi, UP Nawabs https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_320,q_50/lsci/db/PICTURES/CMS/397100/397147.5.png
+  1082591    2017 2017-04-05 Rajiv Gandhi International Stadium, Uppal        1   0.2 Sunrisers Hyderabad Royal Challengers Bangalore DA Warner    S Dhawan TS Mills           full         NaN        work     square leg             0       0    NaN      NaN   NaN      NaN      NaN          NaN               NaN                NaN                     NaN       0                  2.0                 0.0              NaN                     NaN   male Indian Premier League           1.0 Royal Challengers Bangalore         field    Yuvraj Singh                NaN Sunrisers Hyderabad         35.0             NaN      NaN    T20 Fran(IPL) David Andrew Warner       Australia         Left hand Bat              Legbreak       Opening Batter Australia, Australia A, Australia Centre of Excellence, Australia Under-19s, Australian Cricketers Association All-Stars, Australian Institute of Sport, Australian XI, Brad Haddin XII, Brampton Wolves, Cricket Australia Chairman's XI, Delhi Capitals, Dubai Capitals, Durham, Karachi Kings, Middlesex, New South Wales, New South Wales Institute of Sport, New South Wales Second XI, New South Wales Under-19s, New South Wales Under-23s, Northern Districts, St Lucia Stars, Sunrisers Hyderabad, Sydney Sixers, Sydney South East, Sydney Thunder, Sylhet Sixers, Winnipeg Hawks https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_320,q_50/lsci/db/PICTURES/CMS/316500/316589.1.png Tymal Solomon Mills        England       Right hand Bat        Left arm Fast              Bowler England, Auckland, Brisbane Heat, Chittagong Vikings, Desert Vipers, England Lions, England Performance Programme, England Under-19s, Essex, Essex 2nd XI, Gulf Giants, Hobart Hurricanes, ICC World XI, Islamabad United, Karachi Kings, Mumbai Indians, Perth Scorchers, Quetta Gladiators, Royal Challengers Bangalore, Southern Brave (Men), Suffolk, Sussex, Team Abu Dhabi, UP Nawabs https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_320,q_50/lsci/db/PICTURES/CMS/397100/397147.5.png
+  1082591    2017 2017-04-05 Rajiv Gandhi International Stadium, Uppal        1   0.3 Sunrisers Hyderabad Royal Challengers Bangalore DA Warner    S Dhawan TS Mills back of length outside off         NaN          point             4       0    NaN      NaN   NaN      NaN      NaN          NaN               NaN                NaN                     NaN       0                  3.0                 4.0              NaN                     NaN   male Indian Premier League           1.0 Royal Challengers Bangalore         field    Yuvraj Singh                NaN Sunrisers Hyderabad         35.0             NaN      NaN    T20 Fran(IPL) David Andrew Warner       Australia         Left hand Bat              Legbreak       Opening Batter Australia, Australia A, Australia Centre of Excellence, Australia Under-19s, Australian Cricketers Association All-Stars, Australian Institute of Sport, Australian XI, Brad Haddin XII, Brampton Wolves, Cricket Australia Chairman's XI, Delhi Capitals, Dubai Capitals, Durham, Karachi Kings, Middlesex, New South Wales, New South Wales Institute of Sport, New South Wales Second XI, New South Wales Under-19s, New South Wales Under-23s, Northern Districts, St Lucia Stars, Sunrisers Hyderabad, Sydney Sixers, Sydney South East, Sydney Thunder, Sylhet Sixers, Winnipeg Hawks https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_320,q_50/lsci/db/PICTURES/CMS/316500/316589.1.png Tymal Solomon Mills        England       Right hand Bat        Left arm Fast              Bowler England, Auckland, Brisbane Heat, Chittagong Vikings, Desert Vipers, England Lions, England Performance Programme, England Under-19s, Essex, Essex 2nd XI, Gulf Giants, Hobart Hurricanes, ICC World XI, Islamabad United, Karachi Kings, Mumbai Indians, Perth Scorchers, Quetta Gladiators, Royal Challengers Bangalore, Southern Brave (Men), Suffolk, Sussex, Team Abu Dhabi, UP Nawabs https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_320,q_50/lsci/db/PICTURES/CMS/397100/397147.5.png

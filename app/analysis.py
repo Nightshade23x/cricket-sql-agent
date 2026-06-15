@@ -19,6 +19,7 @@ def extract_player_name_from_condition(player_condition):
     return "selected player"
 
 
+
 def format_metric(value, decimals=2):
     if value is None:
         return "N/A"
@@ -34,7 +35,40 @@ def format_metric(value, decimals=2):
     except Exception:
         return str(value)
     
+def convert_team_condition(team_condition, new_column_name):
+    """
+    Convert a team condition from one SQL alias/column to another.
 
+    Example:
+    d.batting_team = 'Chennai Super Kings'
+    becomes:
+    tm.team = 'Chennai Super Kings'
+    """
+
+    replacements = [
+        "d.batting_team",
+        "d.bowling_team",
+        "m.winner",
+        "ms.team_1",
+        "ms.team_2",
+        "tm.team",
+        "innings_scores.batting_team",
+        "innings_scores.bowling_team",
+    ]
+
+    converted_condition = team_condition
+
+    for old_column in replacements:
+        converted_condition = converted_condition.replace(old_column, new_column_name)
+
+    return converted_condition
+
+
+def convert_team_condition_two_columns(team_condition, column_one, column_two):
+    condition_one = convert_team_condition(team_condition, column_one)
+    condition_two = convert_team_condition(team_condition, column_two)
+
+    return f"({condition_one} OR {condition_two})"
 
 
 def analyze_player_dismissals(player_condition):
@@ -835,4 +869,611 @@ ORDER BY title_chance_score DESC;
         "paragraph": paragraph,
         "summary": result,
         "sql_query": sql_query,
+    }
+
+def analyze_team_profile(team_condition, team_label):
+    """
+    Full team profile analysis.
+
+    team_condition should be something like:
+    d.batting_team = 'Chennai Super Kings'
+    """
+
+    team_match_condition = convert_team_condition(team_condition, "tm.team")
+    batting_condition = convert_team_condition(team_condition, "d.batting_team")
+    bowling_condition = convert_team_condition(team_condition, "d.bowling_team")
+    playoff_condition = convert_team_condition_two_columns(team_condition, "ms.team_1", "ms.team_2")
+
+    overall_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        d.match_id,
+        d.batting_team AS team,
+        m.winner,
+        YEAR(CAST(m.start_date AS date)) AS season_year,
+        m.venue
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+)
+SELECT
+    '{team_label}' AS team_group,
+    COUNT(*) AS matches_played,
+    SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) AS wins,
+    COUNT(*) - SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) AS losses_or_no_results,
+    ROUND(
+        SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS win_percentage
+FROM team_matches tm
+WHERE {team_match_condition};
+""".strip()
+
+    season_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        d.match_id,
+        d.batting_team AS team,
+        m.winner,
+        YEAR(CAST(m.start_date AS date)) AS season_year
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+)
+SELECT
+    tm.season_year,
+    COUNT(*) AS matches_played,
+    SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) AS wins,
+    ROUND(
+        SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS win_percentage
+FROM team_matches tm
+WHERE {team_match_condition}
+GROUP BY tm.season_year
+ORDER BY tm.season_year;
+""".strip()
+
+    batting_sql = f"""
+WITH innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        SUM(d.runs_off_bat + d.extras) AS team_score,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls
+    FROM deliveries d
+    WHERE d.innings IN (1, 2)
+      AND {batting_condition}
+    GROUP BY d.match_id, d.innings, d.batting_team
+)
+SELECT
+    '{team_label}' AS team_group,
+    COUNT(*) AS batting_innings,
+    ROUND(AVG(team_score * 1.0), 2) AS avg_score,
+    MAX(team_score) AS highest_score,
+    COUNT(CASE WHEN team_score >= 200 THEN 1 END) AS scores_200_plus,
+    ROUND(
+        SUM(team_score) * 6.0 /
+        NULLIF(SUM(legal_balls), 0),
+        2
+    ) AS run_rate
+FROM innings_scores;
+""".strip()
+
+    bowling_sql = f"""
+WITH innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.bowling_team,
+        SUM(d.runs_off_bat + d.extras) AS runs_conceded,
+        SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM deliveries d
+    WHERE d.innings IN (1, 2)
+      AND {bowling_condition}
+    GROUP BY d.match_id, d.innings, d.bowling_team
+)
+SELECT
+    '{team_label}' AS team_group,
+    COUNT(*) AS bowling_innings,
+    ROUND(AVG(runs_conceded * 1.0), 2) AS avg_runs_conceded,
+    MIN(runs_conceded) AS lowest_score_conceded,
+    SUM(wickets) AS wickets,
+    ROUND(
+        SUM(runs_conceded) * 6.0 /
+        NULLIF(SUM(legal_balls), 0),
+        2
+    ) AS economy_rate
+FROM innings_scores;
+""".strip()
+
+    chase_defend_sql = f"""
+WITH innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        d.bowling_team,
+        m.winner,
+        SUM(d.runs_off_bat + d.extras) AS team_score
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.innings IN (1, 2)
+    GROUP BY d.match_id, d.innings, d.batting_team, d.bowling_team, m.winner
+),
+contexts AS (
+    SELECT
+        'Chasing' AS context,
+        batting_team AS team,
+        winner
+    FROM innings_scores
+    WHERE innings = 2
+
+    UNION ALL
+
+    SELECT
+        'Defending' AS context,
+        batting_team AS team,
+        winner
+    FROM innings_scores
+    WHERE innings = 1
+)
+SELECT
+    context,
+    COUNT(*) AS matches,
+    SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) AS wins,
+    ROUND(
+        SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS win_percentage
+FROM contexts tm
+WHERE {team_match_condition}
+GROUP BY context
+ORDER BY context;
+""".strip()
+
+    playoff_sql = f"""
+WITH playoff_team_matches AS (
+    SELECT
+        ms.match_id,
+        ms.season_year,
+        ms.match_stage,
+        ms.team_1 AS team,
+        ms.winner,
+        ms.is_playoff,
+        ms.is_final
+    FROM match_stages ms
+    WHERE ms.is_playoff = 1
+
+    UNION ALL
+
+    SELECT
+        ms.match_id,
+        ms.season_year,
+        ms.match_stage,
+        ms.team_2 AS team,
+        ms.winner,
+        ms.is_playoff,
+        ms.is_final
+    FROM match_stages ms
+    WHERE ms.is_playoff = 1
+)
+SELECT
+    '{team_label}' AS team_group,
+    COUNT(*) AS playoff_matches,
+    SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) AS playoff_wins,
+    SUM(CASE WHEN is_final = 1 THEN 1 ELSE 0 END) AS finals_played,
+    SUM(CASE WHEN is_final = 1 AND winner = team THEN 1 ELSE 0 END) AS titles,
+    ROUND(
+        SUM(CASE WHEN winner = team THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS playoff_win_percentage
+FROM playoff_team_matches tm
+WHERE {team_match_condition};
+""".strip()
+
+    venue_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        d.match_id,
+        d.batting_team AS team,
+        m.winner,
+        m.venue
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+)
+SELECT TOP 10
+    tm.venue,
+    COUNT(*) AS matches_played,
+    SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) AS wins,
+    ROUND(
+        SUM(CASE WHEN tm.winner = tm.team THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS win_percentage
+FROM team_matches tm
+WHERE {team_match_condition}
+GROUP BY tm.venue
+HAVING COUNT(*) >= 3
+ORDER BY wins DESC, win_percentage DESC;
+""".strip()
+
+    phase_batting_sql = f"""
+SELECT
+    CASE
+        WHEN FLOOR(d.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(d.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(d.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END AS phase,
+    SUM(d.runs_off_bat) AS runs,
+    SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    ROUND(
+        SUM(d.runs_off_bat) * 6.0 /
+        NULLIF(SUM(CASE WHEN d.wides IS NULL AND d.noballs IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS run_rate
+FROM deliveries d
+WHERE {batting_condition}
+GROUP BY
+    CASE
+        WHEN FLOOR(d.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(d.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(d.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END
+ORDER BY runs DESC;
+""".strip()
+
+    overall_df = run_query(overall_sql)
+    season_df = run_query(season_sql)
+    batting_df = run_query(batting_sql)
+    bowling_df = run_query(bowling_sql)
+    chase_defend_df = run_query(chase_defend_sql)
+    playoff_df = run_query(playoff_sql)
+    venue_df = run_query(venue_sql)
+    phase_batting_df = run_query(phase_batting_sql)
+
+    matches_played = safe_first_value(overall_df, "matches_played", 0)
+    wins = safe_first_value(overall_df, "wins", 0)
+    win_percentage = safe_first_value(overall_df, "win_percentage", None)
+
+    avg_score = safe_first_value(batting_df, "avg_score", None)
+    run_rate = safe_first_value(batting_df, "run_rate", None)
+
+    avg_runs_conceded = safe_first_value(bowling_df, "avg_runs_conceded", None)
+    economy_rate = safe_first_value(bowling_df, "economy_rate", None)
+
+    playoff_matches = safe_first_value(playoff_df, "playoff_matches", 0)
+    playoff_wins = safe_first_value(playoff_df, "playoff_wins", 0)
+    titles = safe_first_value(playoff_df, "titles", 0)
+
+    best_venue = safe_first_value(venue_df, "venue", "unknown venue")
+    best_phase = safe_first_value(phase_batting_df, "phase", "unknown phase")
+
+    paragraph = (
+        f"{team_label}'s team profile shows {matches_played} matches and {wins} wins, giving a win percentage of "
+        f"{format_metric(win_percentage)}%. The batting profile shows an average score of {format_metric(avg_score)} "
+        f"and a run rate of {format_metric(run_rate)}, while the bowling profile shows average runs conceded of "
+        f"{format_metric(avg_runs_conceded)} with an economy rate of {format_metric(economy_rate)}. In playoff matches, "
+        f"the team has played {format_metric(playoff_matches, 0)} matches, won {format_metric(playoff_wins, 0)}, and won "
+        f"{format_metric(titles, 0)} titles. The strongest venue pattern appears to be {best_venue}, and the strongest "
+        f"batting phase by runs is {best_phase}."
+    )
+
+    summary_rows = [
+        {
+            "analysis_area": "Overall insight",
+            "insight": paragraph,
+        },
+        {
+            "analysis_area": "Win record",
+            "insight": f"{team_label} has a win percentage of {format_metric(win_percentage)}%.",
+        },
+        {
+            "analysis_area": "Batting profile",
+            "insight": f"The team averages {format_metric(avg_score)} runs per innings at a run rate of {format_metric(run_rate)}.",
+        },
+        {
+            "analysis_area": "Bowling profile",
+            "insight": f"The team concedes {format_metric(avg_runs_conceded)} runs per innings at an economy rate of {format_metric(economy_rate)}.",
+        },
+        {
+            "analysis_area": "Playoff profile",
+            "insight": f"The team has {format_metric(playoff_wins, 0)} playoff wins and {format_metric(titles, 0)} titles in the dataset.",
+        },
+        {
+            "analysis_area": "Venue pattern",
+            "insight": f"The best venue pattern appears to be {best_venue}.",
+        },
+    ]
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "overall": overall_df,
+        "season_trend": season_df,
+        "batting": batting_df,
+        "bowling": bowling_df,
+        "chase_defend": chase_defend_df,
+        "playoff": playoff_df,
+        "venues": venue_df,
+        "phase_batting": phase_batting_df,
+        "sql_queries": {
+            "overall": overall_sql,
+            "season_trend": season_sql,
+            "batting": batting_sql,
+            "bowling": bowling_sql,
+            "chase_defend": chase_defend_sql,
+            "playoff": playoff_sql,
+            "venues": venue_sql,
+            "phase_batting": phase_batting_sql,
+        },
+    }
+
+def analyze_player_shots(player_condition):
+    """
+    Analyse a batter's shot selection using shot_events.
+
+    player_condition should be something like:
+    se.striker = 'V Kohli'
+    """
+
+    condition_se = player_condition
+    condition_se = condition_se.replace("d.striker", "se.striker")
+    condition_se = condition_se.replace("pd.batter", "se.striker")
+
+    player_name = extract_player_name_from_condition(condition_se)
+
+    shot_summary_sql = f"""
+WITH shot_stats AS (
+    SELECT
+        se.shot_played,
+        COUNT(*) AS deliveries,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        SUM(CASE WHEN se.runs_off_bat IN (4, 6) THEN 1 ELSE 0 END) AS boundaries,
+        COUNT(CASE
+            WHEN se.player_dismissed = se.striker
+                 AND se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('retired hurt', 'retired out')
+            THEN 1
+        END) AS dismissals
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND se.shot_played IS NOT NULL
+      AND se.shot_played <> ''
+    GROUP BY se.shot_played
+)
+SELECT TOP 15
+    shot_played,
+    deliveries,
+    balls_faced,
+    runs,
+    boundaries,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate,
+    ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average
+FROM shot_stats
+ORDER BY runs DESC, balls_faced DESC;
+""".strip()
+
+    shot_dismissal_sql = f"""
+SELECT TOP 15
+    se.shot_played,
+    se.wicket_type,
+    COUNT(*) AS dismissals
+FROM dbo.shot_events se
+WHERE {condition_se}
+  AND se.shot_played IS NOT NULL
+  AND se.shot_played <> ''
+  AND se.player_dismissed = se.striker
+  AND se.wicket_type IS NOT NULL
+  AND se.wicket_type NOT IN ('retired hurt', 'retired out')
+GROUP BY se.shot_played, se.wicket_type
+ORDER BY dismissals DESC;
+""".strip()
+
+    risky_shots_sql = f"""
+WITH shot_stats AS (
+    SELECT
+        se.shot_played,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN se.player_dismissed = se.striker
+                 AND se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('retired hurt', 'retired out')
+            THEN 1
+        END) AS dismissals
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND se.shot_played IS NOT NULL
+      AND se.shot_played <> ''
+    GROUP BY se.shot_played
+)
+SELECT TOP 10
+    shot_played,
+    balls_faced,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate,
+    ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average
+FROM shot_stats
+WHERE balls_faced >= 10
+  AND dismissals > 0
+ORDER BY dismissals DESC, batting_average ASC, strike_rate ASC;
+""".strip()
+
+    best_shots_sql = f"""
+WITH shot_stats AS (
+    SELECT
+        se.shot_played,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        SUM(CASE WHEN se.runs_off_bat IN (4, 6) THEN 1 ELSE 0 END) AS boundaries
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND se.shot_played IS NOT NULL
+      AND se.shot_played <> ''
+    GROUP BY se.shot_played
+)
+SELECT TOP 10
+    shot_played,
+    balls_faced,
+    runs,
+    boundaries,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate
+FROM shot_stats
+WHERE balls_faced >= 10
+ORDER BY strike_rate DESC, runs DESC;
+""".strip()
+
+    line_length_sql = f"""
+SELECT TOP 15
+    se.ball_length,
+    se.ball_line,
+    COUNT(*) AS deliveries,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('retired hurt', 'retired out')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+WHERE {condition_se}
+  AND se.ball_length IS NOT NULL
+  AND se.ball_line IS NOT NULL
+GROUP BY se.ball_length, se.ball_line
+ORDER BY dismissals DESC, strike_rate ASC;
+""".strip()
+
+    phase_shot_sql = f"""
+SELECT TOP 20
+    CASE
+        WHEN FLOOR(se.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(se.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(se.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END AS phase,
+    se.shot_played,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('retired hurt', 'retired out')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+WHERE {condition_se}
+  AND se.shot_played IS NOT NULL
+  AND se.shot_played <> ''
+GROUP BY
+    CASE
+        WHEN FLOOR(se.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(se.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(se.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END,
+    se.shot_played
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 5
+ORDER BY dismissals DESC, runs DESC;
+""".strip()
+
+    shot_summary_df = run_query(shot_summary_sql)
+    shot_dismissal_df = run_query(shot_dismissal_sql)
+    risky_shots_df = run_query(risky_shots_sql)
+    best_shots_df = run_query(best_shots_sql)
+    line_length_df = run_query(line_length_sql)
+    phase_shot_df = run_query(phase_shot_sql)
+
+    most_used_shot = safe_first_value(shot_summary_df, "shot_played", "unknown shot")
+    most_dismissal_shot = safe_first_value(shot_dismissal_df, "shot_played", "unknown shot")
+    riskiest_shot = safe_first_value(risky_shots_df, "shot_played", "unknown shot")
+    best_shot = safe_first_value(best_shots_df, "shot_played", "unknown shot")
+    problem_length = safe_first_value(line_length_df, "ball_length", "unknown length")
+    problem_line = safe_first_value(line_length_df, "ball_line", "unknown line")
+
+    paragraph = (
+        f"{player_name}'s shot analysis suggests that the most used scoring shot in the dataset is {most_used_shot}. "
+        f"The shot linked with the most dismissals is {most_dismissal_shot}, while the risk table flags {riskiest_shot} "
+        f"as the shot to be most careful with based on dismissals, batting average, and strike rate. The most productive "
+        f"shot by strike rate appears to be {best_shot}. The line-and-length pattern causing the most problems is "
+        f"{problem_length} on {problem_line}. This is a data-based batting pattern, so it should be read as a tactical "
+        f"suggestion rather than a guaranteed coaching rule."
+    )
+
+    summary_rows = [
+        {
+            "analysis_area": "Overall shot insight",
+            "insight": paragraph,
+        },
+        {
+            "analysis_area": "Most used shot",
+            "insight": f"The most common scoring shot is {most_used_shot}.",
+        },
+        {
+            "analysis_area": "Dismissal risk",
+            "insight": f"The shot most linked with dismissals is {most_dismissal_shot}.",
+        },
+        {
+            "analysis_area": "Shot to be careful with",
+            "insight": f"The risk table suggests being careful with {riskiest_shot}.",
+        },
+        {
+            "analysis_area": "Best attacking option",
+            "insight": f"The highest strike-rate shot is {best_shot}.",
+        },
+        {
+            "analysis_area": "Problem ball type",
+            "insight": f"The most difficult ball pattern appears to be {problem_length} on {problem_line}.",
+        },
+    ]
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "shot_summary": shot_summary_df,
+        "shot_dismissals": shot_dismissal_df,
+        "risky_shots": risky_shots_df,
+        "best_shots": best_shots_df,
+        "line_length": line_length_df,
+        "phase_shots": phase_shot_df,
+        "sql_queries": {
+            "shot_summary": shot_summary_sql,
+            "shot_dismissals": shot_dismissal_sql,
+            "risky_shots": risky_shots_sql,
+            "best_shots": best_shots_sql,
+            "line_length": line_length_sql,
+            "phase_shots": phase_shot_sql,
+        },
     }
