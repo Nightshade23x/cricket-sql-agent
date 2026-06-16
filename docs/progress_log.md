@@ -138,3 +138,6 @@ improved the agent by adding a new batter specific bowling plan layer. the agent
 also added forced tactical scenarios...so for eg,if user asks what spin to ball to dube,the model can ans
 so improved matchup analysis
 updated full player profiles to show current players as well rather than only old ones
+added current squads using scraping and scripts
+updated team bowler recommendation to give current squad bowlers
+updated analysis file also to take into accoutn recent players 
