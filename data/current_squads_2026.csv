@@ -1,0 +1,253 @@
+﻿season,team_code,team_name,display_name,cricsheet_name,role,batting_style,bowling_style,bowling_arm,is_overseas,is_active,name_match_method
+2026,CSK,Chennai Super Kings,Ruturaj Gaikwad,RD Gaikwad,Batter,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,MS Dhoni,MS Dhoni,WK-Batter,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Sanju Samson,SV Samson,WK-Batter,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Dewald Brevis,D Brevis,Batter,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Kartik Sharma,Kartik Sharma,WK-Batter,,,Unknown,0,1,exact
+2026,CSK,Chennai Super Kings,Sarfaraz Khan,SN Khan,Batter,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Urvil Patel,Urvil Patel,WK-Batter,,,Unknown,0,1,exact
+2026,CSK,Chennai Super Kings,Prashant Veer,Prashant Veer,All-Rounder,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Matthew William Short,MW Short,All-Rounder,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Aman Khan,Kamran Khan,All-Rounder,,,Unknown,0,1,fuzzy
+2026,CSK,Chennai Super Kings,Zak Foulkes,Zak Foulkes,All-Rounder,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Macneil Noronha,Macneil Noronha,All-Rounder,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Dian Forrester,Dian Forrester,All-Rounder,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Shivam Dube,S Dube,All-Rounder,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Noor Ahmad,Noor Ahmad,Bowler,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Anshul Kamboj,AS Kamboj,Bowler,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Mukesh Choudhary,Mukesh Choudhary,Bowler,,,Unknown,0,1,exact
+2026,CSK,Chennai Super Kings,Shreyas Gopal,S Gopal,Bowler,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Gurjapneet Singh,Gurjapneet Singh,Bowler,,,Unknown,0,1,exact
+2026,CSK,Chennai Super Kings,Akeal Hosein,AJ Hosein,Bowler,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Matt Henry,MJ Henry,Bowler,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Rahul Chahar,RD Chahar,Bowler,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Spencer Johnson,Spencer Johnson,Bowler,,,Unknown,0,1,manual_alias
+2026,CSK,Chennai Super Kings,Akash Madhwal,Akash Madhwal,Bowler,,,Unknown,0,1,exact
+2026,CSK,Chennai Super Kings,Kuldip Yadav,Kuldeep Yadav,Bowler,,,Unknown,0,1,fuzzy
+2026,DC,Delhi Capitals,KL Rahul,KL Rahul,WK-Batter,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Karun Nair,KK Nair,Batter,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,David Miller,DA Miller,Batter,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Pathum Nissanka,Pathum Nissanka,Batter,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Sahil Parakh,Sahil Parakh,Batter,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Prithvi Shaw,PP Shaw,Batter,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Abishek Porel,Abishek Porel,WK-Batter,,,Unknown,0,1,exact
+2026,DC,Delhi Capitals,Tristan Stubbs,T Stubbs,WK-Batter,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Axar Patel,AR Patel,All-Rounder,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Sameer Rizvi,Sameer Rizvi,All-Rounder,,,Unknown,0,1,exact
+2026,DC,Delhi Capitals,Ashutosh Sharma,Ashutosh Sharma,All-Rounder,,,Unknown,0,1,exact
+2026,DC,Delhi Capitals,Vipraj Nigam,Vipraj Nigam,All-Rounder,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Ajay Mandal,Ajay Mandal,All-Rounder,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Tripurana Vijay,Tripurana Vijay,All-Rounder,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Madhav Tiwari,Madhav Tiwari,All-Rounder,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Nitish Rana,N Rana,All-Rounder,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Mitchell Starc,MA Starc,Bowler,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,T. Natarajan,T Natarajan,Bowler,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Mukesh Kumar,Mukesh Kumar,Bowler,,,Unknown,0,1,exact
+2026,DC,Delhi Capitals,Dushmantha Chameera,PVD Chameera,Bowler,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Auqib Nabi,Auqib Nabi,Bowler,,,Unknown,0,1,exact
+2026,DC,Delhi Capitals,Lungisani Ngidi,L Ngidi,Bowler,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Kyle Jamieson,KA Jamieson,Bowler,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Rehan Ahmed,Rehan Ahmed,Bowler,,,Unknown,0,1,manual_alias
+2026,DC,Delhi Capitals,Kuldeep Yadav,Kuldeep Yadav,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Shubman Gill,Shubman Gill,Batter,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Jos Buttler,JC Buttler,WK-Batter,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Kumar Kushagra,Kumar Kushagra,WK-Batter,,,Unknown,0,1,exact
+2026,GT,Gujarat Titans,Anuj Rawat,Anuj Rawat,WK-Batter,,,Unknown,0,1,exact
+2026,GT,Gujarat Titans,Connor Esterhuizen,Connor Esterhuizen,Batter,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Glenn Phillips,GD Phillips,Batter,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Sai Sudharsan,Sai Sudharsan,Batter,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Nishant Sindhu,N Sindhu,All-Rounder,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Washington Sundar,Washington Sundar,All-Rounder,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Mohd. Arshad Khan,Arshad Khan,All-Rounder,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Sai Kishore,R Sai Kishore,All-Rounder,,,Unknown,0,1,fuzzy
+2026,GT,Gujarat Titans,Jayant Yadav,J Yadav,All-Rounder,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Jason Holder,JO Holder,All-Rounder,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Rahul Tewatia,R Tewatia,All-Rounder,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Shahrukh Khan,M Shahrukh Khan,All-Rounder,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Kagiso Rabada,K Rabada,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Mohammed Siraj,Mohammed Siraj,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Prasidh Krishna,M Prasidh Krishna,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Manav Suthar,M Suthar,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Gurnoor Singh Brar,Gurnoor Singh Brar,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Ishant Sharma,I Sharma,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Ashok Sharma,Ashok Sharma,Bowler,,,Unknown,0,1,exact
+2026,GT,Gujarat Titans,Luke Wood,L Wood,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Kulwant Khejroliya,K Khejroliya,Bowler,,,Unknown,0,1,manual_alias
+2026,GT,Gujarat Titans,Rashid Khan,Rashid Khan,Bowler,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Ajinkya Rahane,AM Rahane,Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Rinku Singh,RK Singh,Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Angkrish Raghuvanshi,A Raghuvanshi,Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Manish Pandey,MK Pandey,Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Finn Allen,FH Allen,WK-Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Tejasvi Singh,Tejasvi Singh,WK-Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Rahul Tripathi,RA Tripathi,Batter,,,Unknown,0,1,fuzzy
+2026,KKR,Kolkata Knight Riders,Tim Seifert,TL Seifert,WK-Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Luvnith Sisodia,Luvnith Sisodia,WK-Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Rovman Powell,R Powell,Batter,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Anukul Roy,AS Roy,All-Rounder,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Cameron Green,C Green,All-Rounder,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Sarthak Ranjan,Sarthak Ranjan,All-Rounder,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Daksh Kamra,Daksh Kamra,All-Rounder,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Rachin Ravindra,R Ravindra,All-Rounder,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Ramandeep Singh,Ramandeep Singh,All-Rounder,,,Unknown,0,1,exact
+2026,KKR,Kolkata Knight Riders,Sunil Narine,SP Narine,All-Rounder,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Blessing Muzarabani,B Muzarabani,Bowler,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Vaibhav Arora,VG Arora,Bowler,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Kartik Tyagi,Kartik Tyagi,Bowler,,,Unknown,0,1,exact
+2026,KKR,Kolkata Knight Riders,Prashant Solanki,P Solanki,Bowler,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Saurabh Dubey,Saurabh Dubey,Bowler,,,Unknown,0,1,manual_alias
+2026,KKR,Kolkata Knight Riders,Navdeep Saini,Navdeep Saini,Bowler,,,Unknown,0,1,exact
+2026,KKR,Kolkata Knight Riders,Umran Malik,Umran Malik,Bowler,,,Unknown,0,1,exact
+2026,KKR,Kolkata Knight Riders,Varun Chakaravarthy,CV Varun,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Rishabh Pant,RR Pant,WK-Batter,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Aiden Markram,AK Markram,Batter,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Himmat Singh,Himmat Singh,Batter,,,Unknown,0,1,exact
+2026,LSG,Lucknow Super Giants,Matthew Breetzke,Matthew Breetzke,Batter,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Mukul Choudhary,Mukul Choudhary,WK-Batter,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Akshat Raghuwanshi,Akshat Raghuwanshi,Batter,,,Unknown,0,1,exact
+2026,LSG,Lucknow Super Giants,Josh Inglis,JP Inglis,WK-Batter,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Nicholas Pooran,N Pooran,WK-Batter,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Mitchell Marsh,MR Marsh,All-Rounder,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Abdul Samad,Abdul Samad,All-Rounder,,,Unknown,0,1,exact
+2026,LSG,Lucknow Super Giants,Shahbaz Ahamad,Shahbaz Ahmed,All-Rounder,,,Unknown,0,1,fuzzy
+2026,LSG,Lucknow Super Giants,Arshin Kulkarni,A Kulkarni,All-Rounder,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Ayush Badoni,A Badoni,All-Rounder,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Mohammad Shami,Mohammed Shami,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Avesh Khan,Avesh Khan,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,M. Siddharth,M Siddharth,Bowler,,,Unknown,0,1,normalized_exact
+2026,LSG,Lucknow Super Giants,Digvesh Singh,Digvesh Singh,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Akash Singh,Akash Singh,Bowler,,,Unknown,0,1,exact
+2026,LSG,Lucknow Super Giants,Prince Yadav,Prince Yadav,Bowler,,,Unknown,0,1,exact
+2026,LSG,Lucknow Super Giants,Arjun Tendulkar,Arjun Tendulkar,Bowler,,,Unknown,0,1,exact
+2026,LSG,Lucknow Super Giants,Anrich Nortje,A Nortje,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Naman Tiwari,Naman Tiwari,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,George Linde,GF Linde,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Mayank Yadav,Mayank Yadav,Bowler,,,Unknown,0,1,manual_alias
+2026,LSG,Lucknow Super Giants,Mohsin Khan,Mohsin Khan,Bowler,,,Unknown,0,1,exact
+2026,MI,Mumbai Indians,Rohit Sharma,RG Sharma,Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Surya Kumar Yadav,SA Yadav,Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Robin Minz,Robin Minz,WK-Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Sherfane Rutherford,SE Rutherford,Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Ryan Rickelton,R Rickelton,WK-Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Quinton de Kock,Q de Kock,WK-Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Danish Malewar,Danish Malewar,Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Ruchit Ahir,Ruchit Ahir,WK-Batter,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,N. Tilak Varma,Tilak Varma,Batter,,,Unknown,0,1,fuzzy
+2026,MI,Mumbai Indians,Hardik Pandya,HH Pandya,All-Rounder,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Naman Dhir,Naman Dhir,All-Rounder,,,Unknown,0,1,exact
+2026,MI,Mumbai Indians,Raj Angad Bawa,Raj Bawa,All-Rounder,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Mayank Rawat,Mayank Rawat,All-Rounder,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Krish Bhagat,Krish Bhagat,All-Rounder,,,Unknown,0,1,exact
+2026,MI,Mumbai Indians,Mahipal Lomror,MK Lomror,All-Rounder,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Corbin Bosch,C Bosch,All-Rounder,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Will Jacks,WG Jacks,All-Rounder,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Shardul Thakur,SN Thakur,All-Rounder,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Trent Boult,TA Boult,Bowler,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Mayank Markande,M Markande,Bowler,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Deepak Chahar,DL Chahar,Bowler,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Ashwani Kumar,Ashwani Kumar,Bowler,,,Unknown,0,1,exact
+2026,MI,Mumbai Indians,Raghu Sharma,Raghu Sharma,Bowler,,,Unknown,0,1,exact
+2026,MI,Mumbai Indians,Mohammad Izhar,Mohammad Izhar,Bowler,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Keshav Maharaj,KA Maharaj,Bowler,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Allah Ghazanfar,Allah Ghazanfar,Bowler,,,Unknown,0,1,manual_alias
+2026,MI,Mumbai Indians,Jasprit Bumrah,JJ Bumrah,Bowler,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Shreyas Iyer,SS Iyer,Batter,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Nehal Wadhera,N Wadhera,Batter,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Vishnu Vinod,Vishnu Vinod,WK-Batter,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Harnoor Pannu,Harnoor Pannu,Batter,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Pyla Avinash,Pyla Avinash,Batter,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Prabhsimran Singh,P Simran Singh,WK-Batter,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Shashank Singh,Shashank Singh,Batter,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Marcus Stoinis,MP Stoinis,All-Rounder,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Harpreet Brar,Harpreet Brar,All-Rounder,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Marco Jansen,M Jansen,All-Rounder,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Azmatullah Omarzai,Azmatullah Omarzai,All-Rounder,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Priyansh Arya,Priyansh Arya,All-Rounder,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Musheer Khan,Musheer Khan,All-Rounder,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Suryansh Shedge,Suryansh Shedge,All-Rounder,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Mitch Owen,Mitch Owen,All-Rounder,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Cooper Connolly,Cooper Connolly,All-Rounder,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Ben Dwarshuis,BJ Dwarshuis,All-Rounder,,,Unknown,0,1,fuzzy
+2026,PBKS,Punjab Kings,Arshdeep Singh,Arshdeep Singh,Bowler,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Yuzvendra Chahal,YS Chahal,Bowler,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Vyshak Vijaykumar,V Vyshak,Bowler,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Yash Thakur,Yash Thakur,Bowler,,,Unknown,0,1,exact
+2026,PBKS,Punjab Kings,Xavier Bartlett,X Bartlett,Bowler,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Pravin Dubey,P Dubey,Bowler,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Vishal Nishad,Vishal Nishad,Bowler,,,Unknown,0,1,manual_alias
+2026,PBKS,Punjab Kings,Lockie Ferguson,LH Ferguson,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Shubham Dubey,Shubham Dubey,Batter,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Vaibhav Sooryavanshi,Vaibhav Suryavanshi,Batter,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Donovan Ferreira,D Ferreira,WK-Batter,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Lhuan-dre Pretorious,Lhuan-dre Pretorius,WK-Batter,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Aman Rao Perala,Aman Rao Perala,Batter,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Shimron Hetmyer,SO Hetmyer,Batter,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Yashasvi Jaiswal,YBK Jaiswal,Batter,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Dhruv Jurel,Dhruv Jurel,WK-Batter,,,Unknown,0,1,exact
+2026,RR,Rajasthan Royals,Riyan Parag,R Parag,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Yudhvir Singh Charak,Yudhvir Singh,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Emanjot Chahal,Emanjot Chahal,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Ravindra Jadeja,RA Jadeja,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Dasun Shanaka,MD Shanaka,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Jofra Archer,JC Archer,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Tushar Deshpande,TU Deshpande,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Kwena Maphaka,K Maphaka,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Ravi Bishnoi,Ravi Bishnoi,Bowler,,,Unknown,0,1,exact
+2026,RR,Rajasthan Royals,Sushant Mishra,Sushant Mishra,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Yash Raj Punja,Yash Raj Punja,Bowler,,,Unknown,0,1,exact
+2026,RR,Rajasthan Royals,Vignesh Puthur,V Puthur,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Brijesh Sharma,Brijesh Sharma,Bowler,,,Unknown,0,1,exact
+2026,RR,Rajasthan Royals,Adam Milne,AF Milne,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Kuldeep Sen,KR Sen,Bowler,,,Unknown,0,1,manual_alias
+2026,RR,Rajasthan Royals,Sandeep Sharma,Sandeep Sharma,Bowler,,,Unknown,0,1,exact
+2026,RR,Rajasthan Royals,Nandre Burger,N Burger,Bowler,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Rajat Patidar,RM Patidar,Batter,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Devdutt Padikkal,D Padikkal,Batter,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Virat Kohli,V Kohli,Batter,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Phil Salt,PD Salt,WK-Batter,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Jitesh Sharma,JM Sharma,WK-Batter,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Jordan Cox,JL Cox,WK-Batter,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Krunal Pandya,KH Pandya,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Swapnil Singh,Swapnil Singh,All-Rounder,,,Unknown,0,1,exact
+2026,RCB,Royal Challengers Bengaluru,Tim David,TH David,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Romario Shepherd,R Shepherd,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Jacob Bethell,J Bethell,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Venkatesh Iyer,VR Iyer,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Satvik Deswal,Satvik Deswal,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Mangesh Yadav,Mangesh Yadav,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Vicky Ostwal,Vicky Ostwal,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Vihaan Malhotra,Vihaan Malhotra,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Kanishk Chouhan,Kanishk Chouhan,All-Rounder,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Josh Hazlewood,JR Hazlewood,Bowler,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Rasikh Dar,Rasikh Salam,Bowler,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Suyash Sharma,Suyash Sharma,Bowler,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Bhuvneshwar Kumar,B Kumar,Bowler,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Abhinandan Singh,Abhinandan Singh,Bowler,,,Unknown,0,1,exact
+2026,RCB,Royal Challengers Bengaluru,Jacob Duffy,JA Duffy,Bowler,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Richard Gleeson,RJW Gleeson,Bowler,,,Unknown,0,1,manual_alias
+2026,RCB,Royal Challengers Bengaluru,Yash Dayal,Yash Dayal,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Ishan Kishan,Ishan Kishan,WK-Batter,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Aniket Verma,Aniket Verma,Batter,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Smaran Ravichandran,Smaran Ravichandran,Batter,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Salil Arora,Salil Arora,WK-Batter,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Heinrich Klaasen,H Klaasen,WK-Batter,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Travis Head,TM Head,Batter,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Harshal Patel,HV Patel,All-Rounder,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Kamindu Mendis,PHKD Mendis,All-Rounder,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Harsh Dubey,Harsh Dubey,All-Rounder,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Shivang Kumar,Shivang Kumar,All-Rounder,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Krains Fuletra,Krains Fuletra,All-Rounder,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Liam Livingstone,LS Livingstone,All-Rounder,,,Unknown,0,1,fuzzy
+2026,SRH,Sunrisers Hyderabad,R.S Ambrish,R.S Ambrish,All-Rounder,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Abhishek Sharma,Abhishek Sharma,All-Rounder,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Nitish Kumar Reddy,Nithish Kumar Reddy,All-Rounder,,,Unknown,0,1,fuzzy
+2026,SRH,Sunrisers Hyderabad,Pat Cummins,PJ Cummins,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Zeeshan Ansari,Zeeshan Ansari,Bowler,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Jaydev Unadkat,JD Unadkat,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Eshan Malinga,Eshan Malinga,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Sakib Hussain,Sakib Hussain,Bowler,,,Unknown,0,1,exact
+2026,SRH,Sunrisers Hyderabad,Onkar Tarmale,Onkar Tarmale,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Amit Kumar,Amit Kumar,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Praful Hinge,Praful Hinge,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Dilshan Madushanka,D Madushanka,Bowler,,,Unknown,0,1,manual_alias
+2026,SRH,Sunrisers Hyderabad,Gerald Coetzee,G Coetzee,Bowler,,,Unknown,0,1,manual_alias

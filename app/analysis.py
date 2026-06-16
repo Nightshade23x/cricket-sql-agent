@@ -123,6 +123,8 @@ CASE
     ELSE {column_name}
 END
 """.strip()
+def empty_dataframe():
+    return pd.DataFrame()
 
 
 def analyze_player_dismissals(player_condition):
@@ -1063,22 +1065,23 @@ END
 
 def active_recent_bowler_condition_sql(bowler_column):
     """
-    Local-only definition of active:
-    bowlers who appeared in the latest two IPL seasons available in the database.
+    Current-squad definition of active:
+    bowlers currently listed in dbo.current_squads.
+
+    This is better than using latest two IPL seasons because squads are now loaded.
     """
     return f"""
 {bowler_column} IN (
-    SELECT DISTINCT d2.bowler
-    FROM deliveries d2
-    JOIN matches m2
-        ON d2.match_id = m2.match_id
-    WHERE YEAR(CAST(m2.start_date AS date)) >= (
-        SELECT MAX(YEAR(CAST(start_date AS date))) - 1
-        FROM matches
-    )
+    SELECT DISTINCT cs.cricsheet_name
+    FROM dbo.current_squads cs
+    WHERE cs.is_active = 1
+      AND (
+          LOWER(cs.role) LIKE '%bowler%'
+          OR LOWER(cs.role) LIKE '%all%'
+          OR NULLIF(LTRIM(RTRIM(cs.bowling_style)), '') IS NOT NULL
+      )
 )
 """.strip()
-
 def analyze_team_title_chances():
     """
     Explainable team rating based on all-time record, recent form,
@@ -1678,6 +1681,45 @@ ORDER BY wickets DESC, economy_rate ASC;
             "top_wicket_takers": top_wicket_takers_sql,
         },
     }
+
+def get_tactical_confidence(direct_balls, proxy_balls=0, used_proxy=False, venue_condition=None):
+    """
+    Simple confidence label for tactical recommendations.
+    Uses sample size and whether the answer is direct or proxy-based.
+    """
+
+    direct_balls = 0 if direct_balls is None else direct_balls
+    proxy_balls = 0 if proxy_balls is None else proxy_balls
+
+    if not used_proxy:
+        if direct_balls >= 24:
+            confidence = "High"
+            reason = "Strong direct matchup sample."
+        elif direct_balls >= 12:
+            confidence = "Medium"
+            reason = "Usable direct matchup sample."
+        elif direct_balls >= 8:
+            confidence = "Low-Medium"
+            reason = "Small direct sample, but still usable."
+        else:
+            confidence = "Low"
+            reason = "Direct sample is too small."
+    else:
+        if proxy_balls >= 40:
+            confidence = "Medium"
+            reason = "Direct sample is small, but proxy sample is strong."
+        elif proxy_balls >= 20:
+            confidence = "Low-Medium"
+            reason = "Direct sample is small, but proxy sample is usable."
+        else:
+            confidence = "Low"
+            reason = "Both direct and proxy samples are small."
+
+    if venue_condition is not None and confidence == "High":
+        confidence = "Medium"
+        reason += " Venue filter makes the sample more specific."
+
+    return confidence, reason
 
 def analyze_player_shots(player_condition):
     """
@@ -2456,6 +2498,1231 @@ SELECT
         },
     }
 
+def analyze_bowler_vs_batter_decision(
+    batter_condition,
+    bowler_condition,
+    phase_condition=None,
+    phase_label="all overs",
+    venue_condition=None,
+):
+    """
+    Tactical decision engine:
+    - Should bowler X bowl to batter Y?
+    - Should batter Y face bowler X?
+
+    Uses direct matchup first.
+    If direct matchup in the requested phase/venue is too small,
+    it falls back to proxy evidence using similar batting style.
+    Example: Rashid vs Pooran in PP -> Rashid vs left-hand batters in PP.
+    """
+
+    batter_condition = batter_condition.replace("d.striker", "se.striker")
+    batter_condition = batter_condition.replace("pd.batter", "se.striker")
+
+    bowler_condition = bowler_condition.replace("d.bowler", "se.bowler")
+    bowler_condition = bowler_condition.replace("pd.bowler", "se.bowler")
+
+    if phase_condition is not None:
+        phase_condition = phase_condition.replace("d.ball", "se.ball")
+
+    direct_clauses = [batter_condition, bowler_condition]
+
+    if phase_condition is not None:
+        direct_clauses.append(phase_condition)
+
+    if venue_condition is not None:
+        direct_clauses.append(venue_condition)
+
+    direct_where_sql = " AND ".join(direct_clauses)
+
+    phase_clauses = [batter_condition, bowler_condition]
+
+    if venue_condition is not None:
+        phase_clauses.append(venue_condition)
+
+    phase_where_sql = " AND ".join(phase_clauses)
+
+    benchmark_clauses = [batter_condition]
+
+    if phase_condition is not None:
+        benchmark_clauses.append(phase_condition)
+
+    if venue_condition is not None:
+        benchmark_clauses.append(venue_condition)
+
+    benchmark_where_sql = " AND ".join(benchmark_clauses)
+
+    direct_sql = f"""
+SELECT
+    se.striker AS batter,
+    se.bowler,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {direct_where_sql}
+GROUP BY se.striker, se.bowler;
+""".strip()
+
+    benchmark_sql = f"""
+SELECT
+    se.striker AS batter,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS batter_context_strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {benchmark_where_sql}
+GROUP BY se.striker;
+""".strip()
+
+    phase_breakdown_sql = f"""
+SELECT
+    CASE
+        WHEN FLOOR(se.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(se.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(se.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END AS phase,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {phase_where_sql}
+GROUP BY
+    CASE
+        WHEN FLOOR(se.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+        WHEN FLOOR(se.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
+        WHEN FLOOR(se.ball) BETWEEN 15 AND 19 THEN 'Death overs'
+        ELSE 'Other'
+    END
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 3
+ORDER BY strike_rate ASC, dismissals DESC, legal_balls DESC;
+""".strip()
+
+    length_line_sql = f"""
+SELECT
+    COALESCE(se.ball_length, 'Unknown') AS ball_length,
+    COALESCE(se.ball_line, 'Unknown') AS ball_line,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {direct_where_sql}
+  AND se.ball_length IS NOT NULL
+  AND se.ball_line IS NOT NULL
+GROUP BY COALESCE(se.ball_length, 'Unknown'), COALESCE(se.ball_line, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 2
+ORDER BY strike_rate ASC, dismissals DESC, legal_balls DESC;
+""".strip()
+
+    shot_direction_sql = f"""
+SELECT
+    COALESCE(se.shot_direction, 'Unknown') AS shot_direction,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {direct_where_sql}
+  AND se.shot_direction IS NOT NULL
+GROUP BY COALESCE(se.shot_direction, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 2
+ORDER BY strike_rate DESC, dismissals ASC, legal_balls DESC;
+""".strip()
+
+    shot_type_sql = f"""
+SELECT
+    COALESCE(se.shot_played, 'Unknown') AS shot_played,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {direct_where_sql}
+  AND se.shot_played IS NOT NULL
+GROUP BY COALESCE(se.shot_played, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 2
+ORDER BY strike_rate DESC, dismissals ASC, legal_balls DESC;
+""".strip()
+
+    direct_df = run_query(direct_sql)
+    benchmark_df = run_query(benchmark_sql)
+    phase_df = run_query(phase_breakdown_sql)
+    length_line_df = run_query(length_line_sql)
+    shot_direction_df = run_query(shot_direction_sql)
+    shot_type_df = run_query(shot_type_sql)
+
+    similar_batter_matchup_df = pd.DataFrame()
+    similar_batter_benchmark_df = pd.DataFrame()
+    similar_batter_lengths_lines_df = pd.DataFrame()
+    similar_batter_shot_directions_df = pd.DataFrame()
+
+    similar_batter_matchup_sql = ""
+    similar_batter_benchmark_sql = ""
+    similar_batter_lengths_lines_sql = ""
+    similar_batter_shot_directions_sql = ""
+
+    similar_batter_style = "similar-style"
+
+    style_check_df = run_query("""
+SELECT
+    CASE
+        WHEN COL_LENGTH('dbo.shot_events', 'batting_style_striker') IS NULL THEN 0
+        ELSE 1
+    END AS has_batting_style;
+""".strip())
+
+    has_batting_style = False
+
+    if style_check_df is not None and not style_check_df.empty:
+        has_batting_style = int(style_check_df.iloc[0]["has_batting_style"]) == 1
+
+    if has_batting_style:
+        batter_style_sql = f"""
+SELECT TOP 1
+    se.batting_style_striker,
+    COUNT(*) AS balls
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {batter_condition}
+  AND se.batting_style_striker IS NOT NULL
+GROUP BY se.batting_style_striker
+ORDER BY balls DESC;
+""".strip()
+
+        batter_style_df = run_query(batter_style_sql)
+
+        if batter_style_df is not None and not batter_style_df.empty:
+            similar_batter_style = str(batter_style_df.iloc[0]["batting_style_striker"])
+            similar_batter_style_safe = similar_batter_style.replace("'", "''")
+
+            proxy_clauses = [
+                bowler_condition,
+                f"se.batting_style_striker = '{similar_batter_style_safe}'",
+            ]
+
+            proxy_benchmark_clauses = [
+                f"se.batting_style_striker = '{similar_batter_style_safe}'",
+            ]
+
+            if phase_condition is not None:
+                proxy_clauses.append(phase_condition)
+                proxy_benchmark_clauses.append(phase_condition)
+
+            if venue_condition is not None:
+                proxy_clauses.append(venue_condition)
+                proxy_benchmark_clauses.append(venue_condition)
+
+            proxy_where_sql = " AND ".join(proxy_clauses)
+            proxy_benchmark_where_sql = " AND ".join(proxy_benchmark_clauses)
+
+            similar_batter_matchup_sql = f"""
+SELECT
+    '{similar_batter_style_safe}' AS proxy_batter_type,
+    se.bowler,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {proxy_where_sql}
+GROUP BY se.bowler
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 10
+ORDER BY strike_rate ASC, dismissals DESC, legal_balls DESC;
+""".strip()
+
+            similar_batter_benchmark_sql = f"""
+SELECT
+    '{similar_batter_style_safe}' AS proxy_batter_type,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS proxy_group_strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {proxy_benchmark_where_sql};
+""".strip()
+
+            similar_batter_lengths_lines_sql = f"""
+SELECT
+    COALESCE(se.ball_length, 'Unknown') AS ball_length,
+    COALESCE(se.ball_line, 'Unknown') AS ball_line,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {proxy_where_sql}
+  AND se.ball_length IS NOT NULL
+  AND se.ball_line IS NOT NULL
+GROUP BY COALESCE(se.ball_length, 'Unknown'), COALESCE(se.ball_line, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 3
+ORDER BY strike_rate ASC, dismissals DESC, legal_balls DESC;
+""".strip()
+
+            similar_batter_shot_directions_sql = f"""
+SELECT
+    COALESCE(se.shot_direction, 'Unknown') AS shot_direction,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {proxy_where_sql}
+  AND se.shot_direction IS NOT NULL
+GROUP BY COALESCE(se.shot_direction, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 3
+ORDER BY strike_rate DESC, dismissals ASC, legal_balls DESC;
+""".strip()
+
+            similar_batter_matchup_df = run_query(similar_batter_matchup_sql)
+            similar_batter_benchmark_df = run_query(similar_batter_benchmark_sql)
+            similar_batter_lengths_lines_df = run_query(similar_batter_lengths_lines_sql)
+            similar_batter_shot_directions_df = run_query(similar_batter_shot_directions_sql)
+
+    batter_name = extract_player_name_from_condition(batter_condition) or safe_first_value(
+        direct_df,
+        "batter",
+        "the batter",
+    )
+
+    bowler_name = extract_player_name_from_condition(bowler_condition) or safe_first_value(
+        direct_df,
+        "bowler",
+        "the bowler",
+    )
+
+    direct_balls = safe_first_value(direct_df, "legal_balls", 0)
+    direct_runs = safe_first_value(direct_df, "runs", 0)
+    direct_dismissals = safe_first_value(direct_df, "dismissals", 0)
+    direct_sr = safe_first_value(direct_df, "strike_rate", None)
+    benchmark_sr = safe_first_value(benchmark_df, "batter_context_strike_rate", None)
+
+    proxy_balls = safe_first_value(similar_batter_matchup_df, "legal_balls", 0)
+    proxy_runs = safe_first_value(similar_batter_matchup_df, "runs", 0)
+    proxy_dismissals = safe_first_value(similar_batter_matchup_df, "dismissals", 0)
+    proxy_sr = safe_first_value(similar_batter_matchup_df, "strike_rate", None)
+    proxy_benchmark_sr = safe_first_value(
+        similar_batter_benchmark_df,
+        "proxy_group_strike_rate",
+        None,
+    )
+
+    best_phase = safe_first_value(phase_df, "phase", "unknown phase")
+
+    if length_line_df is not None and not length_line_df.empty:
+        best_length = safe_first_value(length_line_df, "ball_length", "unknown length")
+        best_line = safe_first_value(length_line_df, "ball_line", "unknown line")
+        bowling_plan_source = "direct matchup data"
+    elif similar_batter_lengths_lines_df is not None and not similar_batter_lengths_lines_df.empty:
+        best_length = safe_first_value(similar_batter_lengths_lines_df, "ball_length", "unknown length")
+        best_line = safe_first_value(similar_batter_lengths_lines_df, "ball_line", "unknown line")
+        bowling_plan_source = f"proxy data against {similar_batter_style} batters"
+    else:
+        best_length = "unknown length"
+        best_line = "unknown line"
+        bowling_plan_source = "insufficient length/line data"
+
+    if shot_direction_df is not None and not shot_direction_df.empty:
+        best_direction = safe_first_value(shot_direction_df, "shot_direction", "unknown area")
+        scoring_area_source = "direct matchup data"
+    elif similar_batter_shot_directions_df is not None and not similar_batter_shot_directions_df.empty:
+        best_direction = safe_first_value(similar_batter_shot_directions_df, "shot_direction", "unknown area")
+        scoring_area_source = f"proxy data against {similar_batter_style} batters"
+    else:
+        best_direction = "unknown area"
+        scoring_area_source = "insufficient shot-direction data"
+
+    best_shot = safe_first_value(shot_type_df, "shot_played", "unknown shot")
+
+    used_proxy = False
+
+    if direct_sr is None or direct_balls < 8:
+        if proxy_sr is not None and proxy_balls >= 10:
+            used_proxy = True
+
+            if proxy_benchmark_sr is not None and proxy_sr <= proxy_benchmark_sr * 0.90:
+                decision = "Yes, but proxy-based"
+                decision_reason = (
+                    f"There is not enough direct {bowler_name} vs {batter_name} data in this context, "
+                    f"so the model uses {bowler_name} vs {similar_batter_style} batters as a proxy. "
+                    f"That proxy record is restrictive compared with the normal scoring rate of that batter type."
+                )
+            elif proxy_benchmark_sr is not None and proxy_sr >= proxy_benchmark_sr * 1.10:
+                decision = "Avoid if possible"
+                decision_reason = (
+                    f"There is not enough direct {bowler_name} vs {batter_name} data in this context. "
+                    f"Using {similar_batter_style} batters as a proxy, this matchup looks risky."
+                )
+            else:
+                decision = "Use with caution"
+                decision_reason = (
+                    f"There is not enough direct {bowler_name} vs {batter_name} data in this context. "
+                    f"The proxy sample against {similar_batter_style} batters is usable, but not decisive."
+                )
+        else:
+            decision = "Insufficient data"
+            decision_reason = (
+                "There is not enough direct matchup data, and the proxy sample is also too small "
+                "for a confident recommendation."
+            )
+
+    elif benchmark_sr is not None and direct_sr <= benchmark_sr * 0.85:
+        decision = "Yes"
+        decision_reason = (
+            f"{bowler_name} has restricted {batter_name} well compared with the batter's usual scoring rate "
+            "in this context."
+        )
+
+    elif benchmark_sr is not None and direct_sr >= benchmark_sr * 1.15:
+        decision = "Avoid if possible"
+        decision_reason = (
+            f"{batter_name} scores faster than usual against {bowler_name} in this context."
+        )
+
+    elif direct_dismissals >= 1 and direct_sr < 140:
+        decision = "Yes"
+        decision_reason = (
+            "The strike rate is controlled and the bowler has taken the batter's wicket before."
+        )
+
+    else:
+        decision = "Neutral / situational"
+        decision_reason = (
+            "The matchup is not clearly one-sided, so phase, venue, and match situation should decide."
+        )
+    confidence, confidence_reason = get_tactical_confidence(
+        direct_balls=direct_balls,
+        proxy_balls=proxy_balls,
+        used_proxy=used_proxy,
+        venue_condition=venue_condition,
+    )
+    phase_note = ""
+
+    if phase_label != "all overs" and best_phase != "unknown phase":
+        clean_requested_phase = phase_label.replace("_", " ").lower()
+
+        if clean_requested_phase not in best_phase.lower():
+            phase_note = (
+                f" Historically, {best_phase} looks like the better phase for this matchup. "
+                f"If using the bowler in {phase_label}, use the recommended length/line rather than treating it as the ideal phase."
+            )
+        else:
+            phase_note = " The requested phase also looks suitable historically for this matchup."
+
+    if used_proxy:
+        evidence_sentence = (
+            f"Direct record in the requested context is too small: {bowler_name} to {batter_name} is "
+            f"{direct_runs} runs from {direct_balls} legal balls. "
+            f"As a proxy, {bowler_name} vs {similar_batter_style} batters in this context is "
+            f"{proxy_runs} runs from {proxy_balls} legal balls, {proxy_dismissals} dismissals, "
+            f"strike rate {format_metric(proxy_sr)}."
+        )
+    else:
+        evidence_sentence = (
+            f"Direct record: {bowler_name} to {batter_name} is {direct_runs} runs from {direct_balls} legal balls, "
+            f"{direct_dismissals} dismissals, strike rate {format_metric(direct_sr)}."
+        )
+
+    paragraph = (
+        f"Decision: {decision}. Confidence: {confidence}. {decision_reason} "
+        f"{evidence_sentence} "
+        f"The best historical phase for this direct matchup is {best_phase}. "
+        f"If this bowler is used here, the data suggests bowling {best_length} length and {best_line} line "
+        f"based on {bowling_plan_source}. "
+        f"From the batter's point of view, the best scoring area is {best_direction} "
+        f"based on {scoring_area_source}, especially using {best_shot}."
+        f"{phase_note}"
+    )
+
+    summary_df = pd.DataFrame(
+    [
+        {
+            "analysis_area": "Decision",
+            "insight": decision,
+        },
+        {
+            "analysis_area": "Confidence",
+            "insight": f"{confidence}: {confidence_reason}",
+        },
+        {
+            "analysis_area": "Reason",
+            "insight": decision_reason,
+        },
+        {
+            "analysis_area": "Evidence type",
+            "insight": "Proxy-based" if used_proxy else "Direct matchup",
+        },
+        {
+            "analysis_area": "Direct matchup",
+            "insight": (
+                f"{direct_runs} runs from {direct_balls} legal balls, "
+                f"{direct_dismissals} dismissals, SR {format_metric(direct_sr)}."
+            ),
+        },
+        {
+            "analysis_area": "Proxy sample",
+            "insight": (
+                f"{bowler_name} vs {similar_batter_style} batters: "
+                f"{proxy_runs} runs from {proxy_balls} legal balls, "
+                f"{proxy_dismissals} dismissals, SR {format_metric(proxy_sr)}."
+                if used_proxy
+                else "Not needed."
+            ),
+        },
+        {
+            "analysis_area": "Best phase",
+            "insight": best_phase,
+        },
+        {
+            "analysis_area": "Bowling plan",
+            "insight": f"Bowl {best_length} length and {best_line} line.",
+        },
+        {
+            "analysis_area": "Batter scoring area",
+            "insight": f"Aim for {best_direction}, especially with {best_shot}.",
+        },
+    ]
+)
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "direct_matchup": direct_df,
+        "batter_benchmark": benchmark_df,
+        "phase_breakdown": phase_df,
+        "recommended_lengths_lines": length_line_df,
+        "shot_directions": shot_direction_df,
+        "shot_types": shot_type_df,
+        "similar_batter_matchup": similar_batter_matchup_df,
+        "similar_batter_benchmark": similar_batter_benchmark_df,
+        "similar_batter_lengths_lines": similar_batter_lengths_lines_df,
+        "similar_batter_shot_directions": similar_batter_shot_directions_df,
+        "confidence": confidence,
+        "confidence_reason": confidence_reason,
+        "sql_queries": {
+            "direct_matchup": direct_sql,
+            "batter_benchmark": benchmark_sql,
+            "phase_breakdown": phase_breakdown_sql,
+            "recommended_lengths_lines": length_line_sql,
+            "shot_directions": shot_direction_sql,
+            "shot_types": shot_type_sql,
+            "similar_batter_matchup": similar_batter_matchup_sql,
+            "similar_batter_benchmark": similar_batter_benchmark_sql,
+            "similar_batter_lengths_lines": similar_batter_lengths_lines_sql,
+            "similar_batter_shot_directions": similar_batter_shot_directions_sql,
+        },
+    }
+
+def analyze_team_bowler_recommendation(
+    batter_condition,
+    team_condition,
+    phase_condition=None,
+    phase_label="all overs",
+    venue_condition=None,
+):
+    """
+    Squad-aware team bowler recommendation.
+
+    Example:
+    Which GT bowler should bowl to Pooran?
+
+    Uses current_squads table to get CURRENT squad bowlers,
+    then uses their historical IPL data from shot_events.
+    This prevents outdated answers like Noor Ahmad for GT if Noor is now in CSK.
+    """
+
+    batter_condition = batter_condition.replace("d.striker", "se.striker")
+    batter_condition = batter_condition.replace("pd.batter", "se.striker")
+
+    squad_team_condition = team_condition
+    squad_team_condition = squad_team_condition.replace("se.bowling_team", "cs.team_name")
+    squad_team_condition = squad_team_condition.replace("d.bowling_team", "cs.team_name")
+    squad_team_condition = squad_team_condition.replace("d.batting_team", "cs.team_name")
+
+    if phase_condition is not None:
+        phase_condition = phase_condition.replace("d.ball", "se.ball")
+
+    squad_bowler_filter = """
+cs.is_active = 1
+AND (
+    LOWER(cs.role) LIKE '%bowler%'
+    OR LOWER(cs.role) LIKE '%all%'
+    OR NULLIF(LTRIM(RTRIM(cs.bowling_style)), '') IS NOT NULL
+)
+""".strip()
+
+    direct_clauses = [
+        batter_condition,
+        squad_team_condition,
+        squad_bowler_filter,
+    ]
+
+    if phase_condition is not None:
+        direct_clauses.append(phase_condition)
+
+    if venue_condition is not None:
+        direct_clauses.append(venue_condition)
+
+    direct_where_sql = " AND ".join(direct_clauses)
+
+    direct_options_sql = f"""
+SELECT
+    cs.team_code,
+    cs.team_name AS current_team,
+    cs.display_name,
+    cs.cricsheet_name AS bowler,
+    cs.role,
+    COALESCE(cs.bowling_style, se.bowling_style_bowler, 'Unknown') AS bowling_style,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.current_squads cs
+JOIN dbo.shot_events se
+    ON se.bowler = cs.cricsheet_name
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {direct_where_sql}
+GROUP BY
+    cs.team_code,
+    cs.team_name,
+    cs.display_name,
+    cs.cricsheet_name,
+    cs.role,
+    COALESCE(cs.bowling_style, se.bowling_style_bowler, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 3
+ORDER BY strike_rate ASC, dismissals DESC, legal_balls DESC;
+""".strip()
+
+    direct_options_df = run_query(direct_options_sql)
+
+    style_check_df = run_query("""
+SELECT
+    CASE
+        WHEN COL_LENGTH('dbo.shot_events', 'batting_style_striker') IS NULL THEN 0
+        ELSE 1
+    END AS has_batting_style;
+""".strip())
+
+    has_batting_style = False
+
+    if style_check_df is not None and not style_check_df.empty:
+        has_batting_style = int(style_check_df.iloc[0]["has_batting_style"]) == 1
+
+    proxy_options_df = pd.DataFrame()
+    proxy_options_sql = ""
+    similar_batter_style = "similar-style"
+
+    if has_batting_style:
+        batter_style_sql = f"""
+SELECT TOP 1
+    se.batting_style_striker,
+    COUNT(*) AS balls
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {batter_condition}
+  AND se.batting_style_striker IS NOT NULL
+GROUP BY se.batting_style_striker
+ORDER BY balls DESC;
+""".strip()
+
+        batter_style_df = run_query(batter_style_sql)
+
+        if batter_style_df is not None and not batter_style_df.empty:
+            similar_batter_style = str(batter_style_df.iloc[0]["batting_style_striker"])
+            similar_batter_style_safe = similar_batter_style.replace("'", "''")
+
+            proxy_clauses = [
+                squad_team_condition,
+                squad_bowler_filter,
+                f"se.batting_style_striker = '{similar_batter_style_safe}'",
+            ]
+
+            if phase_condition is not None:
+                proxy_clauses.append(phase_condition)
+
+            if venue_condition is not None:
+                proxy_clauses.append(venue_condition)
+
+            proxy_where_sql = " AND ".join(proxy_clauses)
+
+            proxy_options_sql = f"""
+SELECT
+    '{similar_batter_style_safe}' AS proxy_batter_type,
+    cs.team_code,
+    cs.team_name AS current_team,
+    cs.display_name,
+    cs.cricsheet_name AS bowler,
+    cs.role,
+    COALESCE(cs.bowling_style, se.bowling_style_bowler, 'Unknown') AS bowling_style,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.current_squads cs
+JOIN dbo.shot_events se
+    ON se.bowler = cs.cricsheet_name
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {proxy_where_sql}
+GROUP BY
+    cs.team_code,
+    cs.team_name,
+    cs.display_name,
+    cs.cricsheet_name,
+    cs.role,
+    COALESCE(cs.bowling_style, se.bowling_style_bowler, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 10
+ORDER BY strike_rate ASC, dismissals DESC, legal_balls DESC;
+""".strip()
+
+            proxy_options_df = run_query(proxy_options_sql)
+
+    used_proxy = False
+
+    if direct_options_df is not None and not direct_options_df.empty:
+        best_df = direct_options_df
+        evidence_type = "Direct matchup using current squad"
+    elif proxy_options_df is not None and not proxy_options_df.empty:
+        best_df = proxy_options_df
+        evidence_type = f"Proxy using current squad vs {similar_batter_style} batters"
+        used_proxy = True
+    else:
+        best_df = pd.DataFrame()
+        evidence_type = "Insufficient current-squad data"
+
+    best_bowler = safe_first_value(best_df, "bowler", "unknown bowler")
+    best_display_name = safe_first_value(best_df, "display_name", best_bowler)
+    best_style = safe_first_value(best_df, "bowling_style", "unknown style")
+    best_team = safe_first_value(best_df, "current_team", "unknown team")
+    best_balls = safe_first_value(best_df, "legal_balls", 0)
+    best_runs = safe_first_value(best_df, "runs", 0)
+    best_dismissals = safe_first_value(best_df, "dismissals", 0)
+    best_sr = safe_first_value(best_df, "strike_rate", None)
+
+    confidence, confidence_reason = get_tactical_confidence(
+        direct_balls=best_balls if not used_proxy else 0,
+        proxy_balls=best_balls if used_proxy else 0,
+        used_proxy=used_proxy,
+        venue_condition=venue_condition,
+    )
+
+    length_line_df = pd.DataFrame()
+    length_line_sql = ""
+
+    if best_bowler != "unknown bowler":
+        best_bowler_safe = str(best_bowler).replace("'", "''")
+
+        plan_clauses = [
+            f"se.bowler = '{best_bowler_safe}'",
+        ]
+
+        if used_proxy and similar_batter_style != "similar-style":
+            similar_batter_style_safe = similar_batter_style.replace("'", "''")
+            plan_clauses.append(f"se.batting_style_striker = '{similar_batter_style_safe}'")
+        else:
+            plan_clauses.append(batter_condition)
+
+        if phase_condition is not None:
+            plan_clauses.append(phase_condition)
+
+        if venue_condition is not None:
+            plan_clauses.append(venue_condition)
+
+        plan_where_sql = " AND ".join(plan_clauses)
+
+        length_line_sql = f"""
+SELECT
+    COALESCE(se.ball_length, 'Unknown') AS ball_length,
+    COALESCE(se.ball_line, 'Unknown') AS ball_line,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {plan_where_sql}
+  AND se.ball_length IS NOT NULL
+  AND se.ball_line IS NOT NULL
+GROUP BY COALESCE(se.ball_length, 'Unknown'), COALESCE(se.ball_line, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 3
+ORDER BY strike_rate ASC, dismissals DESC, legal_balls DESC;
+""".strip()
+
+        length_line_df = run_query(length_line_sql)
+
+    best_length = safe_first_value(length_line_df, "ball_length", "unknown length")
+    best_line = safe_first_value(length_line_df, "ball_line", "unknown line")
+
+    paragraph = (
+        f"Recommendation: use {best_display_name} from the current {best_team} squad. "
+        f"Confidence: {confidence}. Evidence type: {evidence_type}. "
+        f"Record used: {best_runs} runs from {best_balls} legal balls, "
+        f"{best_dismissals} dismissals, strike rate {format_metric(best_sr)}. "
+        f"Bowling style: {best_style}. Suggested plan: bowl {best_length} length and {best_line} line."
+    )
+
+    summary_df = pd.DataFrame(
+        [
+            {
+                "analysis_area": "Recommended bowler",
+                "insight": best_display_name,
+            },
+            {
+                "analysis_area": "Current team",
+                "insight": best_team,
+            },
+            {
+                "analysis_area": "Confidence",
+                "insight": f"{confidence}: {confidence_reason}",
+            },
+            {
+                "analysis_area": "Evidence type",
+                "insight": evidence_type,
+            },
+            {
+                "analysis_area": "Record used",
+                "insight": f"{best_runs} runs from {best_balls} legal balls, {best_dismissals} dismissals, SR {format_metric(best_sr)}.",
+            },
+            {
+                "analysis_area": "Bowling plan",
+                "insight": f"Bowl {best_length} length and {best_line} line.",
+            },
+        ]
+    )
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "direct_options": direct_options_df,
+        "proxy_options": proxy_options_df,
+        "recommended_lengths_lines": length_line_df,
+        "confidence": confidence,
+        "confidence_reason": confidence_reason,
+        "sql_queries": {
+            "direct_options": direct_options_sql,
+            "proxy_options": proxy_options_sql,
+            "recommended_lengths_lines": length_line_sql,
+        },
+    }
+
+def analyze_batter_plan_against_bowler(
+    batter_condition,
+    bowler_condition,
+    phase_condition=None,
+    phase_label="all overs",
+    venue_condition=None,
+):
+    """
+    Batting plan:
+    How should a batter play a bowler?
+
+    Returns scoring areas, useful shots, risky shots, and length/line advice.
+    """
+
+    batter_condition = batter_condition.replace("d.striker", "se.striker")
+    batter_condition = batter_condition.replace("pd.batter", "se.striker")
+
+    bowler_condition = bowler_condition.replace("d.bowler", "se.bowler")
+    bowler_condition = bowler_condition.replace("pd.bowler", "se.bowler")
+
+    if phase_condition is not None:
+        phase_condition = phase_condition.replace("d.ball", "se.ball")
+
+    where_clauses = [batter_condition, bowler_condition]
+
+    if phase_condition is not None:
+        where_clauses.append(phase_condition)
+
+    if venue_condition is not None:
+        where_clauses.append(venue_condition)
+
+    where_sql = " AND ".join(where_clauses)
+
+    direct_summary_sql = f"""
+SELECT
+    se.striker AS batter,
+    se.bowler,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {where_sql}
+GROUP BY se.striker, se.bowler;
+""".strip()
+
+    scoring_areas_sql = f"""
+SELECT
+    COALESCE(se.shot_direction, 'Unknown') AS shot_direction,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {where_sql}
+  AND se.shot_direction IS NOT NULL
+GROUP BY COALESCE(se.shot_direction, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 2
+ORDER BY strike_rate DESC, runs DESC;
+""".strip()
+
+    scoring_shots_sql = f"""
+SELECT
+    COALESCE(se.shot_played, 'Unknown') AS shot_played,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {where_sql}
+  AND se.shot_played IS NOT NULL
+GROUP BY COALESCE(se.shot_played, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 2
+ORDER BY strike_rate DESC, runs DESC;
+""".strip()
+
+    risky_shots_sql = f"""
+SELECT
+    COALESCE(se.shot_played, 'Unknown') AS shot_played,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {where_sql}
+  AND se.shot_played IS NOT NULL
+GROUP BY COALESCE(se.shot_played, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 2
+ORDER BY dismissals DESC, strike_rate ASC;
+""".strip()
+
+    length_line_attack_sql = f"""
+SELECT
+    COALESCE(se.ball_length, 'Unknown') AS ball_length,
+    COALESCE(se.ball_line, 'Unknown') AS ball_line,
+    COUNT(*) AS total_balls,
+    SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS legal_balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(se.runs_off_bat) * 100.0 /
+        NULLIF(SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS strike_rate
+FROM dbo.shot_events se
+JOIN dbo.matches m
+    ON se.match_id = m.match_id
+WHERE {where_sql}
+  AND se.ball_length IS NOT NULL
+  AND se.ball_line IS NOT NULL
+GROUP BY COALESCE(se.ball_length, 'Unknown'), COALESCE(se.ball_line, 'Unknown')
+HAVING SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) >= 2
+ORDER BY strike_rate DESC, runs DESC;
+""".strip()
+
+    direct_summary_df = run_query(direct_summary_sql)
+    scoring_areas_df = run_query(scoring_areas_sql)
+    scoring_shots_df = run_query(scoring_shots_sql)
+    risky_shots_df = run_query(risky_shots_sql)
+    length_line_attack_df = run_query(length_line_attack_sql)
+
+    batter_name = extract_player_name_from_condition(batter_condition) or safe_first_value(
+        direct_summary_df,
+        "batter",
+        "the batter",
+    )
+
+    bowler_name = extract_player_name_from_condition(bowler_condition) or safe_first_value(
+        direct_summary_df,
+        "bowler",
+        "the bowler",
+    )
+
+    balls = safe_first_value(direct_summary_df, "legal_balls", 0)
+    runs = safe_first_value(direct_summary_df, "runs", 0)
+    dismissals = safe_first_value(direct_summary_df, "dismissals", 0)
+    strike_rate = safe_first_value(direct_summary_df, "strike_rate", None)
+
+    confidence, confidence_reason = get_tactical_confidence(
+        direct_balls=balls,
+        proxy_balls=0,
+        used_proxy=False,
+        venue_condition=venue_condition,
+    )
+
+    best_area = safe_first_value(scoring_areas_df, "shot_direction", "unknown area")
+    best_shot = safe_first_value(scoring_shots_df, "shot_played", "unknown shot")
+    risky_shot = safe_first_value(risky_shots_df, "shot_played", "unknown shot")
+    attack_length = safe_first_value(length_line_attack_df, "ball_length", "unknown length")
+    attack_line = safe_first_value(length_line_attack_df, "ball_line", "unknown line")
+
+    paragraph = (
+        f"Batting plan for {batter_name} against {bowler_name}: "
+        f"Confidence: {confidence}. Direct record is {runs} runs from {balls} legal balls, "
+        f"{dismissals} dismissals, strike rate {format_metric(strike_rate)}. "
+        f"The best scoring area is {best_area}, and the most productive shot is {best_shot}. "
+        f"The batter should be careful with {risky_shot}, which has carried the most risk in this matchup. "
+        f"The best length/line to attack appears to be {attack_length} length and {attack_line} line."
+    )
+
+    summary_df = pd.DataFrame(
+        [
+            {
+                "analysis_area": "Confidence",
+                "insight": f"{confidence}: {confidence_reason}",
+            },
+            {
+                "analysis_area": "Direct record",
+                "insight": f"{runs} runs from {balls} legal balls, {dismissals} dismissals, SR {format_metric(strike_rate)}.",
+            },
+            {
+                "analysis_area": "Best scoring area",
+                "insight": best_area,
+            },
+            {
+                "analysis_area": "Best shot",
+                "insight": best_shot,
+            },
+            {
+                "analysis_area": "Risky shot",
+                "insight": risky_shot,
+            },
+            {
+                "analysis_area": "Length/line to attack",
+                "insight": f"{attack_length} length and {attack_line} line.",
+            },
+        ]
+    )
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "direct_summary": direct_summary_df,
+        "scoring_areas": scoring_areas_df,
+        "scoring_shots": scoring_shots_df,
+        "risky_shots": risky_shots_df,
+        "length_line_attack": length_line_attack_df,
+        "confidence": confidence,
+        "confidence_reason": confidence_reason,
+        "sql_queries": {
+            "direct_summary": direct_summary_sql,
+            "scoring_areas": scoring_areas_sql,
+            "scoring_shots": scoring_shots_sql,
+            "risky_shots": risky_shots_sql,
+            "length_line_attack": length_line_attack_sql,
+        },
+    }
 def analyze_match_summaries(match_filter_sql, context_label, limit=5):
     """
     Return match summaries with result, scoreline, top scorer, and top wicket-taker.

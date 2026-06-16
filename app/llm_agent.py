@@ -1,10 +1,23 @@
 import re
+import pandas as pd
 from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
 from functools import lru_cache
-from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile, analyze_player_shots, analyze_bowler_strategy,analyze_match_summaries,analyze_batter_bowling_plan
-
+from app.analysis import (
+    analyze_player_dismissals,
+    analyze_team_title_chances,
+    analyze_bowler_matchups,
+    analyze_player_profile,
+    analyze_team_profile,
+    analyze_player_shots,
+    analyze_bowler_strategy,
+    analyze_match_summaries,
+    analyze_batter_bowling_plan,
+    analyze_bowler_vs_batter_decision,
+    analyze_team_bowler_recommendation,
+    analyze_batter_plan_against_bowler,
+)
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
 You are a cricket analytics sql agent
@@ -997,6 +1010,8 @@ def get_player_condition_from_question(user_question, column_name):
         "jadeja": "RA Jadeja",
         "jaddu": "RA Jadeja",
         "bumrah": "JJ Bumrah",
+        "rabada": "K Rabada",
+        "kagiso rabada": "K Rabada",
         "yuzi chahal": "YS Chahal",
         "chahal": "YS Chahal",
         "malinga": "SL Malinga",
@@ -6455,6 +6470,30 @@ WHERE {team_condition};
 """.strip()
 
     return None
+def get_player_condition_before_keyword(user_question, keyword, column_name):
+    question_lower = user_question.lower()
+    keyword_lower = keyword.lower()
+
+    index = question_lower.find(keyword_lower)
+
+    if index == -1:
+        return None
+
+    text_before = user_question[:index]
+    return get_player_condition_from_question(text_before, column_name)
+
+
+def get_player_condition_after_keyword(user_question, keyword, column_name):
+    question_lower = user_question.lower()
+    keyword_lower = keyword.lower()
+
+    index = question_lower.find(keyword_lower)
+
+    if index == -1:
+        return None
+
+    text_after = user_question[index + len(keyword):]
+    return get_player_condition_from_question(text_after, column_name)
 
 def build_analysis_response(user_question):
     question_lower = user_question.lower()
@@ -6484,6 +6523,196 @@ AND ms.season_year = {season}
                     "match_summaries": analysis_result["match_summaries"],
                 },
                 "error": None
+            }
+    # Team bowler recommendation:
+    # e.g. "Which GT bowler should bowl to Pooran?"
+    # e.g. "Which MI bowler should bowl to Kohli in the death overs?"
+    is_team_bowler_recommendation = (
+        ("which" in question_lower or "who" in question_lower)
+        and "bowler" in question_lower
+        and ("bowl to" in question_lower or "to" in question_lower)
+    )
+
+    if is_team_bowler_recommendation:
+        team_condition = get_team_condition_from_question(user_question, "se.bowling_team")
+        batter_condition = get_player_condition_after_keyword(user_question, "to", "se.striker")
+
+        if batter_condition is None:
+            batter_condition = get_player_condition_from_question(user_question, "se.striker")
+
+        if team_condition is not None and batter_condition is not None:
+            phase_condition, phase_label = get_phase_condition_from_question(user_question, "se")
+
+            if phase_condition is None:
+                phase_label = "all overs"
+
+            venue_condition = None
+
+            if has_venue_context(user_question):
+                venue_condition = get_venue_condition_from_question(user_question)
+
+            analysis_result = analyze_team_bowler_recommendation(
+                batter_condition=batter_condition,
+                team_condition=team_condition,
+                phase_condition=phase_condition,
+                phase_label=phase_label.replace("_", " "),
+                venue_condition=venue_condition,
+            )
+
+            combined_sql = analysis_result["sql_queries"]["direct_options"]
+            combined_sql += "\n\n--- proxy_options ---\n" + analysis_result["sql_queries"]["proxy_options"]
+            combined_sql += "\n\n--- recommended_lengths_lines ---\n" + analysis_result["sql_queries"]["recommended_lengths_lines"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Team bowler recommendation",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "direct_options": analysis_result["direct_options"],
+                    "proxy_options": analysis_result["proxy_options"],
+                    "recommended_lengths_lines": analysis_result["recommended_lengths_lines"],
+                },
+                "error": None,
+            }
+
+    # Batting plan against a bowler:
+    # e.g. "How should Kohli play Rabada?"
+    # e.g. "Where should Kohli target Rabada?"
+    # e.g. "What shots should Kohli avoid against Rashid?"
+    is_batter_plan_question = (
+        ("how should" in question_lower and "play" in question_lower)
+        or ("where should" in question_lower and "target" in question_lower)
+        or ("what shots" in question_lower and "avoid" in question_lower)
+        or ("which shots" in question_lower and "avoid" in question_lower)
+    )
+
+    if is_batter_plan_question:
+        batter_condition = None
+        bowler_condition = None
+
+        if "play" in question_lower:
+            batter_condition = get_player_condition_before_keyword(user_question, "play", "se.striker")
+            bowler_condition = get_player_condition_after_keyword(user_question, "play", "se.bowler")
+
+        elif "target" in question_lower:
+            batter_condition = get_player_condition_before_keyword(user_question, "target", "se.striker")
+            bowler_condition = get_player_condition_after_keyword(user_question, "target", "se.bowler")
+
+        elif "avoid" in question_lower and "against" in question_lower:
+            batter_condition = get_player_condition_before_keyword(user_question, "avoid", "se.striker")
+            bowler_condition = get_player_condition_after_keyword(user_question, "against", "se.bowler")
+
+        if batter_condition is not None and bowler_condition is not None:
+            phase_condition, phase_label = get_phase_condition_from_question(user_question, "se")
+
+            if phase_condition is None:
+                phase_label = "all overs"
+
+            venue_condition = None
+
+            if has_venue_context(user_question):
+                venue_condition = get_venue_condition_from_question(user_question)
+
+            analysis_result = analyze_batter_plan_against_bowler(
+                batter_condition=batter_condition,
+                bowler_condition=bowler_condition,
+                phase_condition=phase_condition,
+                phase_label=phase_label.replace("_", " "),
+                venue_condition=venue_condition,
+            )
+
+            combined_sql = analysis_result["sql_queries"]["direct_summary"]
+            combined_sql += "\n\n--- scoring_areas ---\n" + analysis_result["sql_queries"]["scoring_areas"]
+            combined_sql += "\n\n--- scoring_shots ---\n" + analysis_result["sql_queries"]["scoring_shots"]
+            combined_sql += "\n\n--- risky_shots ---\n" + analysis_result["sql_queries"]["risky_shots"]
+            combined_sql += "\n\n--- length_line_attack ---\n" + analysis_result["sql_queries"]["length_line_attack"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Batter plan against bowler",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "direct_summary": analysis_result["direct_summary"],
+                    "scoring_areas": analysis_result["scoring_areas"],
+                    "scoring_shots": analysis_result["scoring_shots"],
+                    "risky_shots": analysis_result["risky_shots"],
+                    "length_line_attack": analysis_result["length_line_attack"],
+                },
+                "error": None,
+            }
+    # Direct bowler-vs-batter tactical decision:
+    # e.g. "Should Rashid Khan bowl to Pooran in the powerplay?"
+    # e.g. "Should Kohli face Rabada?"
+    is_direct_matchup_decision = (
+        ("should" in question_lower and "bowl to" in question_lower)
+        or ("should" in question_lower and "face" in question_lower)
+    )
+
+    if is_direct_matchup_decision:
+        batter_condition = None
+        bowler_condition = None
+
+        if "bowl to" in question_lower:
+            bowler_condition = get_player_condition_before_keyword(user_question, "bowl to", "se.bowler")
+            batter_condition = get_player_condition_after_keyword(user_question, "bowl to", "se.striker")
+
+        elif "face" in question_lower:
+            batter_condition = get_player_condition_before_keyword(user_question, "face", "se.striker")
+            bowler_condition = get_player_condition_after_keyword(user_question, "face", "se.bowler")
+
+        if batter_condition is not None and bowler_condition is not None:
+            phase_condition, phase_label = get_phase_condition_from_question(user_question, "se")
+
+            if phase_condition is None:
+                phase_label = "all overs"
+
+            venue_condition = None
+
+            if has_venue_context(user_question):
+                venue_condition = get_venue_condition_from_question(user_question)
+
+            analysis_result = analyze_bowler_vs_batter_decision(
+                batter_condition=batter_condition,
+                bowler_condition=bowler_condition,
+                phase_condition=phase_condition,
+                phase_label=phase_label.replace("_", " "),
+                venue_condition=venue_condition,
+            )
+
+            combined_sql = analysis_result["sql_queries"]["direct_matchup"]
+            combined_sql += "\n\n--- batter_benchmark ---\n" + analysis_result["sql_queries"]["batter_benchmark"]
+            combined_sql += "\n\n--- phase_breakdown ---\n" + analysis_result["sql_queries"]["phase_breakdown"]
+            combined_sql += "\n\n--- recommended_lengths_lines ---\n" + analysis_result["sql_queries"]["recommended_lengths_lines"]
+            combined_sql += "\n\n--- shot_directions ---\n" + analysis_result["sql_queries"]["shot_directions"]
+            combined_sql += "\n\n--- shot_types ---\n" + analysis_result["sql_queries"]["shot_types"]
+            combined_sql += "\n\n--- similar_batter_matchup ---\n" + analysis_result["sql_queries"]["similar_batter_matchup"]
+            combined_sql += "\n\n--- similar_batter_benchmark ---\n" + analysis_result["sql_queries"]["similar_batter_benchmark"]
+            combined_sql += "\n\n--- similar_batter_lengths_lines ---\n" + analysis_result["sql_queries"]["similar_batter_lengths_lines"]
+            combined_sql += "\n\n--- similar_batter_shot_directions ---\n" + analysis_result["sql_queries"]["similar_batter_shot_directions"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Bowler vs batter decision",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "direct_matchup": analysis_result["direct_matchup"],
+                    "batter_benchmark": analysis_result["batter_benchmark"],
+                    "phase_breakdown": analysis_result["phase_breakdown"],
+                    "recommended_lengths_lines": analysis_result["recommended_lengths_lines"],
+                    "shot_directions": analysis_result["shot_directions"],
+                    "shot_types": analysis_result["shot_types"],
+                    "similar_batter_matchup": analysis_result["similar_batter_matchup"],
+                    "similar_batter_benchmark": analysis_result["similar_batter_benchmark"],
+                    "similar_batter_lengths_lines": analysis_result["similar_batter_lengths_lines"],
+                    "similar_batter_shot_directions": analysis_result["similar_batter_shot_directions"],
+                },
+                "error": None,
             }
     # Batter-specific bowling plan:
     # e.g. "what ball should be bowled to Pooran in death overs?"
@@ -6907,6 +7136,8 @@ AND EXISTS (
             }
 
     return None
+
+
 
 def answer_question_with_fallback(user_question):
     if needs_team_clarification(user_question):
