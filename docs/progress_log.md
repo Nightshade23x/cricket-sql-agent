@@ -132,3 +132,9 @@ added match summary intelligence
 added summaries for questions such as list last 5 encounters of mi vs csk
 added fastest to 1000 runs etc,fastest to 50 wickets as well
 added stats for most runs scored in pp,death overs etc
+
+day 9
+improved the agent by adding a new batter specific bowling plan layer. the agent can now ans questions like what should be bowled to pooran in the death overs
+also added forced tactical scenarios...so for eg,if user asks what spin to ball to dube,the model can ans
+so improved matchup analysis
+updated full player profiles to show current players as well rather than only old ones
