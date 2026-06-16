@@ -141,3 +141,8 @@ updated full player profiles to show current players as well rather than only ol
 added current squads using scraping and scripts
 updated team bowler recommendation to give current squad bowlers
 updated analysis file also to take into accoutn recent players 
+upgraded title prediction model
+added current squad intelligence,so who has the stronfest squad
+fixed bowler matchup ranking,more emphasis on dismissals
+added enahnced team report
+fixed kuldip yadav and kuldeep yadav mismatch
