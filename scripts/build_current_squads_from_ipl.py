@@ -251,6 +251,7 @@ NAME_ALIASES.update({
     "Macneil Noronha": "Macneil Noronha",
     "Dian Forrester": "Dian Forrester",
     "Spencer Johnson": "Spencer Johnson",
+    
 
     # DC remaining unmatched
     "Pathum Nissanka": "Pathum Nissanka",
@@ -314,6 +315,9 @@ NAME_ALIASES.update({
     "Onkar Tarmale": "Onkar Tarmale",
     "Amit Kumar": "Amit Kumar",
     "Praful Hinge": "Praful Hinge",
+})
+NAME_ALIASES.update({
+    "Kuldip Yadav": "Kuldip Yadav",
 })
 def normalize_name(name: str) -> str:
     name = name.lower()

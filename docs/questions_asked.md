@@ -397,3 +397,10 @@ we also add an extra layer to make the agent smarter...so for eg shivam dube is 
 should rashid khan bowl to pooran...also add this per venue,per phase...so should rashid bowl to pooran in the powerplay...since we dont have per team databases,this way is better,ask the model directly rather than saying which gt bowler should be bought on to bowl to pooran...unless we can do this,let me know
 also who will win next year,is there any way for us to improve it...let me know so we can
 what else can we add to make the model smarter and more of an ai agent rather than simply a knowledge base
+
+in matchups,too much emphasis is given to strike rate...heavy weightage should be number of dismissals,then strike rate
+what length should hazlewood bowl against dhoni failed...i thought we added this
+team reports still dont show legends and players to watch out for...i thought we add this...we should also add reason behind this
+also some deeper analysis..for eg if i ask how can csk beat gt
+it says if bowling first,restrict gt to 180 because they lose 80 percent of their games when this is the score etc...or dismiss their top 3 early etc..because gt is top 3 heavy,whenever the top 3 score runs they win...so this should be the next layer..then it should also give potential matchups such as let khaleel ahmed bowl against shubhman gill...so matchups per phase also
+then if batting first it says score 200 plus because gt fail to chase 200 60 percent of the time etc...then add venue specific also so how can csk beat gt at chepauk

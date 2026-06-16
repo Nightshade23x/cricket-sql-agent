@@ -23,7 +23,7 @@
 2026,CSK,Chennai Super Kings,Rahul Chahar,RD Chahar,Bowler,,,Unknown,0,1,manual_alias
 2026,CSK,Chennai Super Kings,Spencer Johnson,Spencer Johnson,Bowler,,,Unknown,0,1,manual_alias
 2026,CSK,Chennai Super Kings,Akash Madhwal,Akash Madhwal,Bowler,,,Unknown,0,1,exact
-2026,CSK,Chennai Super Kings,Kuldip Yadav,Kuldeep Yadav,Bowler,,,Unknown,0,1,fuzzy
+2026,CSK,Chennai Super Kings,Kuldip Yadav,Kuldip Yadav,Bowler,,,Unknown,0,1,manual_alias
 2026,DC,Delhi Capitals,KL Rahul,KL Rahul,WK-Batter,,,Unknown,0,1,manual_alias
 2026,DC,Delhi Capitals,Karun Nair,KK Nair,Batter,,,Unknown,0,1,manual_alias
 2026,DC,Delhi Capitals,David Miller,DA Miller,Batter,,,Unknown,0,1,manual_alias

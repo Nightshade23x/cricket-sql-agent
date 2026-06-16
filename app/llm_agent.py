@@ -17,6 +17,10 @@ from app.analysis import (
     analyze_bowler_vs_batter_decision,
     analyze_team_bowler_recommendation,
     analyze_batter_plan_against_bowler,
+    analyze_strongest_current_squads,
+    analyze_current_squad_report,
+    analyze_bowler_length_plan_against_batter,
+    analyze_enhanced_team_profile,
 )
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -1027,6 +1031,12 @@ def get_player_condition_from_question(user_question, column_name):
         "klassen": "H Klaasen",
         "klaasen": "H Klaasen",
         "hetmyer": "SO Hetmyer",
+        "hazlewood": "JR Hazlewood",
+        "josh hazlewood": "JR Hazlewood",
+        "khaleel": "KK Ahmed",
+        "khaleel ahmed": "KK Ahmed",
+        "shubman gill": "Shubman Gill",
+        "gill": "Shubman Gill",
 
         "pant": "RR Pant",
         "rishabh pant": "RR Pant",
@@ -6524,6 +6534,181 @@ AND ms.season_year = {season}
                 },
                 "error": None
             }
+            # Strongest current squad ranking
+    if (
+        "strongest current squad" in question_lower
+        or "best current squad" in question_lower
+        or "which team has the strongest squad" in question_lower
+        or "which team has the best squad" in question_lower
+        or "squad strength ranking" in question_lower
+    ):
+        analysis_result = analyze_strongest_current_squads()
+
+        combined_sql = analysis_result["sql_queries"].get("team_scores", "")
+
+        return {
+            "method": "analysis_layer",
+            "matched_question": "Strongest current squads",
+            "sql_query": combined_sql,
+            "result": analysis_result["summary"],
+            "analysis_paragraph": analysis_result.get("paragraph"),
+            "extra_tables": {
+                "team_scores": analysis_result["team_scores"],
+            },
+            "error": None,
+        }
+        # Current squad report for a team
+    if (
+        "current squad" in question_lower
+        or "squad report" in question_lower
+        or "squad strength" in question_lower
+        or ("squad" in question_lower and ("analyse" in question_lower or "analyze" in question_lower))
+    ):
+        squad_team_condition = get_team_condition_from_question(user_question, "cs.team_name")
+        team_label = get_team_label_from_question(user_question)
+
+        if squad_team_condition is not None:
+            analysis_result = analyze_current_squad_report(
+                team_condition=squad_team_condition,
+                team_label=team_label,
+            )
+
+            combined_sql = analysis_result["sql_queries"]["current_squad"]
+            combined_sql += "\n\n--- current_squad_batting ---\n" + analysis_result["sql_queries"]["current_squad_batting"]
+            combined_sql += "\n\n--- current_squad_bowling ---\n" + analysis_result["sql_queries"]["current_squad_bowling"]
+            combined_sql += "\n\n--- players_to_watch ---\n" + analysis_result["sql_queries"]["players_to_watch"]
+            combined_sql += "\n\n--- historical_batting_legends ---\n" + analysis_result["sql_queries"]["historical_batting_legends"]
+            combined_sql += "\n\n--- historical_bowling_legends ---\n" + analysis_result["sql_queries"]["historical_bowling_legends"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Current squad report",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "current_squad": analysis_result["current_squad"],
+                    "current_squad_batting": analysis_result["current_squad_batting"],
+                    "current_squad_bowling": analysis_result["current_squad_bowling"],
+                    "players_to_watch": analysis_result["players_to_watch"],
+                    "historical_batting_legends": analysis_result["historical_batting_legends"],
+                    "historical_bowling_legends": analysis_result["historical_bowling_legends"],
+                },
+                "error": None,
+            }
+    # Enhanced normal team report
+    is_enhanced_team_report_question = (
+        (
+            "analyse" in question_lower
+            or "analyze" in question_lower
+            or "team report" in question_lower
+            or "team profile" in question_lower
+            or "profile" in question_lower
+        )
+        and "squad" not in question_lower
+    )
+
+    if is_enhanced_team_report_question:
+        team_condition = get_team_condition_from_question(user_question, "d.batting_team")
+        team_label = get_team_label_from_question(user_question)
+
+        if team_condition is not None:
+            analysis_result = analyze_enhanced_team_profile(
+                team_condition=team_condition,
+                team_label=team_label,
+            )
+
+            combined_sql = ""
+            for name, sql in analysis_result["sql_queries"].items():
+                combined_sql += f"\n\n--- {name} ---\n{sql}"
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Enhanced team report",
+                "sql_query": combined_sql.strip(),
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "team_report_squad_summary": analysis_result["team_report_squad_summary"],
+                    "historical_legends": analysis_result["historical_legends"],
+                    "current_players_to_watch": analysis_result["current_players_to_watch"],
+                    "squad_snapshot": analysis_result["squad_snapshot"],
+                },
+                "error": None,
+            }
+    # Bowler-specific length/line plan vs batter
+    is_bowler_length_line_question = (
+        (
+            "what length" in question_lower
+            or "which length" in question_lower
+            or "what line" in question_lower
+            or "which line" in question_lower
+            or "where should" in question_lower
+            or "how should" in question_lower
+        )
+        and (
+            "bowl against" in question_lower
+            or "bowl to" in question_lower
+            or "against" in question_lower
+        )
+    )
+
+    if is_bowler_length_line_question:
+        bowler_condition = None
+        batter_condition = None
+
+        if "against" in question_lower:
+            bowler_condition = get_player_condition_before_keyword(user_question, "against", "se.bowler")
+            batter_condition = get_player_condition_after_keyword(user_question, "against", "se.striker")
+
+        if bowler_condition is None and "to" in question_lower:
+            bowler_condition = get_player_condition_before_keyword(user_question, "to", "se.bowler")
+            batter_condition = get_player_condition_after_keyword(user_question, "to", "se.striker")
+
+        phase_condition = None
+        phase_label = None
+
+        if "powerplay" in question_lower or "power play" in question_lower:
+            phase_condition = "FLOOR(se.ball) BETWEEN 0 AND 5"
+            phase_label = "powerplay"
+        elif "middle" in question_lower:
+            phase_condition = "FLOOR(se.ball) BETWEEN 6 AND 14"
+            phase_label = "middle overs"
+        elif "death" in question_lower:
+            phase_condition = "FLOOR(se.ball) BETWEEN 15 AND 19"
+            phase_label = "death overs"
+
+        if bowler_condition is not None and batter_condition is not None:
+            analysis_result = analyze_bowler_length_plan_against_batter(
+                bowler_condition=bowler_condition,
+                batter_condition=batter_condition,
+                phase_condition=phase_condition,
+                phase_label=phase_label,
+            )
+
+            combined_sql = analysis_result["sql_queries"]["length_line_plan"]
+            combined_sql += "\n\n--- shot_response ---\n" + analysis_result["sql_queries"]["shot_response"]
+            combined_sql += "\n\n--- direct_summary ---\n" + analysis_result["sql_queries"]["direct_summary"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Bowler-specific length and line plan",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "length_line_plan": analysis_result["length_line_plan"],
+                    "direct_length_line_plan": analysis_result["direct_length_line_plan"],
+                    "proxy_bowler_style_plan": analysis_result["proxy_bowler_style_plan"],
+                    "proxy_batter_style_plan": analysis_result["proxy_batter_style_plan"],
+                    "shot_response": analysis_result["shot_response"],
+                    "shot_direction": analysis_result["shot_direction"],
+                    "direct_summary": analysis_result["direct_summary"],
+                    "batter_profile": analysis_result["batter_profile"],
+                    "bowler_profile": analysis_result["bowler_profile"],
+                },
+                "error": None,
+            }
     # Team bowler recommendation:
     # e.g. "Which GT bowler should bowl to Pooran?"
     # e.g. "Which MI bowler should bowl to Kohli in the death overs?"
@@ -6796,7 +6981,7 @@ AND ms.season_year = {season}
                 },
                 "error": None,
             }
-    # Prediction / next season winner analysis
+        # Squad-aware title prediction
     if (
         "who will win next year" in question_lower
         or "who will win next season" in question_lower
@@ -6806,16 +6991,28 @@ AND ms.season_year = {season}
         or "title chances" in question_lower
         or "win next year" in question_lower
         or "win next season" in question_lower
+        or "strongest title contender" in question_lower
+        or "favourites to win" in question_lower
+        or "favorites to win" in question_lower
     ):
         analysis_result = analyze_team_title_chances()
 
+        combined_sql = analysis_result["sql_queries"]["team_scores"]
+        combined_sql += "\n\n--- current_squad_batting_leaders ---\n" + analysis_result["sql_queries"]["current_squad_batting_leaders"]
+        combined_sql += "\n\n--- current_squad_bowling_leaders ---\n" + analysis_result["sql_queries"]["current_squad_bowling_leaders"]
+
         return {
             "method": "analysis_layer",
-            "matched_question": "Team title chance analysis",
-            "sql_query": analysis_result["sql_query"],
+            "matched_question": "Squad-aware title prediction",
+            "sql_query": combined_sql,
             "result": analysis_result["summary"],
             "analysis_paragraph": analysis_result.get("paragraph"),
-            "error": None
+            "extra_tables": {
+                "team_scores": analysis_result["team_scores"],
+                "current_squad_batting_leaders": analysis_result["current_squad_batting_leaders"],
+                "current_squad_bowling_leaders": analysis_result["current_squad_bowling_leaders"],
+            },
+            "error": None,
         }
 
     # Bowler strategy analysis using line, length, shots, handedness, and phase
