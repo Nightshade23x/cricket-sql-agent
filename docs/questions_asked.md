@@ -390,3 +390,6 @@ maybe add most times out in the nineties as well
 most runs scored in the powerplay by a team,most runs scored in the middle overs(7-15) and most runs scored by a team in death overs...add the same for players,per match and overall...i think death overs we have,add for middle overs and pp
 also add most runs scored in final over to win a game,and most runs scored in last 5 overs to win
 
+what bowl should be bowled to pooran in the death overs...so when i ask this,it gives best lenght to bowl to him...then best type of pacer to bowl to him such as left hand etc,and best type of spinner...this is determined ofc by strike rate and dismissals in death overs to him etc
+also i would like the agent to give players still bowling...like it says shane warne keeps kohli the most quiet but warne retired in 2009 so this ans is not very relevant...so we can efit it to say historically warne has kept kohli quiet,and in terms of current players playing,so and so
+we also add an extra layer to make the agent smarter...so for eg shivam dube is a known spin basher,and the data reflects that...but now we add an extra layer saying, if a captain has no choice but to bowl spin to him,which type of spin,which handed spinner and what lenght should the spinner bowl etc...

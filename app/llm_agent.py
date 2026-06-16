@@ -3,7 +3,7 @@ from app.db import run_query
 from app.llm import ask_ollama,clean_sql_response
 from app.agent import load_examples,find_best_example
 from functools import lru_cache
-from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile, analyze_player_shots, analyze_bowler_strategy,analyze_match_summaries
+from app.analysis import analyze_player_dismissals, analyze_team_title_chances, analyze_bowler_matchups, analyze_player_profile, analyze_team_profile, analyze_player_shots, analyze_bowler_strategy,analyze_match_summaries,analyze_batter_bowling_plan
 
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -1001,6 +1001,17 @@ def get_player_condition_from_question(user_question, column_name):
         "chahal": "YS Chahal",
         "malinga": "SL Malinga",
         "rashid": "Rashid Khan",
+        "pooran": "N Pooran",
+        "nicholas pooran": "N Pooran",
+        "dube": "S Dube",
+        "shivam dube": "S Dube",
+        "dre russ": "AD Russell",
+        "russell": "AD Russell",
+        "maxwell": "GJ Maxwell",
+        "livingstone": "LS Livingstone",
+        "klassen": "H Klaasen",
+        "klaasen": "H Klaasen",
+        "hetmyer": "SO Hetmyer",
 
         "pant": "RR Pant",
         "rishabh pant": "RR Pant",
@@ -6474,6 +6485,88 @@ AND ms.season_year = {season}
                 },
                 "error": None
             }
+    # Batter-specific bowling plan:
+    # e.g. "what ball should be bowled to Pooran in death overs?"
+    # e.g. "if captain has no choice but to bowl spin to Shivam Dube"
+    is_batter_bowling_plan_question = (
+        "what bowl" in question_lower
+        or "what ball" in question_lower
+        or "which ball" in question_lower
+        or "what should be bowled" in question_lower
+        or "bowling plan to" in question_lower
+        or "bowl to" in question_lower
+        or "bowl spin to" in question_lower
+        or "bowl pace to" in question_lower
+        or "type of spin" in question_lower
+        or "type of pace" in question_lower
+        or (
+            "no choice" in question_lower
+            and ("spin" in question_lower or "pace" in question_lower)
+            and "to" in question_lower
+        )
+        or (
+            "should" in question_lower
+            and "bowl" in question_lower
+            and "to" in question_lower
+        )
+    )
+
+    if is_batter_bowling_plan_question:
+        batter_condition = get_player_condition_from_question(user_question, "se.striker")
+
+        if batter_condition is not None:
+            phase_condition, phase_label = get_phase_condition_from_question(user_question, "se")
+
+            if phase_condition is None:
+                phase_label = "all overs"
+
+            forced_mode = None
+
+            if "spin" in question_lower and (
+                "no choice" in question_lower
+                or "must bowl" in question_lower
+                or "forced" in question_lower
+                or "type of spin" in question_lower
+            ):
+                forced_mode = "spin"
+            elif "pace" in question_lower and (
+                "no choice" in question_lower
+                or "must bowl" in question_lower
+                or "forced" in question_lower
+                or "type of pace" in question_lower
+            ):
+                forced_mode = "pace"
+
+            analysis_result = analyze_batter_bowling_plan(
+                player_condition=batter_condition,
+                phase_condition=phase_condition,
+                phase_label=phase_label.replace("_", " "),
+                forced_mode=forced_mode,
+            )
+
+            combined_sql = analysis_result["sql_queries"]["best_lengths"]
+            combined_sql += "\n\n--- best_lines ---\n" + analysis_result["sql_queries"]["best_lines"]
+            combined_sql += "\n\n--- bowling_types ---\n" + analysis_result["sql_queries"]["bowling_types"]
+            combined_sql += "\n\n--- pace_options ---\n" + analysis_result["sql_queries"]["pace_options"]
+            combined_sql += "\n\n--- spin_options ---\n" + analysis_result["sql_queries"]["spin_options"]
+            combined_sql += "\n\n--- active_bowler_options ---\n" + analysis_result["sql_queries"]["active_bowler_options"]
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Batter bowling plan",
+                "sql_query": combined_sql,
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "best_lengths": analysis_result["best_lengths"],
+                    "best_lines": analysis_result["best_lines"],
+                    "bowling_types": analysis_result["bowling_types"],
+                    "pace_options": analysis_result["pace_options"],
+                    "spin_options": analysis_result["spin_options"],
+                    "active_bowler_options": analysis_result["active_bowler_options"],
+                },
+                "error": None,
+            }
     # Prediction / next season winner analysis
     if (
         "who will win next year" in question_lower
@@ -6729,6 +6822,7 @@ AND ms.season_year = {season}
             combined_sql += "\n\n--- quiet_bowlers ---\n" + analysis_result["sql_queries"]["quiet_bowlers"]
             combined_sql += "\n\n--- preferred_bowler_types ---\n" + analysis_result["sql_queries"]["preferred_bowler_types"]
             combined_sql += "\n\n--- difficult_bowler_types ---\n" + analysis_result["sql_queries"]["difficult_bowler_types"]
+            combined_sql += "\n\n--- active_quiet_bowlers ---\n" + analysis_result["sql_queries"]["active_quiet_bowlers"]
             return {
                 "method": "analysis_layer",
                 "matched_question": "Full player profile analysis",
@@ -6748,6 +6842,7 @@ AND ms.season_year = {season}
                     "quiet_bowlers": analysis_result["quiet_bowlers"],
                     "preferred_bowler_types": analysis_result["preferred_bowler_types"],
                     "difficult_bowler_types": analysis_result["difficult_bowler_types"],
+                    "active_quiet_bowlers": analysis_result["active_quiet_bowlers"],
                 },
                 "error": None
             }

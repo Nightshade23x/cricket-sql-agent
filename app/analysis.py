@@ -721,6 +721,8 @@ ORDER BY dismissals DESC;
     bowler_success_df = bowler_matchup_result["bowler_success"]
     bowler_dismissals_df = bowler_matchup_result["bowler_dismissals"]
     quiet_bowlers_df = bowler_matchup_result["quiet_bowlers"]
+    active_quiet_bowlers_df = bowler_matchup_result["active_quiet_bowlers"]
+    active_quiet_bowler = safe_first_value(active_quiet_bowlers_df, "bowler", "unknown active/recent bowler")
     preferred_bowler_types_df = bowler_matchup_result["preferred_bowler_types"]
     difficult_bowler_types_df = bowler_matchup_result["difficult_bowler_types"]
 
@@ -748,7 +750,9 @@ ORDER BY dismissals DESC;
         f"{top_opponent} and at {top_venue}. The most common dismissal type is {main_dismissal}. "
         f"Against individual bowlers, the strongest scoring matchup appears to be against {top_success_bowler}, "
         f"while {top_dismissal_bowler} has dismissed the player most often. The bowler who keeps the player quietest "
-        f"by strike rate is {quiet_bowler}. By bowling type, the player scores fastest against {preferred_bowler_type}, "
+        f"Historically, the bowler who keeps the player quietest by strike rate is {quiet_bowler}. "
+        f"Among bowlers active in the latest database seasons, the most restrictive option is {active_quiet_bowler}."
+        f" By bowling type, the player scores fastest against {preferred_bowler_type}. "
         f"while {difficult_bowler_type} appears to be the most restrictive bowling type."
     )
 
@@ -769,7 +773,7 @@ ORDER BY dismissals DESC;
             "analysis_area": "Venue pattern",
             "insight": f"Most runs have come at {top_venue}.",
         },
-                {
+        {
             "analysis_area": "Best bowler matchup",
             "insight": f"The strongest scoring matchup appears to be against {top_success_bowler}.",
         },
@@ -784,6 +788,10 @@ ORDER BY dismissals DESC;
         {
             "analysis_area": "Dismissal pattern",
             "insight": f"Most common dismissal type is {main_dismissal}.",
+        },
+        {
+            "analysis_area": "Active/recent bowling matchup",
+            "insight": f"Among bowlers active in the latest database seasons, {active_quiet_bowler} has kept the player quietest by strike rate.",
         },
     ]
 
@@ -804,6 +812,7 @@ ORDER BY dismissals DESC;
         "quiet_bowlers": quiet_bowlers_df,
         "preferred_bowler_types": preferred_bowler_types_df,
         "difficult_bowler_types": difficult_bowler_types_df,
+        "active_quiet_bowlers": active_quiet_bowlers_df,
         "sql_queries": {
             "career": career_sql,
             "season_trend": season_sql,
@@ -817,6 +826,7 @@ ORDER BY dismissals DESC;
             "quiet_bowlers": bowler_matchup_result["sql_queries"]["quiet_bowlers"],
             "preferred_bowler_types": bowler_matchup_result["sql_queries"]["preferred_bowler_types"],
             "difficult_bowler_types": bowler_matchup_result["sql_queries"]["difficult_bowler_types"],
+            "active_quiet_bowlers": bowler_matchup_result["sql_queries"]["active_quiet_bowlers"],
         },
     }
 
@@ -907,6 +917,37 @@ WHERE balls_faced >= 15
 ORDER BY strike_rate ASC, balls_faced DESC;
 """.strip()
 
+    active_quiet_bowlers_sql = f"""
+WITH bowler_matchups AS (
+    SELECT
+        se.bowler,
+        COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+        SUM(CASE WHEN se.wides IS NULL THEN 1 ELSE 0 END) AS balls_faced,
+        SUM(se.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN se.player_dismissed = se.striker
+                 AND se.wicket_type IS NOT NULL
+                 AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals
+    FROM dbo.shot_events se
+    WHERE {condition_se}
+      AND {active_recent_bowler_condition_sql("se.bowler")}
+    GROUP BY se.bowler, COALESCE(se.bowling_style_bowler, 'Unknown')
+)
+SELECT TOP 10
+    bowler,
+    bowling_style,
+    balls_faced,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls_faced, 0), 2) AS strike_rate,
+    ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average
+FROM bowler_matchups
+WHERE balls_faced >= 10
+ORDER BY strike_rate ASC, balls_faced DESC;
+""".strip()
+
     preferred_bowler_types_sql = f"""
 WITH type_matchups AS (
     SELECT
@@ -970,6 +1011,7 @@ ORDER BY strike_rate ASC, dismissals DESC;
     quiet_bowlers_df = run_query(quiet_bowlers_sql)
     preferred_bowler_types_df = run_query(preferred_bowler_types_sql)
     difficult_bowler_types_df = run_query(difficult_bowler_types_sql)
+    active_quiet_bowlers_df = run_query(active_quiet_bowlers_sql)
 
     return {
         "bowler_success": bowler_success_df,
@@ -977,14 +1019,65 @@ ORDER BY strike_rate ASC, dismissals DESC;
         "quiet_bowlers": quiet_bowlers_df,
         "preferred_bowler_types": preferred_bowler_types_df,
         "difficult_bowler_types": difficult_bowler_types_df,
+        "active_quiet_bowlers": active_quiet_bowlers_df,
         "sql_queries": {
             "bowler_success": bowler_success_sql,
             "bowler_dismissals": bowler_dismissals_sql,
             "quiet_bowlers": quiet_bowlers_sql,
             "preferred_bowler_types": preferred_bowler_types_sql,
             "difficult_bowler_types": difficult_bowler_types_sql,
+            "active_quiet_bowlers": active_quiet_bowlers_sql,
         },
     }
+
+def bowling_arm_sql(style_column):
+    clean_style = f"LOWER(COALESCE({style_column}, 'unknown'))"
+
+    return f"""
+CASE
+    WHEN {clean_style} LIKE '%left%' THEN 'Left-arm'
+    WHEN {clean_style} LIKE '%right%' THEN 'Right-arm'
+    ELSE 'Unknown arm'
+END
+""".strip()
+
+
+def bowling_category_sql(style_column):
+    clean_style = f"LOWER(COALESCE({style_column}, 'unknown'))"
+
+    return f"""
+CASE
+    WHEN {clean_style} LIKE '%legbreak%' OR {clean_style} LIKE '%leg break%' THEN 'Leg spin'
+    WHEN {clean_style} LIKE '%googly%' THEN 'Leg spin'
+    WHEN {clean_style} LIKE '%offbreak%' OR {clean_style} LIKE '%off break%' THEN 'Off spin'
+    WHEN {clean_style} LIKE '%slow left%' OR {clean_style} LIKE '%orthodox%' THEN 'Left-arm orthodox spin'
+    WHEN {clean_style} LIKE '%chinaman%' OR {clean_style} LIKE '%left arm wrist%' THEN 'Left-arm wrist spin'
+
+    WHEN {clean_style} LIKE '%fast%' THEN 'Pace'
+    WHEN {clean_style} LIKE '%medium%' THEN 'Pace'
+
+    ELSE 'Unknown type'
+END
+""".strip()
+
+
+def active_recent_bowler_condition_sql(bowler_column):
+    """
+    Local-only definition of active:
+    bowlers who appeared in the latest two IPL seasons available in the database.
+    """
+    return f"""
+{bowler_column} IN (
+    SELECT DISTINCT d2.bowler
+    FROM deliveries d2
+    JOIN matches m2
+        ON d2.match_id = m2.match_id
+    WHERE YEAR(CAST(m2.start_date AS date)) >= (
+        SELECT MAX(YEAR(CAST(start_date AS date))) - 1
+        FROM matches
+    )
+)
+""".strip()
 
 def analyze_team_title_chances():
     """
@@ -2094,6 +2187,275 @@ ORDER BY wickets DESC, economy_rate ASC;
             "phases": phase_sql,
         },
     }
+
+def analyze_batter_bowling_plan(player_condition, phase_condition=None, phase_label="all overs", forced_mode=None):
+    """
+    Builds a bowling plan against a batter using shot_events.
+
+    player_condition should use se.striker, for example:
+    se.striker = 'N Pooran'
+
+    forced_mode can be:
+    - None
+    - "spin"
+    - "pace"
+    """
+
+    condition_se = player_condition
+    condition_se = condition_se.replace("d.striker", "se.striker")
+    condition_se = condition_se.replace("pd.batter", "se.striker")
+
+    where_clauses = [condition_se]
+
+    if phase_condition is not None:
+        phase_condition = phase_condition.replace("d.ball", "se.ball")
+        where_clauses.append(phase_condition)
+
+    if forced_mode == "spin":
+        where_clauses.append(f"{bowling_category_sql('se.bowling_style_bowler')} LIKE '%spin%'")
+
+    if forced_mode == "pace":
+        where_clauses.append(f"{bowling_category_sql('se.bowling_style_bowler')} = 'Pace'")
+
+    where_sql = " AND ".join(where_clauses)
+
+    bowling_arm_expr = bowling_arm_sql("se.bowling_style_bowler")
+    bowling_category_expr = bowling_category_sql("se.bowling_style_bowler")
+    active_condition = active_recent_bowler_condition_sql("se.bowler")
+
+    length_sql = f"""
+SELECT
+    COALESCE(se.ball_length, 'Unknown') AS ball_length,
+    COUNT(*) AS balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(se.runs_off_bat) * 100.0 / NULLIF(COUNT(*), 0), 2) AS strike_rate
+FROM dbo.shot_events se
+WHERE {where_sql}
+  AND se.ball_length IS NOT NULL
+GROUP BY COALESCE(se.ball_length, 'Unknown')
+HAVING COUNT(*) >= 5
+ORDER BY strike_rate ASC, dismissals DESC, balls DESC;
+""".strip()
+
+    line_sql = f"""
+SELECT
+    COALESCE(se.ball_line, 'Unknown') AS ball_line,
+    COUNT(*) AS balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(se.runs_off_bat) * 100.0 / NULLIF(COUNT(*), 0), 2) AS strike_rate
+FROM dbo.shot_events se
+WHERE {where_sql}
+  AND se.ball_line IS NOT NULL
+GROUP BY COALESCE(se.ball_line, 'Unknown')
+HAVING COUNT(*) >= 5
+ORDER BY strike_rate ASC, dismissals DESC, balls DESC;
+""".strip()
+
+    bowling_type_sql_query = f"""
+SELECT
+    {bowling_category_expr} AS bowling_type,
+    {bowling_arm_expr} AS bowling_arm,
+    COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+    COUNT(*) AS balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(se.runs_off_bat) * 100.0 / NULLIF(COUNT(*), 0), 2) AS strike_rate
+FROM dbo.shot_events se
+WHERE {where_sql}
+  AND se.bowling_style_bowler IS NOT NULL
+GROUP BY
+    {bowling_category_expr},
+    {bowling_arm_expr},
+    COALESCE(se.bowling_style_bowler, 'Unknown')
+HAVING COUNT(*) >= 8
+ORDER BY strike_rate ASC, dismissals DESC, balls DESC;
+""".strip()
+
+    pace_sql = f"""
+SELECT
+    {bowling_arm_expr} AS bowling_arm,
+    COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+    COALESCE(se.ball_length, 'Unknown') AS ball_length,
+    COALESCE(se.ball_line, 'Unknown') AS ball_line,
+    COUNT(*) AS balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(se.runs_off_bat) * 100.0 / NULLIF(COUNT(*), 0), 2) AS strike_rate
+FROM dbo.shot_events se
+WHERE {where_sql}
+  AND {bowling_category_expr} = 'Pace'
+GROUP BY
+    {bowling_arm_expr},
+    COALESCE(se.bowling_style_bowler, 'Unknown'),
+    COALESCE(se.ball_length, 'Unknown'),
+    COALESCE(se.ball_line, 'Unknown')
+HAVING COUNT(*) >= 5
+ORDER BY strike_rate ASC, dismissals DESC, balls DESC;
+""".strip()
+
+    spin_sql = f"""
+SELECT
+    {bowling_arm_expr} AS bowling_arm,
+    {bowling_category_expr} AS spin_type,
+    COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+    COALESCE(se.ball_length, 'Unknown') AS ball_length,
+    COALESCE(se.ball_line, 'Unknown') AS ball_line,
+    COUNT(*) AS balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(se.runs_off_bat) * 100.0 / NULLIF(COUNT(*), 0), 2) AS strike_rate
+FROM dbo.shot_events se
+WHERE {where_sql}
+  AND {bowling_category_expr} LIKE '%spin%'
+GROUP BY
+    {bowling_arm_expr},
+    {bowling_category_expr},
+    COALESCE(se.bowling_style_bowler, 'Unknown'),
+    COALESCE(se.ball_length, 'Unknown'),
+    COALESCE(se.ball_line, 'Unknown')
+HAVING COUNT(*) >= 5
+ORDER BY strike_rate ASC, dismissals DESC, balls DESC;
+""".strip()
+
+    active_bowlers_sql = f"""
+SELECT TOP 10
+    se.bowler,
+    {bowling_arm_expr} AS bowling_arm,
+    {bowling_category_expr} AS bowling_type,
+    COALESCE(se.bowling_style_bowler, 'Unknown') AS bowling_style,
+    COUNT(*) AS balls,
+    SUM(se.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN se.player_dismissed = se.striker
+             AND se.wicket_type IS NOT NULL
+             AND se.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(se.runs_off_bat) * 100.0 / NULLIF(COUNT(*), 0), 2) AS strike_rate
+FROM dbo.shot_events se
+WHERE {where_sql}
+  AND {active_condition}
+GROUP BY
+    se.bowler,
+    {bowling_arm_expr},
+    {bowling_category_expr},
+    COALESCE(se.bowling_style_bowler, 'Unknown')
+HAVING COUNT(*) >= 5
+ORDER BY strike_rate ASC, dismissals DESC, balls DESC;
+""".strip()
+
+    length_df = run_query(length_sql)
+    line_df = run_query(line_sql)
+    bowling_type_df = run_query(bowling_type_sql_query)
+    pace_df = run_query(pace_sql)
+    spin_df = run_query(spin_sql)
+    active_bowlers_df = run_query(active_bowlers_sql)
+
+    best_length = safe_first_value(length_df, "ball_length", "unknown length")
+    best_line = safe_first_value(line_df, "ball_line", "unknown line")
+    best_type = safe_first_value(bowling_type_df, "bowling_style", "unknown bowling style")
+    best_pace_arm = safe_first_value(pace_df, "bowling_arm", "unknown arm")
+    best_pace_length = safe_first_value(pace_df, "ball_length", "unknown length")
+    best_spin_type = safe_first_value(spin_df, "spin_type", "unknown spin type")
+    best_spin_arm = safe_first_value(spin_df, "bowling_arm", "unknown arm")
+    best_spin_length = safe_first_value(spin_df, "ball_length", "unknown length")
+    best_active_bowler = safe_first_value(active_bowlers_df, "bowler", "unknown active/recent bowler")
+
+    if forced_mode == "spin":
+        paragraph = (
+            f"If spin has to be bowled to this batter in {phase_label}, the data suggests using "
+            f"{best_spin_arm} {best_spin_type}, ideally around a {best_spin_length} length. "
+            f"Historically, the most restrictive overall length is {best_length}, and the most restrictive line is {best_line}. "
+            f"Among bowlers active in the latest database seasons, {best_active_bowler} has the best record by this filter."
+        )
+    elif forced_mode == "pace":
+        paragraph = (
+            f"If pace has to be bowled to this batter in {phase_label}, the data suggests using "
+            f"{best_pace_arm} pace, ideally around a {best_pace_length} length. "
+            f"Historically, the most restrictive overall length is {best_length}, and the most restrictive line is {best_line}. "
+            f"Among bowlers active in the latest database seasons, {best_active_bowler} has the best record by this filter."
+        )
+    else:
+        paragraph = (
+            f"For this batter in {phase_label}, the data suggests bowling a {best_length} length and {best_line} line. "
+            f"The most restrictive bowling style historically is {best_type}. "
+            f"If choosing pace, the best option appears to be {best_pace_arm} pace on a {best_pace_length} length. "
+            f"If forced to bowl spin, the best option appears to be {best_spin_arm} {best_spin_type} on a {best_spin_length} length. "
+            f"Among bowlers active in the latest database seasons, {best_active_bowler} has the best record by this filter."
+        )
+
+    summary_df = run_query(f"""
+SELECT
+    'Recommended length' AS analysis_area,
+    '{best_length}' AS insight
+UNION ALL
+SELECT
+    'Recommended line',
+    '{best_line}'
+UNION ALL
+SELECT
+    'Best historical bowling style',
+    '{best_type}'
+UNION ALL
+SELECT
+    'Best pace option',
+    '{best_pace_arm} pace, {best_pace_length} length'
+UNION ALL
+SELECT
+    'Best spin option',
+    '{best_spin_arm} {best_spin_type}, {best_spin_length} length'
+UNION ALL
+SELECT
+    'Best active/recent bowler',
+    '{best_active_bowler}'
+""")
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "best_lengths": length_df,
+        "best_lines": line_df,
+        "bowling_types": bowling_type_df,
+        "pace_options": pace_df,
+        "spin_options": spin_df,
+        "active_bowler_options": active_bowlers_df,
+        "sql_queries": {
+            "best_lengths": length_sql,
+            "best_lines": line_sql,
+            "bowling_types": bowling_type_sql_query,
+            "pace_options": pace_sql,
+            "spin_options": spin_sql,
+            "active_bowler_options": active_bowlers_sql,
+        },
+    }
+
 def analyze_match_summaries(match_filter_sql, context_label, limit=5):
     """
     Return match summaries with result, scoreline, top scorer, and top wicket-taker.
