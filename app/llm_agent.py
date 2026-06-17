@@ -22,6 +22,7 @@ from app.analysis import (
     analyze_bowler_length_plan_against_batter,
     analyze_enhanced_team_profile,
     analyze_team_vs_team_match_plan,
+    analyze_venue_profile,
 )
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -6630,6 +6631,46 @@ AND ms.season_year = {season}
                 },
                 "error": None
             }
+    is_venue_profile_question = (
+        "tell me about" in question_lower
+        or "venue profile" in question_lower
+        or "ground profile" in question_lower
+        or "stadium profile" in question_lower
+        or "stats at" in question_lower
+        or "stats for" in question_lower
+    )
+
+    if is_venue_profile_question:
+        venue_condition, venue_label = get_venue_condition_from_question(user_question)
+
+        if venue_condition is not None:
+            analysis_result = analyze_venue_profile(
+                venue_condition=venue_condition,
+                venue_label=venue_label,
+            )
+
+            combined_sql = ""
+            for name, sql in analysis_result["sql_queries"].items():
+                combined_sql += f"\n\n--- {name} ---\n{sql}"
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Venue profile",
+                "sql_query": combined_sql.strip(),
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "venue_overview": analysis_result.get("overview"),
+                    "highest_team_scores": analysis_result.get("highest_team_scores"),
+                    "top_run_scorers": analysis_result.get("top_run_scorers"),
+                    "top_wicket_takers": analysis_result.get("top_wicket_takers"),
+                    "best_individual_scores": analysis_result.get("best_individual_scores"),
+                    "best_bowling_figures": analysis_result.get("best_bowling_figures"),
+                    "best_non_home_batters": analysis_result.get("non_home_batters"),
+                    "best_non_home_bowlers": analysis_result.get("non_home_bowlers"),
+                },
+                "error": None,
+            }
     # Team-vs-team match plan
     is_match_plan_question = (
         (
@@ -6676,6 +6717,7 @@ AND ms.season_year = {season}
                     "action_plan": analysis_result.get("action_plan"),
                     "head_to_head": analysis_result.get("head_to_head"),
                     "recent_head_to_head_results": analysis_result.get("recent_head_to_head_results"),
+                    "venue_profile": analysis_result.get("venue_profile"),
                     "opponent_chase_thresholds": analysis_result.get("opponent_chase_thresholds"),
                     "recent_chase_benchmark": analysis_result.get("recent_chase_benchmark"),
                     "opponent_batting_first_restrict": analysis_result.get("opponent_batting_first_restrict"),

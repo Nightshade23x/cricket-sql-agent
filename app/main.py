@@ -80,6 +80,42 @@ def display_result(title, value):
             clean_value[numeric_columns] = clean_value[numeric_columns].round(2)
 
             st.dataframe(clean_value, use_container_width=True, hide_index=True)
+
+            long_text_columns = [
+                col for col in clean_value.columns
+                if col.lower() in ["reason", "why", "insight", "summary", "trophy_summary", "result_summary"]
+            ]
+
+            if long_text_columns:
+                st.markdown("#### Full text details")
+
+                for row_index, row in clean_value.iterrows():
+                    label_parts = []
+
+                    for possible_label in [
+                        "display_name",
+                        "player",
+                        "team_a_bowler",
+                        "team_a_batter",
+                        "phase",
+                        "section",
+                        "analysis_area",
+                        "team",
+                    ]:
+                        if possible_label in clean_value.columns:
+                            label_parts.append(str(row.get(possible_label, "")))
+
+                    label = " – ".join([part for part in label_parts if part and part != "nan"])
+
+                    if not label:
+                        label = f"Row {row_index + 1}"
+
+                    for text_col in long_text_columns:
+                        text_value = row.get(text_col, "")
+
+                        if pd.notna(text_value) and str(text_value).strip():
+                            st.markdown(f"**{label}**")
+                            st.write(str(text_value))
         return
 
     if isinstance(value, (list, tuple)):
@@ -97,142 +133,3 @@ def display_result(title, value):
         return
 
     st.write(value)
-
-
-if "question_input" not in st.session_state:
-    st.session_state.question_input = ""
-
-if "last_response" not in st.session_state:
-    st.session_state.last_response = None
-
-if "last_question" not in st.session_state:
-    st.session_state.last_question = ""
-
-
-st.title("Cricket SQL Agent")
-st.caption("Ask IPL analytics, squad, matchup, and tactical match-plan questions.")
-
-with st.sidebar:
-    st.header("Example questions")
-
-    for group_name, questions in EXAMPLE_QUESTION_GROUPS.items():
-        with st.expander(group_name, expanded=(group_name == "Match plans")):
-            for question in questions:
-                st.button(
-                    question,
-                    key=f"example_{group_name}_{question}",
-                    on_click=set_example_question,
-                    args=(question,),
-                    use_container_width=True,
-                )
-
-    st.divider()
-
-    if st.button("Clear question", use_container_width=True):
-        st.session_state.question_input = ""
-        st.session_state.last_response = None
-        st.session_state.last_question = ""
-        st.rerun()
-
-
-left_col, right_col = st.columns([2, 1])
-
-with left_col:
-    user_question = st.text_area(
-        "Ask a cricket question",
-        key="question_input",
-        height=100,
-        placeholder="Example: How can CSK beat GT at Chepauk?",
-    )
-
-with right_col:
-    st.markdown("### Current capabilities")
-    st.markdown(
-        """
-        - Match plans  
-        - Current squad reports  
-        - Title prediction  
-        - Bowler-vs-batter matchups  
-        - Length and line plans  
-        - Player profiles  
-        - Classic SQL stats  
-        """
-    )
-
-
-answer_clicked = st.button(
-    "Give answer",
-    type="primary",
-    use_container_width=True,
-)
-
-if answer_clicked:
-    clean_question = st.session_state.question_input.strip()
-
-    if not clean_question:
-        st.warning("Type a question or choose one of the examples.")
-    else:
-        with st.spinner("Thinking..."):
-            response = answer_question_with_fallback(clean_question)
-
-        st.session_state.last_response = response
-        st.session_state.last_question = clean_question
-
-
-response = st.session_state.last_response
-
-if response is not None:
-    st.divider()
-
-    st.markdown("## Answer")
-    st.caption(f"Question: {st.session_state.last_question}")
-
-    error = response.get("error")
-
-    if error:
-        st.error(error)
-
-    matched_question = response.get("matched_question")
-    method = response.get("method")
-
-    meta_cols = st.columns(2)
-
-    with meta_cols[0]:
-        if matched_question:
-            st.info(f"Matched route: {matched_question}")
-
-    with meta_cols[1]:
-        if method:
-            st.info(f"Method: {method}")
-
-    analysis_paragraph = response.get("analysis_paragraph")
-
-    if analysis_paragraph:
-        st.markdown("### Summary")
-        st.write(analysis_paragraph)
-
-    result = response.get("result")
-
-    if result is not None:
-        st.markdown("### Main result")
-        display_result("Main result", result)
-
-    extra_tables = response.get("extra_tables", {})
-
-    if extra_tables:
-        st.markdown("### Extra analysis tables")
-
-        for table_name, table_value in extra_tables.items():
-            if not should_show_table(table_value):
-                continue
-
-            pretty_name = table_name.replace("_", " ").title()
-
-            with st.expander(pretty_name, expanded=False):
-                display_result(pretty_name, table_value)
-
-    sql_query = response.get("sql_query")
-
-    if sql_query:
-        with st.expander("SQL used", expanded=False):
-            st.code(sql_query, language="sql")

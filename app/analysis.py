@@ -125,6 +125,484 @@ END
 """.strip()
 def empty_dataframe():
     return pd.DataFrame()
+def get_venue_story(venue_label):
+    venue_key = str(venue_label).lower()
+
+    stories = {
+        "chepauk": {
+            "home_team": "Chennai Super Kings",
+            "story": (
+                "Chepauk, officially the MA Chidambaram Stadium in Chennai, is one of the IPL's most recognisable venues. "
+                "It is Chennai Super Kings' home ground and is closely linked with CSK's yellow identity, the Whistle Podu culture, "
+                "MS Dhoni's captaincy era and spin-friendly tactical cricket. Chepauk often rewards batters who manage tempo well and bowlers "
+                "who use cutters, spin, changes of pace and disciplined lengths."
+            ),
+        },
+        "eden": {
+            "home_team": "Kolkata Knight Riders",
+            "story": (
+                "Eden Gardens in Kolkata is one of cricket's great stadiums and the home of Kolkata Knight Riders. "
+                "It is strongly associated with KKR's purple-and-gold identity, loud crowds and high-pressure night matches. "
+                "In IPL cricket, Eden Gardens can produce quick scoring because of the outfield and boundary dimensions, but the venue can also reward "
+                "mystery spin and smart powerplay bowling."
+            ),
+        },
+        "wankhede": {
+            "home_team": "Mumbai Indians",
+            "story": (
+                "Wankhede Stadium in Mumbai is the home of Mumbai Indians and one of the IPL's most famous high-scoring venues. "
+                "It is associated with MI's blue identity, Rohit Sharma's title era, Jasprit Bumrah's death bowling and strong chasing conditions. "
+                "The ground often helps stroke-makers because of pace, bounce and quick outfield, while dew can make chasing attractive."
+            ),
+        },
+        "chinnaswamy": {
+            "home_team": "Royal Challengers Bengaluru",
+            "story": (
+                "M Chinnaswamy Stadium in Bengaluru is Royal Challengers Bengaluru's home ground and one of the IPL's most explosive batting venues. "
+                "It is tied to RCB's red-and-gold identity, Virat Kohli, the Ee Sala Cup Namdu culture and huge crowd energy. "
+                "Short boundaries and fast scoring conditions often make par scores higher here than at many other IPL venues."
+            ),
+        },
+        "narendra modi": {
+            "home_team": "Gujarat Titans",
+            "story": (
+                "Narendra Modi Stadium in Ahmedabad is Gujarat Titans' main home venue and one of the largest cricket stadiums in the world. "
+                "It is linked with GT's modern IPL identity, Shubman Gill's batting, Rashid Khan's control and strong bowling depth. "
+                "Because of the large square boundaries and varying surfaces, the ground can produce both high-scoring games and tactical bowling contests."
+            ),
+        },
+        "sawai mansingh": {
+            "home_team": "Rajasthan Royals",
+            "story": (
+                "Sawai Mansingh Stadium in Jaipur is Rajasthan Royals' home ground and is associated with RR's pink identity, smart recruitment and backing of young talent. "
+                "The venue often rewards disciplined bowling, smart spin use and batters who build innings rather than only relying on power."
+            ),
+        },
+        "arun jaitley": {
+            "home_team": "Delhi Capitals",
+            "story": (
+                "Arun Jaitley Stadium in Delhi is Delhi Capitals' home ground. It is usually associated with small boundaries, quick scoring and surfaces that can help spin. "
+                "For Delhi, the venue has often been linked with aggressive batting, Indian spin options and tactical matchups."
+            ),
+        },
+        "uppal": {
+            "home_team": "Sunrisers Hyderabad",
+            "story": (
+                "Rajiv Gandhi International Stadium in Hyderabad is Sunrisers Hyderabad's home ground. It is tied to SRH's orange identity and historically strong bowling culture. "
+                "The venue has hosted both high-scoring games and strong defending performances, depending on surface and dew."
+            ),
+        },
+        "mohali": {
+            "home_team": "Punjab Kings",
+            "story": (
+                "Mohali has been one of Punjab Kings' key home venues and is known for pace, bounce and good batting value. "
+                "It has often suited attacking batters and fast bowlers who can use the new ball well."
+            ),
+        },
+        "lucknow": {
+            "home_team": "Lucknow Super Giants",
+            "story": (
+                "Ekana Stadium in Lucknow is Lucknow Super Giants' home ground. It has often played as a more tactical venue, where spin, cutters and middle-over control can matter heavily. "
+                "For LSG, the venue fits a squad-building identity based on depth and bowling options."
+            ),
+        },
+    }
+
+    for key, value in stories.items():
+        if key in venue_key:
+            return value["story"], value["home_team"]
+
+    return (
+        f"{venue_label} is an IPL venue whose character depends on pitch type, boundary size, dew and team combinations. "
+        "The local dataset can still show whether it has recently behaved as a chasing ground, defending ground, batting venue or bowler-friendly venue.",
+        None,
+    )
+
+
+def analyze_venue_profile(venue_condition, venue_label):
+    venue_label_sql = str(venue_label).replace("'", "''")
+    venue_filter = f"AND {venue_condition}" if venue_condition is not None else ""
+
+    venue_story, home_team = get_venue_story(venue_label)
+    home_team_sql = str(home_team).replace("'", "''") if home_team else ""
+
+    overview_sql = f"""
+WITH latest AS (
+    SELECT MAX(YEAR(CAST(start_date AS date))) AS latest_season
+    FROM matches
+),
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        SUM(d.runs_off_bat + d.extras) AS total_runs
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE 1 = 1
+      {venue_filter}
+    GROUP BY
+        d.match_id,
+        d.innings,
+        d.batting_team
+),
+second_innings_team AS (
+    SELECT
+        d.match_id,
+        d.batting_team AS chasing_team,
+        ROW_NUMBER() OVER (
+            PARTITION BY d.match_id
+            ORDER BY MIN(d.ball)
+        ) AS rn
+    FROM deliveries d
+    GROUP BY
+        d.match_id,
+        d.batting_team,
+        d.innings
+    HAVING d.innings = 2
+),
+match_summary AS (
+    SELECT
+        m.match_id,
+        m.start_date,
+        m.venue,
+        m.winner,
+        i1.total_runs AS first_innings_score,
+        i2.total_runs AS second_innings_score,
+        sit.chasing_team
+    FROM matches m
+    LEFT JOIN innings_scores i1
+        ON m.match_id = i1.match_id
+       AND i1.innings = 1
+    LEFT JOIN innings_scores i2
+        ON m.match_id = i2.match_id
+       AND i2.innings = 2
+    LEFT JOIN second_innings_team sit
+        ON m.match_id = sit.match_id
+       AND sit.rn = 1
+    WHERE 1 = 1
+      {venue_filter}
+)
+SELECT
+    '{venue_label_sql}' AS venue,
+    COUNT(*) AS matches,
+    ROUND(AVG(first_innings_score * 1.0), 1) AS avg_first_innings_score,
+    ROUND(AVG(second_innings_score * 1.0), 1) AS avg_second_innings_score,
+    MAX(first_innings_score) AS highest_first_innings_score,
+    MIN(first_innings_score) AS lowest_first_innings_score,
+    SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) AS chasing_wins,
+    COUNT(*) - SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) AS batting_first_wins,
+    ROUND(
+        SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0),
+        1
+    ) AS chasing_win_pct,
+    ROUND(
+        (COUNT(*) - SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END)) * 100.0 / NULLIF(COUNT(*), 0),
+        1
+    ) AS batting_first_win_pct
+FROM match_summary
+WHERE first_innings_score IS NOT NULL;
+""".strip()
+
+    highest_team_score_sql = f"""
+WITH innings_scores AS (
+    SELECT
+        m.start_date,
+        m.venue,
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        d.bowling_team,
+        SUM(d.runs_off_bat + d.extras) AS total_runs
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE 1 = 1
+      {venue_filter}
+    GROUP BY
+        m.start_date,
+        m.venue,
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        d.bowling_team
+)
+SELECT TOP 5
+    batting_team,
+    bowling_team,
+    total_runs,
+    innings,
+    start_date,
+    venue
+FROM innings_scores
+ORDER BY total_runs DESC;
+""".strip()
+
+    top_run_scorers_sql = f"""
+SELECT TOP 10
+    d.striker AS player,
+    SUM(d.runs_off_bat) AS runs,
+    COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls_faced,
+    COUNT(DISTINCT d.match_id) AS matches,
+    ROUND(SUM(d.runs_off_bat) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides,0)=0 THEN 1 END), 0), 2) AS strike_rate
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE 1 = 1
+  {venue_filter}
+GROUP BY d.striker
+ORDER BY runs DESC;
+""".strip()
+
+    top_wicket_takers_sql = f"""
+WITH bowler_venue AS (
+    SELECT
+        d.bowler AS player,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+             AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END) AS legal_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE 1 = 1
+      {venue_filter}
+    GROUP BY d.bowler
+)
+SELECT TOP 10
+    player,
+    wickets,
+    matches,
+    CONCAT(legal_balls / 6, '.', legal_balls % 6) AS overs_bowled
+FROM bowler_venue
+WHERE wickets > 0
+ORDER BY wickets DESC, legal_balls DESC;
+""".strip()
+
+    best_individual_scores_sql = f"""
+WITH player_scores AS (
+    SELECT
+        m.start_date,
+        m.venue,
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        d.striker AS player,
+        SUM(d.runs_off_bat) AS runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE 1 = 1
+      {venue_filter}
+    GROUP BY
+        m.start_date,
+        m.venue,
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        d.striker
+)
+SELECT TOP 10
+    player,
+    batting_team,
+    runs,
+    balls,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 1) AS strike_rate,
+    start_date,
+    venue
+FROM player_scores
+ORDER BY runs DESC;
+""".strip()
+
+    best_bowling_figures_sql = f"""
+WITH bowling_figures AS (
+    SELECT
+        m.start_date,
+        m.venue,
+        d.match_id,
+        d.innings,
+        d.bowling_team,
+        d.bowler AS player,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(d.runs_off_bat + d.extras) AS runs_conceded,
+        COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+            AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END) AS legal_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE 1 = 1
+      {venue_filter}
+    GROUP BY
+        m.start_date,
+        m.venue,
+        d.match_id,
+        d.innings,
+        d.bowling_team,
+        d.bowler
+)
+SELECT TOP 10
+    player,
+    bowling_team,
+    wickets,
+    runs_conceded,
+    CONCAT(legal_balls / 6, '.', legal_balls % 6) AS overs_bowled,
+    start_date,
+    venue
+FROM bowling_figures
+ORDER BY wickets DESC, runs_conceded ASC;
+""".strip()
+
+    non_home_batters_sql = f"""
+SELECT TOP 10
+    d.striker AS player,
+    d.batting_team,
+    SUM(d.runs_off_bat) AS runs,
+    COUNT(DISTINCT d.match_id) AS matches,
+    ROUND(SUM(d.runs_off_bat) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides,0)=0 THEN 1 END), 0), 2) AS strike_rate
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE 1 = 1
+  {venue_filter}
+  {"AND d.batting_team <> '" + home_team_sql + "'" if home_team else ""}
+GROUP BY
+    d.striker,
+    d.batting_team
+ORDER BY runs DESC;
+""".strip()
+
+    non_home_bowlers_sql = f"""
+WITH bowler_venue AS (
+    SELECT
+        d.bowler AS player,
+        d.bowling_team,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+             AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END) AS legal_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE 1 = 1
+      {venue_filter}
+      {"AND d.bowling_team <> '" + home_team_sql + "'" if home_team else ""}
+    GROUP BY
+        d.bowler,
+        d.bowling_team
+)
+SELECT TOP 10
+    player,
+    bowling_team,
+    wickets,
+    matches,
+    CONCAT(legal_balls / 6, '.', legal_balls % 6) AS overs_bowled
+FROM bowler_venue
+WHERE wickets > 0
+ORDER BY wickets DESC, legal_balls DESC;
+""".strip()
+
+    overview_df = run_query(overview_sql)
+    highest_team_score_df = run_query(highest_team_score_sql)
+    top_run_scorers_df = run_query(top_run_scorers_sql)
+    top_wicket_takers_df = run_query(top_wicket_takers_sql)
+    best_individual_scores_df = run_query(best_individual_scores_sql)
+    best_bowling_figures_df = run_query(best_bowling_figures_sql)
+    non_home_batters_df = run_query(non_home_batters_sql)
+    non_home_bowlers_df = run_query(non_home_bowlers_sql)
+
+    avg_first = safe_first_value(overview_df, "avg_first_innings_score", None)
+    chasing_win_pct = safe_first_value(overview_df, "chasing_win_pct", None)
+    batting_first_win_pct = safe_first_value(overview_df, "batting_first_win_pct", None)
+    matches = safe_first_value(overview_df, "matches", None)
+
+    top_batter = safe_first_value(top_run_scorers_df, "player", "the leading run-scorer")
+    top_bowler = safe_first_value(top_wicket_takers_df, "player", "the leading wicket-taker")
+    highest_score_team = safe_first_value(highest_team_score_df, "batting_team", "a team")
+    highest_score = safe_first_value(highest_team_score_df, "total_runs", None)
+
+    toss_text = "The toss trend is fairly balanced."
+    try:
+        if float(chasing_win_pct) >= 55:
+            toss_text = "The data leans towards chasing, so bowling first has been the stronger toss choice."
+        elif float(batting_first_win_pct) >= 55:
+            toss_text = "The data leans towards batting first and defending, so setting a total has been the stronger toss choice."
+    except Exception:
+        pass
+
+    def format_whole_number(value):
+        try:
+            return f"{float(value):.0f}"
+        except Exception:
+            return "N/A"
+
+    def format_one_decimal(value):
+        try:
+            return f"{float(value):.1f}"
+        except Exception:
+            return "N/A"
+
+    paragraph = (
+        f"{venue_story} In the local IPL dataset, {venue_label} has {format_whole_number(matches)} matches with an average first-innings score of "
+        f"{format_one_decimal(avg_first)}. Chasing teams have won {format_one_decimal(chasing_win_pct)}% of games, while batting-first teams have won "
+        f"{format_one_decimal(batting_first_win_pct)}%. {toss_text} The venue's leading run-scorer in this dataset is {top_batter}, "
+        f"while the leading wicket-taker is {top_bowler}. "
+        f"The highest innings score recorded here in the dataset is "
+        f"{format_whole_number(highest_score)} by {highest_score_team}."
+    )
+    summary_df = pd.DataFrame(
+        [
+            {
+                "section": "Venue profile",
+                "summary": paragraph,
+            }
+        ]
+    )
+
+    return {
+        "paragraph": paragraph,
+        "summary": summary_df,
+        "overview": overview_df,
+        "highest_team_scores": highest_team_score_df,
+        "top_run_scorers": top_run_scorers_df,
+        "top_wicket_takers": top_wicket_takers_df,
+        "best_individual_scores": best_individual_scores_df,
+        "best_bowling_figures": best_bowling_figures_df,
+        "non_home_batters": non_home_batters_df,
+        "non_home_bowlers": non_home_bowlers_df,
+        "sql_queries": {
+            "overview": overview_sql,
+            "highest_team_scores": highest_team_score_sql,
+            "top_run_scorers": top_run_scorers_sql,
+            "top_wicket_takers": top_wicket_takers_sql,
+            "best_individual_scores": best_individual_scores_sql,
+            "best_bowling_figures": best_bowling_figures_sql,
+            "non_home_batters": non_home_batters_sql,
+            "non_home_bowlers": non_home_bowlers_sql,
+        },
+    }
 def analyze_team_vs_team_match_plan(
     team_a_condition,
     team_b_condition,
@@ -817,6 +1295,97 @@ ORDER BY
 
     head_to_head_df = run_query(head_to_head_sql)
     recent_head_to_head_df = run_query(recent_head_to_head_sql)
+    venue_profile_sql = ""
+    venue_profile_df = pd.DataFrame()
+
+    if venue_condition is not None:
+        venue_profile_sql = f"""
+WITH latest AS (
+    SELECT MAX(YEAR(CAST(start_date AS date))) AS latest_season
+    FROM matches
+),
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        SUM(d.runs_off_bat + d.extras) AS total_runs
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    CROSS JOIN latest l
+    WHERE YEAR(CAST(m.start_date AS date)) >= l.latest_season - 2
+      {venue_filter}
+    GROUP BY
+        d.match_id,
+        d.innings
+),
+second_innings_team AS (
+    SELECT
+        d.match_id,
+        d.batting_team AS chasing_team,
+        ROW_NUMBER() OVER (
+            PARTITION BY d.match_id
+            ORDER BY MIN(d.ball)
+        ) AS rn
+    FROM deliveries d
+    WHERE d.innings = 2
+    GROUP BY
+        d.match_id,
+        d.batting_team
+),
+match_summary AS (
+    SELECT
+        m.match_id,
+        m.start_date,
+        m.venue,
+        m.winner,
+        i1.total_runs AS first_innings_score,
+        i2.total_runs AS second_innings_score,
+        sit.chasing_team
+    FROM matches m
+    CROSS JOIN latest l
+    LEFT JOIN innings_scores i1
+        ON m.match_id = i1.match_id
+       AND i1.innings = 1
+    LEFT JOIN innings_scores i2
+        ON m.match_id = i2.match_id
+       AND i2.innings = 2
+    LEFT JOIN second_innings_team sit
+        ON m.match_id = sit.match_id
+       AND sit.rn = 1
+    WHERE YEAR(CAST(m.start_date AS date)) >= l.latest_season - 2
+      {venue_filter}
+)
+SELECT
+    '{str(venue_label).replace("'", "''")}' AS venue,
+    COUNT(*) AS matches,
+    ROUND(AVG(first_innings_score * 1.0), 2) AS avg_first_innings_score,
+    ROUND(AVG(second_innings_score * 1.0), 2) AS avg_second_innings_score,
+    MAX(first_innings_score) AS highest_first_innings_score,
+    MIN(first_innings_score) AS lowest_first_innings_score,
+    SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) AS chasing_wins,
+    COUNT(*) - SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) AS batting_first_wins,
+    ROUND(
+        SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS chasing_win_pct,
+    ROUND(
+        (COUNT(*) - SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END)) * 100.0 /
+        NULLIF(COUNT(*), 0),
+        2
+    ) AS batting_first_win_pct,
+    CASE
+        WHEN ROUND(SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) >= 55
+            THEN 'If toss is won, bowl first. Recent venue data favours chasing.'
+        WHEN ROUND((COUNT(*) - SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END)) * 100.0 / NULLIF(COUNT(*), 0), 2) >= 55
+            THEN 'If toss is won, bat first. Recent venue data favours defending.'
+        ELSE 'Toss call is balanced. Decide using pitch, dew and team combination.'
+    END AS toss_plan
+FROM match_summary
+WHERE first_innings_score IS NOT NULL;
+""".strip()
+        venue_profile_df = run_query(venue_profile_sql)
     opponent_chase_threshold_df = run_query(opponent_chase_threshold_sql)
     opponent_batting_first_restrict_df = run_query(opponent_batting_first_restrict_sql)
     opponent_top3_dependency_df = run_query(opponent_top3_dependency_sql)
@@ -891,18 +1460,22 @@ ORDER BY
             return None
 
 
-    best_target_num = to_float_or_none(best_target)
-    best_restrict_num = to_float_or_none(best_restrict_score)
+    def clean_score_text(value, suffix=""):
+        try:
+            return f"{float(value):.0f}{suffix}"
+        except Exception:
+            return "a clearly above-par total"
 
-    if best_target_num is None:
-        best_target_text = "a clearly above-par total"
-    else:
-        best_target_text = f"{best_target_num:.0f}+"
 
-    if best_restrict_num is None:
-        best_restrict_text = "a below-par total"
-    else:
-        best_restrict_text = f"{best_restrict_num:.0f} or below"
+    def clean_restrict_text(value):
+        try:
+            return f"{float(value):.0f} or below"
+        except Exception:
+            return "a below-par total"
+
+
+    best_target_text = clean_score_text(best_target, "+")
+    best_restrict_text = clean_restrict_text(best_restrict_score)
 
     target_source = locals().get("target_source", f"{team_b_label} historical/recent sample")
     restrict_source = locals().get("restrict_source", f"{team_b_label} historical/recent sample")
@@ -937,18 +1510,33 @@ ORDER BY
         top3_band = locals().get("top3_band", safe_first_value(opponent_top3_dependency_df, "top3_runs_band", "unknown"))
         top3_win_pct = locals().get("top3_win_pct", safe_first_value(opponent_top3_dependency_df, "win_pct", None))
 
-        if top3_band != "unknown" and top3_win_pct is not None:
+        top3_dependency_is_clear = False
+
+        try:
+            top3_win_pct_num = float(top3_win_pct)
+        except Exception:
+            top3_win_pct_num = None
+
+        try:
+            avg_top3_share_num = float(locals().get("avg_top3_share", 0))
+        except Exception:
+            avg_top3_share_num = None
+
+        if top3_win_pct_num is not None and top3_win_pct_num >= 70:
             top3_dependency_is_clear = True
+
+        if avg_top3_share_num is not None and avg_top3_share_num >= 48:
+            top3_dependency_is_clear = True
+
+        if top3_dependency_is_clear:
             top3_plan_text = (
-                f"{team_b_label} show a top-order dependency: when their top three reach the "
-                f"{top3_band} band, their win rate is {pct_text(top3_win_pct)}. "
-                f"Early wickets against players like {key_batter} should be a priority."
+                f"{team_b_label} show a clear top-order dependency. When their top three dominate, "
+                f"their win rate rises to {pct_text(top3_win_pct)}. Early wickets against players like {key_batter} should be a priority."
             )
         else:
-            top3_dependency_is_clear = False
             top3_plan_text = (
-                f"The data does not show a strong enough top-three dependency for {team_b_label}. "
-                f"{team_a_label} should still target {key_batter}, but the plan should cover the middle order as well."
+                f"The data does not show an extreme top-three dependency for {team_b_label}. "
+                f"{team_a_label} should still plan for {key_batter}, but the strategy should cover the middle order and finishers too."
             )
 
     key_bowling_matchup = locals().get("key_bowling_matchup", "no clear direct phase matchup")
@@ -994,6 +1582,31 @@ ORDER BY
                 )
         else:
             key_batting_matchup_reason = "No direct current-squad batting matchup had enough evidence."
+        venue_plan_text = ""
+        venue_action_row = None
+
+        if venue_profile_df is not None and not venue_profile_df.empty:
+            avg_first_score = safe_first_value(venue_profile_df, "avg_first_innings_score", None)
+            chasing_win_pct = safe_first_value(venue_profile_df, "chasing_win_pct", None)
+            batting_first_win_pct = safe_first_value(venue_profile_df, "batting_first_win_pct", None)
+            toss_plan = safe_first_value(venue_profile_df, "toss_plan", "No clear toss edge found.")
+
+            venue_plan_text = (
+                f"At {venue_label}, the recent average first-innings score is {format_metric(avg_first_score)}, "
+                f"with chasing teams winning {format_metric(chasing_win_pct)}% and batting-first teams winning "
+                f"{format_metric(batting_first_win_pct)}%. Toss plan: {toss_plan} "
+            )
+
+            venue_action_row = {
+                "phase": "Toss and venue",
+                "plan": toss_plan,
+                "why": (
+                    f"Average first-innings score at {venue_label}: {format_metric(avg_first_score)}. "
+                    f"Chasing win rate: {format_metric(chasing_win_pct)}%. "
+                    f"Batting-first win rate: {format_metric(batting_first_win_pct)}%."
+                ),
+                "key_players": "Captain + team balance",
+            }
     paragraph = (
         f"Match plan for {team_a_label} to beat {team_b_label}{venue_text}: "
         f"If batting first, {team_a_label} should aim for around {best_target}+ because {team_b_label}'s "
@@ -1003,6 +1616,7 @@ ORDER BY
         f"The top-order dependency check says that when {team_b_label}'s top three are in the {top3_band} run band, "
         f"their win rate is {format_metric(top3_win_pct)}%, so early wickets against players like {key_batter} are important. "
         f"One potential bowling matchup is {key_bowling_matchup}. One batting matchup to target is {key_batting_matchup}. "
+        f"{venue_plan_text} "
         f"These are data-led tactical suggestions, not guarantees."
     )
     action_plan_rows = [
@@ -1018,25 +1632,34 @@ ORDER BY
             "why": f"Source: {restrict_source}. Loss rate: {pct_text(restrict_loss_pct)}.",
             "key_players": "Powerplay bowlers + middle-over control",
         },
-        {
-            "phase": "Opponent batting core",
-            "plan": f"Build plans around removing or controlling {key_batter}.",
-            "why": key_batter_reason,
-            "key_players": key_batter,
-        },
-        {
-            "phase": "Bowling matchup",
-            "plan": f"Use {key_bowling_matchup}.",
-            "why": key_bowling_matchup_reason,
-            "key_players": key_bowling_matchup,
-        },
-        {
-            "phase": "Batting matchup",
-            "plan": f"Target {key_batting_matchup}.",
-            "why": key_batting_matchup_reason,
-            "key_players": key_batting_matchup,
-        },
     ]
+
+    if venue_action_row is not None:
+        action_plan_rows.append(venue_action_row)
+
+    action_plan_rows.extend(
+        [
+            {
+                "phase": "Opponent batting core",
+                "plan": f"Build plans around removing or controlling {key_batter}.",
+                "why": key_batter_reason,
+                "key_players": key_batter,
+            },
+            {
+                "phase": "Bowling matchup",
+                "plan": f"Use {key_bowling_matchup}.",
+                "why": key_bowling_matchup_reason,
+                "key_players": key_bowling_matchup,
+            },
+            {
+                "phase": "Batting matchup",
+                "plan": f"Target {key_batting_matchup}.",
+                "why": key_batting_matchup_reason,
+                "key_players": key_batting_matchup,
+            },
+        ]
+    )
+    
 
     if top3_dependency_is_clear:
         action_plan_rows.insert(
@@ -1098,6 +1721,7 @@ ORDER BY
         "summary": summary_df,
         "head_to_head": head_to_head_df,
         "recent_head_to_head_results": recent_head_to_head_df,
+        "venue_profile": venue_profile_df,
         "opponent_chase_thresholds": opponent_chase_threshold_df,
         "opponent_batting_first_restrict": opponent_batting_first_restrict_df,
         "opponent_top3_dependency": opponent_top3_dependency_df,
@@ -1113,6 +1737,7 @@ ORDER BY
             "opponent_current_key_batters": opponent_current_key_batters_sql,
             "bowling_phase_matchups": bowling_phase_matchups_sql,
             "batting_phase_matchups": batting_phase_matchups_sql,
+            "venue_profile": venue_profile_sql,
             "recent_head_to_head_results": recent_head_to_head_sql,
         },
     }
@@ -1641,53 +2266,50 @@ def get_franchise_history_paragraph(team_label):
 
     history = {
         "CSK": (
-            "Chennai Super Kings are one of the IPL's defining franchises, built around stability, tactical clarity, "
-            "spin-friendly home conditions and the MS Dhoni era. Dhoni is central to CSK's identity: captaincy, finishing, "
-            "wicketkeeping, calmness under pressure and fan culture all make him the face of the franchise. CSK's success "
-            "has also been shaped by long-term contributors such as Suresh Raina, Ravindra Jadeja and Dwayne Bravo."
+            "Chennai Super Kings are one of the IPL's most iconic franchises, instantly recognised by their yellow jersey, "
+            "the Whistle Podu fan culture and the MS Dhoni era. CSK's identity is built around stability, calm captaincy, "
+            "spin-friendly home conditions at Chepauk and a loyal fanbase that strongly associates the club with Dhoni. "
+            "The franchise is famous for turning experienced players into role specialists and repeatedly reaching the big games."
         ),
         "RCB": (
-            "Royal Challengers Bengaluru are one of the IPL's most followed franchises, strongly associated with Virat Kohli, "
-            "elite batting, Chinnaswamy's high-scoring conditions and a huge fanbase. Kohli is the face of RCB's history and "
-            "current identity, while players such as AB de Villiers, Chris Gayle and Yuzvendra Chahal shaped many of their "
-            "most memorable seasons."
+            "Royal Challengers Bengaluru are one of the IPL's most followed teams, known for their red-and-gold identity, "
+            "the Chinnaswamy atmosphere and the Ee Sala Cup Namdu fan culture. Virat Kohli is the face of RCB's history and "
+            "current identity, while the club's brand has long been linked with elite batting, huge crowds and dramatic high-scoring matches."
         ),
         "MI": (
-            "Mumbai Indians are the IPL's great title-era franchise, known for building powerful cores around Rohit Sharma, "
-            "Jasprit Bumrah, Kieron Pollard, Lasith Malinga and Hardik Pandya. Their identity has usually been based on "
-            "elite death bowling, power-hitting, strong scouting and title-winning experience."
+            "Mumbai Indians are the IPL's great title-era franchise, known for their blue jersey, strong scouting, powerful Indian core "
+            "and title-winning experience. MI's modern identity was shaped by Rohit Sharma's leadership, Jasprit Bumrah's death bowling, "
+            "Kieron Pollard's finishing and a culture of building match-winners across departments."
         ),
         "GT": (
-            "Gujarat Titans entered the IPL in 2022 and immediately became one of the league's most consistent modern teams. "
-            "Their identity has been built around Shubman Gill's top-order run-scoring, Rashid Khan's middle-over control, "
-            "strong bowling depth and a calm tactical structure. Even with a shorter history than older teams, GT already "
-            "have a clear modern franchise core."
+            "Gujarat Titans are one of the IPL's newest franchises, entering the league in 2022 and immediately becoming a consistent modern side. "
+            "Their identity is built around Shubman Gill's top-order batting, Sai Sudharsan's rapid rise, Rashid Khan's middle-over control, "
+            "calm tactical planning and strong bowling depth. Even with a shorter history than older teams, GT already have a clear and successful franchise core."
         ),
         "KKR": (
-            "Kolkata Knight Riders have a strong IPL identity built around Eden Gardens, spin power, all-rounders and explosive "
-            "middle-order batting. Their history is strongly linked with Gautam Gambhir's title-era leadership, Sunil Narine's "
-            "mystery spin and Andre Russell's match-winning power."
+            "Kolkata Knight Riders are one of the IPL's most recognisable franchises, known for their purple-and-gold identity, Eden Gardens atmosphere "
+            "and Korbo Lorbo Jeetbo culture. Their history is strongly linked with Gautam Gambhir's title-era leadership, Sunil Narine's mystery spin "
+            "and Andre Russell's explosive all-round impact."
         ),
         "SRH": (
-            "Sunrisers Hyderabad have historically been known for strong bowling attacks, disciplined defending of totals and "
-            "elite overseas batting. David Warner, Bhuvneshwar Kumar and Rashid Khan were central to their strongest era, while "
-            "the modern side has shifted towards more explosive batting."
+            "Sunrisers Hyderabad are known for their orange identity, strong bowling culture and the ability to defend totals. Their best era was shaped by "
+            "David Warner's batting, Bhuvneshwar Kumar's swing, Rashid Khan's spin and disciplined bowling attacks, although the modern side has become more batting-heavy."
         ),
         "RR": (
-            "Rajasthan Royals have often been associated with smart recruitment, young talent, spin options and Sanju Samson's "
-            "long-term batting leadership. Their identity comes from mixing emerging players with high-impact overseas stars."
+            "Rajasthan Royals are known for their pink identity, smart recruitment and a strong record of backing young talent. Their personality has often been built around "
+            "Sanju Samson's leadership, attacking openers, spin options and high-upside overseas players."
         ),
         "DC": (
-            "Delhi Capitals have developed an identity around young Indian batting, pace options and aggressive squad building. "
-            "Their recent era has featured players like Rishabh Pant, Shreyas Iyer, Prithvi Shaw, Axar Patel and Kuldeep Yadav."
+            "Delhi Capitals are known for aggressive squad building, young Indian batting and a mix of pace and spin options. Their recent identity has featured players such as "
+            "Rishabh Pant, Shreyas Iyer, Axar Patel and Kuldeep Yadav, with the team often looking strong on paper."
         ),
         "PBKS": (
-            "Punjab Kings have often been one of the IPL's most unpredictable teams, with several explosive batting eras and "
-            "frequent squad changes. Their history includes major run-scoring names such as KL Rahul, Shaun Marsh and Chris Gayle."
+            "Punjab Kings are one of the IPL's most unpredictable franchises, known for bold auctions, explosive batting eras and frequent squad changes. Their history includes "
+            "major run-scoring names such as KL Rahul, Shaun Marsh, Chris Gayle and Glenn Maxwell."
         ),
         "LSG": (
-            "Lucknow Super Giants are a newer IPL franchise with a squad-building identity based around depth, all-round options "
-            "and top-order stability. KL Rahul, Nicholas Pooran and their multi-skilled bowling group have shaped their early years."
+            "Lucknow Super Giants are a newer IPL franchise with a modern squad-building identity based around depth, all-round options and top-order stability. Their early years "
+            "have been shaped by KL Rahul, Nicholas Pooran, Ravi Bishnoi and multi-skilled bowling options."
         ),
     }
 
@@ -1891,29 +2513,37 @@ def analyze_team_report_squad_extras(team_condition, team_label):
     }
 
     current_batting_priority = {
-    "CSK": ["MS Dhoni", "Ruturaj Gaikwad", "Ravindra Jadeja", "Shivam Dube", "Devon Conway", "Rahul Tripathi"],
-    "RCB": ["Virat Kohli", "Rajat Patidar", "Phil Salt", "Liam Livingstone", "Jitesh Sharma", "Tim David"],
-    "MI": ["Rohit Sharma", "Suryakumar Yadav", "Hardik Pandya", "Tilak Varma", "Ryan Rickelton", "Naman Dhir"],
-    "GT": ["Shubman Gill", "Sai Sudharsan", "Jos Buttler", "Sherfane Rutherford", "Rahul Tewatia", "Shahrukh Khan"],
-    "KKR": ["Sunil Narine", "Andre Russell", "Rinku Singh", "Quinton de Kock", "Venkatesh Iyer", "Ajinkya Rahane"],
+    "CSK": ["Sanju Samson", "Ruturaj Gaikwad", "Ayush Mhatre", "Shivam Dube", "Dewald Brevis", "Kartik Sharma"],
+    "RCB": ["Virat Kohli", "Rajat Patidar", "Phil Salt", "Devdutt Padikkal", "Jitesh Sharma", "Tim David"],
+    "MI": ["Rohit Sharma", "Suryakumar Yadav","Tilak Varma", "Ryan Rickelton", "Naman Dhir"],
+    "GT": [
+    "Shubman Gill",
+    "Sai Sudharsan",
+    "B Sai Sudharsan",
+    "Sai Sudarshan",
+    "B Sai Sudarshan",
+    "Jos Buttler",
+    "Washington Sundar",
+    ],
+    "KKR": ["Sunil Narine","Angkrish Raghuvanshi ", "Rinku Singh", "Finn Allen", "Cameron Green", "Ajinkya Rahane"],
     "SRH": ["Travis Head", "Abhishek Sharma", "Heinrich Klaasen", "Ishan Kishan", "Nitish Kumar Reddy", "Aniket Verma"],
-    "RR": ["Sanju Samson", "Yashasvi Jaiswal", "Riyan Parag", "Dhruv Jurel", "Shimron Hetmyer", "Nitish Rana"],
-    "DC": ["KL Rahul", "Axar Patel", "Tristan Stubbs", "Faf du Plessis", "Abishek Porel", "Ashutosh Sharma"],
-    "PBKS": ["Shreyas Iyer", "Glenn Maxwell", "Marcus Stoinis", "Prabhsimran Singh", "Nehal Wadhera", "Shashank Singh"],
-    "LSG": ["Nicholas Pooran", "Rishabh Pant", "Aiden Markram", "Mitchell Marsh", "Ayush Badoni", "David Miller"],
+    "RR": ["Vaibhav Suryavanshi", "Yashasvi Jaiswal", "Riyan Parag", "Dhruv Jurel", "Shimron Hetmyer"],
+    "DC": ["KL Rahul", "Axar Patel", "Tristan Stubbs", "Pathum Nissanka", "Abishek Porel", "Ashutosh Sharma"],
+    "PBKS": ["Shreyas Iyer", "Priyansh Arya", "Marcus Stoinis", "Prabhsimran Singh", "Nehal Wadhera", "Shashank Singh"],
+    "LSG": ["Nicholas Pooran", "Rishabh Pant", "Aiden Markram", "Mitchell Marsh", "Ayush Badoni"],
     }   
 
     current_bowling_priority = {
-        "CSK": ["Ravindra Jadeja", "Noor Ahmad", "Matheesha Pathirana", "Khaleel Ahmed", "Ravichandran Ashwin", "Sam Curran"],
-        "RCB": ["Josh Hazlewood", "Bhuvneshwar Kumar", "Yash Dayal", "Krunal Pandya", "Suyash Sharma", "Liam Livingstone"],
+        "CSK": ["Spencer Johnson", "Noor Ahmad", "Anshul Kamboj", "Khaleel Ahmed", "Mukesh Choudhary", "Gurjapneet Singh"],
+        "RCB": ["Josh Hazlewood", "Bhuvneshwar Kumar", "Yash Dayal", "Krunal Pandya", "Suyash Sharma", "Rasikh Salam Dar"],
         "MI": ["Jasprit Bumrah", "Hardik Pandya", "Trent Boult", "Deepak Chahar", "Mitchell Santner", "Allah Ghazanfar"],
-        "GT": ["Rashid Khan", "Mohammed Siraj", "Kagiso Rabada", "Prasidh Krishna", "R Sai Kishore", "Noor Ahmad"],
-        "KKR": ["Sunil Narine", "Andre Russell", "Varun Chakaravarthy", "Anrich Nortje", "Harshit Rana", "Vaibhav Arora"],
-        "SRH": ["Pat Cummins", "Mohammed Shami", "Harshal Patel", "Rahul Chahar", "Adam Zampa", "Jaydev Unadkat"],
-        "RR": ["Jofra Archer", "Wanindu Hasaranga", "Maheesh Theekshana", "Sandeep Sharma", "Tushar Deshpande", "Akash Madhwal"],
+        "GT": ["Rashid Khan", "Mohammed Siraj", "Kagiso Rabada", "Prasidh Krishna", "R Sai Kishore"],
+        "KKR": ["Sunil Narine", "Varun Chakaravarthy", "Kartik Tyagi", "Harshit Rana", "Vaibhav Arora"],
+        "SRH": ["Pat Cummins", "Sakib Hussain", "Harshal Patel", "Ehsan Malinga", "Jaydev Unadkat"],
+        "RR": ["Jofra Archer", "Nandre Burger", "Maheesh Theekshana", "Sandeep Sharma", "Tushar Deshpande"],
         "DC": ["Axar Patel", "Kuldeep Yadav", "Mitchell Starc", "T Natarajan", "Mukesh Kumar", "Dushmantha Chameera"],
-        "PBKS": ["Arshdeep Singh", "Yuzvendra Chahal", "Marco Jansen", "Glenn Maxwell", "Marcus Stoinis", "Lockie Ferguson"],
-        "LSG": ["Ravi Bishnoi", "Mayank Yadav", "Avesh Khan", "Mohsin Khan", "Shardul Thakur", "Shahbaz Ahmed"],
+        "PBKS": ["Arshdeep Singh", "Yuzvendra Chahal", "Marco Jansen", "Marcus Stoinis", "Lockie Ferguson"],
+        "LSG": ["Prince Yadav", "Avesh Khan", "Mohsin Khan", "Shardul Thakur", "Shahbaz Ahmed"],
     }
 
     priority_batters = historical_priority.get(team_key, {}).get("batters", [])
@@ -2119,6 +2749,7 @@ current_players AS (
       AND {current_team_condition}
       AND (
           cs.display_name IN ({priority_current_batting_sql})
+          OR cs.cricsheet_name IN ({priority_current_batting_sql})
           OR LOWER(cs.role) LIKE '%batter%'
           OR LOWER(cs.role) LIKE '%keeper%'
           OR LOWER(cs.role) LIKE '%all%'
@@ -2172,8 +2803,19 @@ scored AS (
         COALESCE(r.recent_runs, 0) AS recent_runs,
         c.career_strike_rate,
         r.recent_strike_rate,
+        CASE
+            WHEN cp.display_name IN ({priority_current_batting_sql})
+            OR cp.cricsheet_name IN ({priority_current_batting_sql})
+            THEN 1
+            ELSE 0
+        END AS is_priority_player,
         ROUND(
-            CASE WHEN cp.display_name IN ({priority_current_batting_sql}) THEN 100000 ELSE 0 END
+            CASE
+                WHEN cp.display_name IN ({priority_current_batting_sql})
+                OR cp.cricsheet_name IN ({priority_current_batting_sql})
+                THEN 100000
+                ELSE 0
+            END
             + COALESCE(r.recent_runs, 0) * 2.0
             + COALESCE(c.career_runs, 0) * 0.35
             + COALESCE(r.recent_strike_rate, c.career_strike_rate, 0) * 1.0,
@@ -2222,9 +2864,18 @@ SELECT TOP 3
 FROM scored
 WHERE
     display_name IN ({priority_current_batting_sql})
+    OR cricsheet_name IN ({priority_current_batting_sql})
     OR recent_runs >= 150
     OR career_runs >= 750
 ORDER BY
+    is_priority_player DESC,
+    CASE
+        WHEN display_name IN ('Shubman Gill') OR cricsheet_name IN ('Shubman Gill') THEN 1
+        WHEN display_name IN ('Sai Sudharsan', 'B Sai Sudharsan', 'Sai Sudarshan', 'B Sai Sudarshan')
+          OR cricsheet_name IN ('Sai Sudharsan', 'B Sai Sudharsan', 'Sai Sudarshan', 'B Sai Sudarshan') THEN 2
+        WHEN display_name IN ('Jos Buttler') OR cricsheet_name IN ('Jos Buttler') THEN 3
+        ELSE 10
+    END ASC,
     watch_score DESC,
     recent_runs DESC,
     career_runs DESC;
@@ -2411,35 +3062,34 @@ ORDER BY
     top_current_batter = safe_first_value(current_batters_to_watch_df, "display_name", "their current batting core")
     top_current_bowler = safe_first_value(current_bowlers_to_watch_df, "display_name", "their current bowling core")
     trophy_summary = safe_first_value(trophy_record_df, "trophy_summary", "")
+
+    fun_facts_by_team = {
+        "CSK": "Fun fact: CSK are famous for their consistency and for making IPL finals more often than most franchises.",
+        "RCB": "Fun fact: RCB have one of the loudest and most loyal fanbases in the IPL despite the long wait for a title.",
+        "MI": "Fun fact: MI built one of the strongest IPL dynasties through a core of Rohit Sharma, Jasprit Bumrah, Kieron Pollard and Lasith Malinga.",
+        "GT": "Fun fact: GT reached the final in each of their first two IPL seasons, which is rare for a new franchise.",
+        "KKR": "Fun fact: KKR's Eden Gardens home atmosphere is one of the most famous in world franchise cricket.",
+        "SRH": "Fun fact: SRH's strongest identity historically was defending totals with high-quality bowling attacks.",
+        "RR": "Fun fact: RR won the first ever IPL season and are known for backing young Indian talent.",
+        "DC": "Fun fact: Delhi have produced or backed several major Indian stars but are still chasing their first IPL title.",
+        "PBKS": "Fun fact: Punjab have often been one of the IPL's most unpredictable teams, with explosive batting but inconsistent seasons.",
+        "LSG": "Fun fact: LSG made a competitive start as a new franchise with a squad built around depth and all-round options.",
+    }
+
+    fun_fact = fun_facts_by_team.get(team_key, "")
+
     paragraph = (
         f"{franchise_history} "
         f"{trophy_summary} "
-        f"For historical legends, the batting/all-round group is led by {top_batting_legend}, while the bowling/all-round group is led by {top_bowling_legend}. "
-        f"In the current squad, the batting watch starts with {top_current_batter}, and the bowling watch starts with {top_current_bowler}."
+        f"{fun_fact}"
     )
 
     summary_df = pd.DataFrame(
         [
             {
-                "analysis_area": "Franchise history",
-                "insight": franchise_history,
-            },
-            {
-                "analysis_area": "Historical batting/all-round legends",
-                "insight": f"Top table starts with {top_batting_legend}.",
-            },
-            {
-                "analysis_area": "Historical bowling/all-round legends",
-                "insight": f"Top table starts with {top_bowling_legend}.",
-            },
-            {
-                "analysis_area": "Current batting watch",
-                "insight": f"Top current batting watch starts with {top_current_batter}.",
-            },
-            {
-                "analysis_area": "Current bowling watch",
-                "insight": f"Top current bowling watch starts with {top_current_bowler}.",
-            },
+                "section": "Franchise summary",
+                "summary": paragraph,
+            }
         ]
     )
 
@@ -2475,30 +3125,18 @@ def analyze_enhanced_team_profile(team_condition, team_label):
         team_label=team_label,
     )
 
-    base_paragraph = base_profile.get("paragraph", "")
-    squad_paragraph = squad_context.get("paragraph", "")
+    # The visible summary should be the AI-style franchise paragraph only.
+    paragraph = squad_context.get("paragraph", "")
 
-    paragraph = f"{base_paragraph} {squad_paragraph}".strip()
+    # Keep the main result clean: one row, one summary column.
+    summary_df = squad_context.get("summary")
 
-    base_summary = base_profile.get("summary")
-    squad_summary = squad_context.get("summary")
-
-    summary_parts = []
-
-    if base_summary is not None:
-        summary_parts.append(base_summary)
-
-    if squad_summary is not None:
-        summary_parts.append(squad_summary)
-
-    if summary_parts:
-        summary_df = pd.concat(summary_parts, ignore_index=True, sort=False)
-    else:
+    if summary_df is None or summary_df.empty:
         summary_df = pd.DataFrame(
             [
                 {
-                    "analysis_area": "Team report",
-                    "insight": paragraph,
+                    "section": "Franchise summary",
+                    "summary": paragraph,
                 }
             ]
         )
@@ -2517,14 +3155,12 @@ def analyze_enhanced_team_profile(team_condition, team_label):
         "base_team_profile": base_profile.get("summary"),
         "team_report_squad_summary": squad_context["summary"],
         "franchise_history": squad_context["franchise_history"],
+        "trophy_record": squad_context["trophy_record"],
         "historical_batting_legends": squad_context["historical_batting_legends"],
         "historical_bowling_legends": squad_context["historical_bowling_legends"],
-        "historical_legends": squad_context["historical_legends"],
         "current_batters_to_watch": squad_context["current_batters_to_watch"],
         "current_bowlers_to_watch": squad_context["current_bowlers_to_watch"],
-        "current_players_to_watch": squad_context["current_players_to_watch"],
         "squad_snapshot": squad_context["squad_snapshot"],
-        "trophy_record": squad_context["trophy_record"],
         "sql_queries": sql_queries,
     }
 def analyze_player_dismissals(player_condition):
