@@ -146,3 +146,10 @@ added current squad intelligence,so who has the stronfest squad
 fixed bowler matchup ranking,more emphasis on dismissals
 added enahnced team report
 fixed kuldip yadav and kuldeep yadav mismatch
+
+day10
+completed standalone venue analysis
+added venue intelligence to team vs team match plans
+improved team reports
+improved the ui
+fixed bowling overs error
