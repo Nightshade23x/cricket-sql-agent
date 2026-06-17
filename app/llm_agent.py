@@ -21,6 +21,7 @@ from app.analysis import (
     analyze_current_squad_report,
     analyze_bowler_length_plan_against_batter,
     analyze_enhanced_team_profile,
+    analyze_team_vs_team_match_plan,
 )
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -1212,6 +1213,171 @@ def get_team_condition_from_question(user_question, column_name):
 
     return None
 
+def get_team_condition_before_keyword(user_question, keyword, column_name):
+    question_lower = user_question.lower()
+    keyword_lower = keyword.lower()
+    index = question_lower.find(keyword_lower)
+
+    if index == -1:
+        return None
+
+    text_before = user_question[:index]
+    return get_team_condition_from_question(text_before, column_name)
+
+
+def get_team_condition_after_keyword(user_question, keyword, column_name):
+    question_lower = user_question.lower()
+    keyword_lower = keyword.lower()
+    index = question_lower.find(keyword_lower)
+
+    if index == -1:
+        return None
+
+    text_after = user_question[index + len(keyword):]
+    return get_team_condition_from_question(text_after, column_name)
+
+
+def get_team_label_before_keyword(user_question, keyword):
+    question_lower = user_question.lower()
+    keyword_lower = keyword.lower()
+    index = question_lower.find(keyword_lower)
+
+    if index == -1:
+        return "Team A"
+
+    text_before = user_question[:index]
+    return get_team_label_from_question(text_before)
+
+
+def get_team_label_after_keyword(user_question, keyword):
+    question_lower = user_question.lower()
+    keyword_lower = keyword.lower()
+    index = question_lower.find(keyword_lower)
+
+    if index == -1:
+        return "Team B"
+
+    text_after = user_question[index + len(keyword):]
+    return get_team_label_from_question(text_after)
+
+
+def get_venue_condition_from_question(user_question, column_name="m.venue"):
+    q = user_question.lower()
+
+    venue_aliases = {
+        "chepauk": {
+            "label": "Chepauk",
+            "venues": [
+                "MA Chidambaram Stadium",
+                "MA Chidambaram Stadium, Chepauk",
+                "MA Chidambaram Stadium, Chepauk, Chennai",
+            ],
+        },
+        "chennai": {
+            "label": "Chepauk",
+            "venues": [
+                "MA Chidambaram Stadium",
+                "MA Chidambaram Stadium, Chepauk",
+                "MA Chidambaram Stadium, Chepauk, Chennai",
+            ],
+        },
+        "wankhede": {
+            "label": "Wankhede",
+            "venues": [
+                "Wankhede Stadium",
+                "Wankhede Stadium, Mumbai",
+            ],
+        },
+        "eden": {
+            "label": "Eden Gardens",
+            "venues": [
+                "Eden Gardens",
+                "Eden Gardens, Kolkata",
+            ],
+        },
+        "chinnaswamy": {
+            "label": "Chinnaswamy",
+            "venues": [
+                "M Chinnaswamy Stadium",
+                "M.Chinnaswamy Stadium",
+                "M Chinnaswamy Stadium, Bengaluru",
+            ],
+        },
+        "bengaluru": {
+            "label": "Chinnaswamy",
+            "venues": [
+                "M Chinnaswamy Stadium",
+                "M.Chinnaswamy Stadium",
+                "M Chinnaswamy Stadium, Bengaluru",
+            ],
+        },
+        "bangalore": {
+            "label": "Chinnaswamy",
+            "venues": [
+                "M Chinnaswamy Stadium",
+                "M.Chinnaswamy Stadium",
+                "M Chinnaswamy Stadium, Bengaluru",
+            ],
+        },
+        "ahmedabad": {
+            "label": "Ahmedabad",
+            "venues": [
+                "Narendra Modi Stadium",
+                "Narendra Modi Stadium, Ahmedabad",
+                "Sardar Patel Stadium, Motera",
+            ],
+        },
+        "motera": {
+            "label": "Ahmedabad",
+            "venues": [
+                "Narendra Modi Stadium",
+                "Narendra Modi Stadium, Ahmedabad",
+                "Sardar Patel Stadium, Motera",
+            ],
+        },
+        "kotla": {
+            "label": "Delhi",
+            "venues": [
+                "Arun Jaitley Stadium",
+                "Arun Jaitley Stadium, Delhi",
+                "Feroz Shah Kotla",
+            ],
+        },
+        "arun jaitley": {
+            "label": "Delhi",
+            "venues": [
+                "Arun Jaitley Stadium",
+                "Arun Jaitley Stadium, Delhi",
+                "Feroz Shah Kotla",
+            ],
+        },
+        "uppal": {
+            "label": "Hyderabad",
+            "venues": [
+                "Rajiv Gandhi International Stadium",
+                "Rajiv Gandhi International Stadium, Uppal",
+                "Rajiv Gandhi International Stadium, Uppal, Hyderabad",
+            ],
+        },
+        "hyderabad": {
+            "label": "Hyderabad",
+            "venues": [
+                "Rajiv Gandhi International Stadium",
+                "Rajiv Gandhi International Stadium, Uppal",
+                "Rajiv Gandhi International Stadium, Uppal, Hyderabad",
+            ],
+        },
+    }
+
+    for key, info in venue_aliases.items():
+        if key in q:
+            venue_values = ", ".join(
+                "'" + venue.replace("'", "''") + "'" for venue in info["venues"]
+            )
+            return f"{column_name} IN ({venue_values})", info["label"]
+
+    return None, None
+
 def build_fastest_milestone_sql(milestone_runs, milestone_name):
     return f"""
 WITH batter_ball_progress AS (
@@ -1338,77 +1504,7 @@ def has_venue_context(user_question):
     )
 
 
-def get_venue_condition_from_question(user_question):
-    question_lower = clean_text_for_matching(user_question)
-    words = question_lower.split()
 
-    if "ekana" in question_lower or "lucknow" in words:
-        return "(m.venue LIKE '%Ekana%' OR m.venue LIKE '%Lucknow%' OR m.city = 'Lucknow')"
-
-    if "dy patil" in question_lower:
-        return "(m.venue LIKE '%DY Patil%')"
-
-    if "vizag" in words or "visakhapatnam" in words:
-        return "(m.venue LIKE '%Visakhapatnam%' OR m.venue LIKE '%ACA-VDCA%' OR m.city = 'Visakhapatnam')"
-
-    if "chinnaswamy" in question_lower or "bengaluru" in words or "bangalore" in words:
-        return "(m.venue LIKE '%Chinnaswamy%' OR m.city IN ('Bengaluru', 'Bangalore'))"
-
-    if "chepauk" in words or "chennai" in words:
-        return "(m.venue LIKE '%Chidambaram%' OR m.venue LIKE '%Chepauk%' OR m.city = 'Chennai')"
-
-    if "mullanpur" in words or "new chandigarh" in question_lower:
-        return "(m.venue LIKE '%Mullanpur%' OR m.venue LIKE '%New Chandigarh%')"
-
-    if "mohali" in words or "chandigarh" in words:
-        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Chandigarh%' OR m.city = 'Chandigarh')"
-
-    if "uppal" in words or "hyderabad" in words:
-        return "(m.venue LIKE '%Uppal%' OR m.venue LIKE '%Hyderabad%' OR m.city = 'Hyderabad')"
-
-    if "motera" in words or "ahmedabad" in words or "narendra modi" in question_lower or "sardar patel" in question_lower:
-        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Sardar Patel%' OR m.venue LIKE '%Motera%' OR m.city = 'Ahmedabad')"
-
-    if "wankhede" in words or "mumbai" in words:
-        return "(m.venue LIKE '%Wankhede%' OR m.city = 'Mumbai')"
-
-    if "eden gardens" in question_lower or "kolkata" in words:
-        return "(m.venue LIKE '%Eden Gardens%' OR m.city = 'Kolkata')"
-
-    if "jaipur" in words:
-        return "(m.venue LIKE '%Sawai Mansingh%' OR m.city = 'Jaipur')"
-
-    if "dharamsala" in words:
-        return "(m.venue LIKE '%Himachal Pradesh%' OR m.city = 'Dharamsala')"
-
-    if "pune" in words:
-        return "(m.venue LIKE '%Maharashtra Cricket Association%' OR m.venue LIKE '%Subrata Roy%' OR m.city = 'Pune')"
-
-    if "raipur" in words:
-        return "(m.venue LIKE '%Raipur%' OR m.city = 'Raipur')"
-
-    if "guwahati" in words or "barsapara" in words:
-        return "(m.venue LIKE '%Guwahati%' OR m.venue LIKE '%Barsapara%' OR m.city = 'Guwahati')"
-
-    if "delhi" in words or "kotla" in words or "arun jaitley" in question_lower:
-        return "(m.venue LIKE '%Arun Jaitley%' OR m.venue LIKE '%Feroz Shah Kotla%' OR m.city = 'Delhi')"
-
-    if "rajkot" in words:
-        return "(m.venue LIKE '%Saurashtra%' OR m.city = 'Rajkot')"
-
-    if "abu dhabi" in question_lower or "zayed" in words:
-        return "(m.venue LIKE '%Zayed%' OR m.city = 'Abu Dhabi')"
-
-    if "dubai" in words:
-        return "(m.venue LIKE '%Dubai%' OR m.city = 'Dubai')"
-
-    if "sharjah" in words:
-        return "(m.venue LIKE '%Sharjah%' OR m.city = 'Sharjah')"
-
-    if "wanderers" in words:
-        return "(m.venue LIKE '%Wanderers%')"
-
-    return None
 
 def get_team_label_from_question(user_question):
     question_lower = clean_text_for_matching(user_question)
@@ -6534,6 +6630,59 @@ AND ms.season_year = {season}
                 },
                 "error": None
             }
+    # Team-vs-team match plan
+    is_match_plan_question = (
+        (
+            "how can" in question_lower
+            or "how do" in question_lower
+            or "plan to beat" in question_lower
+            or "strategy to beat" in question_lower
+            or "beat" in question_lower
+        )
+        and "beat" in question_lower
+    )
+
+    if is_match_plan_question:
+        team_a_condition = get_team_condition_before_keyword(user_question, "beat", "cs.team_name")
+        team_b_condition = get_team_condition_after_keyword(user_question, "beat", "cs.team_name")
+
+        team_a_label = get_team_label_before_keyword(user_question, "beat")
+        team_b_label = get_team_label_after_keyword(user_question, "beat")
+
+        venue_condition, venue_label = get_venue_condition_from_question(user_question)
+
+        if team_a_condition is not None and team_b_condition is not None:
+            analysis_result = analyze_team_vs_team_match_plan(
+                team_a_condition=team_a_condition,
+                team_b_condition=team_b_condition,
+                team_a_label=team_a_label,
+                team_b_label=team_b_label,
+                venue_condition=venue_condition,
+                venue_label=venue_label,
+            )
+
+            combined_sql = ""
+
+            for name, sql in analysis_result["sql_queries"].items():
+                combined_sql += f"\n\n--- {name} ---\n{sql}"
+
+            return {
+                "method": "analysis_layer",
+                "matched_question": "Team-vs-team match plan",
+                "sql_query": combined_sql.strip(),
+                "result": analysis_result["summary"],
+                "analysis_paragraph": analysis_result.get("paragraph"),
+                "extra_tables": {
+                    "head_to_head": analysis_result["head_to_head"],
+                    "opponent_chase_thresholds": analysis_result["opponent_chase_thresholds"],
+                    "opponent_batting_first_restrict": analysis_result["opponent_batting_first_restrict"],
+                    "opponent_top3_dependency": analysis_result["opponent_top3_dependency"],
+                    "opponent_current_key_batters": analysis_result["opponent_current_key_batters"],
+                    "bowling_phase_matchups": analysis_result["bowling_phase_matchups"],
+                    "batting_phase_matchups": analysis_result["batting_phase_matchups"],
+                },
+                "error": None,
+            }
             # Strongest current squad ranking
     if (
         "strongest current squad" in question_lower
@@ -6630,8 +6779,12 @@ AND ms.season_year = {season}
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
                     "team_report_squad_summary": analysis_result["team_report_squad_summary"],
-                    "historical_legends": analysis_result["historical_legends"],
-                    "current_players_to_watch": analysis_result["current_players_to_watch"],
+                    "historical_batting_legends": analysis_result["historical_batting_legends"],
+                    "historical_bowling_legends": analysis_result["historical_bowling_legends"],
+                    "historical_legends_combined": analysis_result["historical_legends"],
+                    "current_batters_to_watch": analysis_result["current_batters_to_watch"],
+                    "current_bowlers_to_watch": analysis_result["current_bowlers_to_watch"],
+                    "current_players_to_watch_combined": analysis_result["current_players_to_watch"],
                     "squad_snapshot": analysis_result["squad_snapshot"],
                 },
                 "error": None,
