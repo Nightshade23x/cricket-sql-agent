@@ -775,7 +775,149 @@ ORDER BY
             f"{first_batting_matchup['team_a_batter']} vs {first_batting_matchup['team_b_bowler']} "
             f"in the {first_batting_matchup['phase']}"
         )
+    def pct_text(value):
+        if value is None:
+            return "not enough data"
 
+        try:
+            return f"{float(value):.2f}%"
+        except Exception:
+            return "not enough data"
+
+    best_target = locals().get("best_target", None)
+
+    if best_target is None:
+        if opponent_chase_threshold_df is not None and not opponent_chase_threshold_df.empty:
+            best_target = safe_first_value(opponent_chase_threshold_df, "target_threshold", None)
+
+    chase_failure = locals().get("chase_failure", None)
+
+    if chase_failure is None:
+        if opponent_chase_threshold_df is not None and not opponent_chase_threshold_df.empty:
+            chase_failure = safe_first_value(opponent_chase_threshold_df, "chase_failure_pct", None)
+
+    best_restrict_score = locals().get("best_restrict_score", None)
+
+    if best_restrict_score is None:
+        if opponent_batting_first_restrict_df is not None and not opponent_batting_first_restrict_df.empty:
+            best_restrict_score = safe_first_value(opponent_batting_first_restrict_df, "restrict_to_or_below", None)
+
+    restrict_loss_pct = locals().get("restrict_loss_pct", None)
+
+    if restrict_loss_pct is None:
+        if opponent_batting_first_restrict_df is not None and not opponent_batting_first_restrict_df.empty:
+            restrict_loss_pct = safe_first_value(opponent_batting_first_restrict_df, "opponent_loss_pct", None)
+
+    def to_float_or_none(value):
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+
+    best_target_num = to_float_or_none(best_target)
+    best_restrict_num = to_float_or_none(best_restrict_score)
+
+    if best_target_num is None:
+        best_target_text = "a clearly above-par total"
+    else:
+        best_target_text = f"{best_target_num:.0f}+"
+
+    if best_restrict_num is None:
+        best_restrict_text = "a below-par total"
+    else:
+        best_restrict_text = f"{best_restrict_num:.0f} or below"
+
+    target_source = locals().get("target_source", f"{team_b_label} historical/recent sample")
+    restrict_source = locals().get("restrict_source", f"{team_b_label} historical/recent sample")
+
+    key_batter = locals().get("key_batter", None)
+
+    if key_batter is None:
+        key_batter = safe_first_value(opponent_current_key_batters_df, "display_name", "their key batter")
+
+    key_batter_reason = locals().get("key_batter_reason", None)
+
+    if key_batter_reason is None:
+        if opponent_current_key_batters_df is not None and not opponent_current_key_batters_df.empty:
+            row = opponent_current_key_batters_df.iloc[0]
+            recent_runs = row.get("recent_runs", 0)
+            career_runs = row.get("career_runs", 0)
+            strike_rate = row.get("strike_rate", row.get("recent_strike_rate", "N/A"))
+
+            key_batter_reason = (
+                f"{key_batter} is the main current batting threat because he has "
+                f"{recent_runs} recent runs, {career_runs} career IPL runs, "
+                f"and a strike rate of {strike_rate}."
+            )
+        else:
+            key_batter_reason = f"{key_batter} grades as the main current-squad batting threat."
+
+    top3_dependency_is_clear = locals().get("top3_dependency_is_clear", False)
+
+    top3_plan_text = locals().get("top3_plan_text", None)
+
+    if top3_plan_text is None:
+        top3_band = locals().get("top3_band", safe_first_value(opponent_top3_dependency_df, "top3_runs_band", "unknown"))
+        top3_win_pct = locals().get("top3_win_pct", safe_first_value(opponent_top3_dependency_df, "win_pct", None))
+
+        if top3_band != "unknown" and top3_win_pct is not None:
+            top3_dependency_is_clear = True
+            top3_plan_text = (
+                f"{team_b_label} show a top-order dependency: when their top three reach the "
+                f"{top3_band} band, their win rate is {pct_text(top3_win_pct)}. "
+                f"Early wickets against players like {key_batter} should be a priority."
+            )
+        else:
+            top3_dependency_is_clear = False
+            top3_plan_text = (
+                f"The data does not show a strong enough top-three dependency for {team_b_label}. "
+                f"{team_a_label} should still target {key_batter}, but the plan should cover the middle order as well."
+            )
+
+    key_bowling_matchup = locals().get("key_bowling_matchup", "no clear direct phase matchup")
+    key_bowling_matchup_reason = locals().get("key_bowling_matchup_reason", None)
+
+    if key_bowling_matchup_reason is None:
+        if bowling_phase_matchups_df is not None and not bowling_phase_matchups_df.empty:
+            first_matchup = bowling_phase_matchups_df.iloc[0]
+            key_bowling_matchup = (
+                f"{first_matchup['team_a_bowler']} vs {first_matchup['team_b_batter']} "
+                f"in the {first_matchup['phase']}"
+            )
+
+            if "matchup_reason" in bowling_phase_matchups_df.columns:
+                key_bowling_matchup_reason = str(first_matchup["matchup_reason"])
+            else:
+                key_bowling_matchup_reason = (
+                    f"{first_matchup['team_a_bowler']} has conceded {first_matchup['runs']} runs "
+                    f"off {first_matchup['balls']} balls to {first_matchup['team_b_batter']}, "
+                    f"with {first_matchup['dismissals']} dismissals."
+                )
+        else:
+            key_bowling_matchup_reason = "No direct current-squad phase matchup had enough evidence."
+
+    key_batting_matchup = locals().get("key_batting_matchup", "no clear direct batting matchup")
+    key_batting_matchup_reason = locals().get("key_batting_matchup_reason", None)
+
+    if key_batting_matchup_reason is None:
+        if batting_phase_matchups_df is not None and not batting_phase_matchups_df.empty:
+            first_batting_matchup = batting_phase_matchups_df.iloc[0]
+            key_batting_matchup = (
+                f"{first_batting_matchup['team_a_batter']} vs {first_batting_matchup['team_b_bowler']} "
+                f"in the {first_batting_matchup['phase']}"
+            )
+
+            if "matchup_reason" in batting_phase_matchups_df.columns:
+                key_batting_matchup_reason = str(first_batting_matchup["matchup_reason"])
+            else:
+                key_batting_matchup_reason = (
+                    f"{first_batting_matchup['team_a_batter']} has scored {first_batting_matchup['runs']} runs "
+                    f"off {first_batting_matchup['balls']} balls against {first_batting_matchup['team_b_bowler']}, "
+                    f"with {first_batting_matchup['dismissals']} dismissals."
+                )
+        else:
+            key_batting_matchup_reason = "No direct current-squad batting matchup had enough evidence."
     paragraph = (
         f"Match plan for {team_a_label} to beat {team_b_label}{venue_text}: "
         f"If batting first, {team_a_label} should aim for around {best_target}+ because {team_b_label}'s "
@@ -787,7 +929,65 @@ ORDER BY
         f"One potential bowling matchup is {key_bowling_matchup}. One batting matchup to target is {key_batting_matchup}. "
         f"These are data-led tactical suggestions, not guarantees."
     )
+    action_plan_rows = [
+        {
+            "phase": "Batting first",
+            "plan": f"Set up for {best_target_text}.",
+            "why": f"Source: {target_source}. Chase failure rate: {pct_text(chase_failure)}.",
+            "key_players": "Top order + finishers",
+        },
+        {
+            "phase": "Bowling first",
+            "plan": f"Keep {team_b_label} to {best_restrict_text}.",
+            "why": f"Source: {restrict_source}. Loss rate: {pct_text(restrict_loss_pct)}.",
+            "key_players": "Powerplay bowlers + middle-over control",
+        },
+        {
+            "phase": "Opponent batting core",
+            "plan": f"Build plans around removing or controlling {key_batter}.",
+            "why": key_batter_reason,
+            "key_players": key_batter,
+        },
+        {
+            "phase": "Bowling matchup",
+            "plan": f"Use {key_bowling_matchup}.",
+            "why": key_bowling_matchup_reason,
+            "key_players": key_bowling_matchup,
+        },
+        {
+            "phase": "Batting matchup",
+            "plan": f"Target {key_batting_matchup}.",
+            "why": key_batting_matchup_reason,
+            "key_players": key_batting_matchup,
+        },
+    ]
 
+    if top3_dependency_is_clear:
+        action_plan_rows.insert(
+            2,
+            {
+                "phase": "Powerplay wickets",
+                "plan": f"Attack {team_b_label}'s top three early.",
+                "why": top3_plan_text,
+                "key_players": key_batter,
+            },
+        )
+    else:
+        action_plan_rows.insert(
+            2,
+            {
+                "phase": "Middle-order control",
+                "plan": f"Do not over-focus only on {team_b_label}'s top three.",
+                "why": top3_plan_text,
+                "key_players": "Top order + middle order",
+            },
+        )
+
+    action_plan_df = pd.DataFrame(action_plan_rows)
+
+    action_plan_df = pd.DataFrame(action_plan_rows)        
+
+    action_plan_df = pd.DataFrame(action_plan_rows)
     summary_df = pd.DataFrame(
         [
             {
@@ -827,6 +1027,7 @@ ORDER BY
         "opponent_current_key_batters": opponent_current_key_batters_df,
         "bowling_phase_matchups": bowling_phase_matchups_df,
         "batting_phase_matchups": batting_phase_matchups_df,
+        "action_plan": action_plan_df,
         "sql_queries": {
             "head_to_head": head_to_head_sql,
             "opponent_chase_thresholds": opponent_chase_threshold_sql,
