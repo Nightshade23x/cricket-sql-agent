@@ -54,6 +54,17 @@ def set_example_question(question):
 def is_non_empty_dataframe(value):
     return isinstance(value, pd.DataFrame) and not value.empty
 
+def should_show_table(value):
+    if value is None:
+        return False
+
+    if isinstance(value, pd.DataFrame):
+        return not value.empty
+
+    if isinstance(value, (list, tuple, dict)):
+        return len(value) > 0
+
+    return True
 
 def display_result(title, value):
     if value is None:
@@ -212,6 +223,9 @@ if response is not None:
         st.markdown("### Extra analysis tables")
 
         for table_name, table_value in extra_tables.items():
+            if not should_show_table(table_value):
+                continue
+
             pretty_name = table_name.replace("_", " ").title()
 
             with st.expander(pretty_name, expanded=False):

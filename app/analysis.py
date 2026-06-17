@@ -196,6 +196,8 @@ def analyze_team_vs_team_match_plan(
     if venue_condition is not None:
         venue_filter = f" AND {venue_condition}"
         venue_text = f" at {venue_label}" if venue_label else ""
+    team_a_label_sql = str(team_a_label).replace("'", "''")
+    team_b_label_sql = str(team_b_label).replace("'", "''")
 
     head_to_head_sql = f"""
 WITH match_teams AS (
@@ -239,6 +241,79 @@ SELECT
         2
     ) AS team_b_win_pct
 FROM h2h_matches m;
+""".strip()
+    recent_head_to_head_sql = f"""
+WITH match_teams AS (
+    SELECT DISTINCT
+        d.match_id,
+        d.batting_team
+    FROM deliveries d
+),
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.batting_team,
+        SUM(d.runs_off_bat + d.extras) AS total_runs
+    FROM deliveries d
+    GROUP BY
+        d.match_id,
+        d.innings,
+        d.batting_team
+),
+h2h_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.start_date,
+        m.venue,
+        m.winner
+    FROM matches m
+    WHERE EXISTS (
+        SELECT 1
+        FROM match_teams mt
+        WHERE mt.match_id = m.match_id
+          AND {team_a_as_mt}
+    )
+      AND EXISTS (
+        SELECT 1
+        FROM match_teams mt
+        WHERE mt.match_id = m.match_id
+          AND {team_b_as_mt}
+    )
+      {venue_filter}
+)
+SELECT TOP 5
+    '{team_a_label_sql}' AS team_a,
+    '{team_b_label_sql}' AS team_b,
+    h.start_date,
+    h.venue,
+    i1.batting_team AS first_innings_team,
+    i1.total_runs AS first_innings_score,
+    i2.batting_team AS second_innings_team,
+    i2.total_runs AS second_innings_score,
+    h.winner,
+    CONCAT(
+        CAST(h.start_date AS varchar(20)),
+        ': ',
+        COALESCE(i1.batting_team, 'Unknown'),
+        ' ',
+        COALESCE(CAST(i1.total_runs AS varchar(20)), 'N/A'),
+        ' vs ',
+        COALESCE(i2.batting_team, 'Unknown'),
+        ' ',
+        COALESCE(CAST(i2.total_runs AS varchar(20)), 'N/A'),
+        '. Winner: ',
+        COALESCE(h.winner, 'No result')
+    ) AS result_summary
+FROM h2h_matches h
+LEFT JOIN innings_scores i1
+    ON h.match_id = i1.match_id
+   AND i1.innings = 1
+LEFT JOIN innings_scores i2
+    ON h.match_id = i2.match_id
+   AND i2.innings = 2
+ORDER BY
+    CAST(h.start_date AS date) DESC;
 """.strip()
 
     opponent_chase_threshold_sql = f"""
@@ -741,6 +816,7 @@ ORDER BY
 """.strip()
 
     head_to_head_df = run_query(head_to_head_sql)
+    recent_head_to_head_df = run_query(recent_head_to_head_sql)
     opponent_chase_threshold_df = run_query(opponent_chase_threshold_sql)
     opponent_batting_first_restrict_df = run_query(opponent_batting_first_restrict_sql)
     opponent_top3_dependency_df = run_query(opponent_top3_dependency_sql)
@@ -1021,6 +1097,7 @@ ORDER BY
         "paragraph": paragraph,
         "summary": summary_df,
         "head_to_head": head_to_head_df,
+        "recent_head_to_head_results": recent_head_to_head_df,
         "opponent_chase_thresholds": opponent_chase_threshold_df,
         "opponent_batting_first_restrict": opponent_batting_first_restrict_df,
         "opponent_top3_dependency": opponent_top3_dependency_df,
@@ -1036,6 +1113,7 @@ ORDER BY
             "opponent_current_key_batters": opponent_current_key_batters_sql,
             "bowling_phase_matchups": bowling_phase_matchups_sql,
             "batting_phase_matchups": batting_phase_matchups_sql,
+            "recent_head_to_head_results": recent_head_to_head_sql,
         },
     }
 def analyze_bowler_length_plan_against_batter(
@@ -1617,6 +1695,122 @@ def get_franchise_history_paragraph(team_label):
         team_key,
         f"{team_label} have an IPL identity shaped by their long-term performers, home conditions, squad balance and major match-winners."
     )
+
+def analyze_team_trophy_record(team_condition, team_label):
+    """
+    Dynamic trophy/best-finish box based on local matches table.
+
+    Assumption:
+    The final is the last match by start_date in each IPL season.
+    This works for Cricsheet-style season data where the final is the last dated match.
+    """
+
+    def to_col(condition, new_column_name):
+        if condition is None:
+            return "1 = 1"
+
+        replacements = [
+            "final_teams.team_name",
+            "bat_cs.team_name",
+            "bowl_cs.team_name",
+            "cs.team_name",
+            "d.batting_team",
+            "d.bowling_team",
+            "fm.winner",
+            "m.winner",
+        ]
+
+        # Important: return after the first matching replacement.
+        # This prevents d.batting_team -> fm.winner -> ffm.winner.
+        for old_column in replacements:
+            if old_column in condition:
+                return condition.replace(old_column, new_column_name)
+
+        return condition
+
+    team_as_final_team = to_col(team_condition, "final_teams.team_name")
+    team_as_winner = to_col(team_condition, "fm.winner")
+
+    trophy_sql = f"""
+WITH final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    GROUP BY season
+),
+final_matches AS (
+    SELECT
+        m.match_id,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.winner
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+),
+final_teams AS (
+    SELECT DISTINCT
+        fm.match_id,
+        fm.season,
+        fm.start_date,
+        fm.venue,
+        fm.winner,
+        d.batting_team AS team_name
+    FROM final_matches fm
+    JOIN deliveries d
+        ON fm.match_id = d.match_id
+),
+team_finals AS (
+    SELECT DISTINCT
+        fm.season,
+        fm.start_date,
+        fm.venue,
+        fm.winner,
+        CASE
+            WHEN {team_as_winner} THEN 'Champion'
+            ELSE 'Runner-up'
+        END AS finish
+    FROM final_matches fm
+    JOIN final_teams
+        ON fm.match_id = final_teams.match_id
+    WHERE {team_as_final_team}
+)
+SELECT
+    '{str(team_label).replace("'", "''")}' AS team,
+    COUNT(CASE WHEN finish = 'Champion' THEN 1 END) AS trophies,
+    STRING_AGG(CASE WHEN finish = 'Champion' THEN CAST(season AS varchar(20)) END, ', ') AS trophy_years,
+    COUNT(CASE WHEN finish = 'Runner-up' THEN 1 END) AS runner_up_finishes,
+    STRING_AGG(CASE WHEN finish = 'Runner-up' THEN CAST(season AS varchar(20)) END, ', ') AS runner_up_years,
+    CASE
+        WHEN COUNT(CASE WHEN finish = 'Champion' THEN 1 END) > 0
+            THEN CONCAT(
+                '{str(team_label).replace("'", "''")}',
+                ' have won ',
+                COUNT(CASE WHEN finish = 'Champion' THEN 1 END),
+                ' IPL title(s): ',
+                COALESCE(STRING_AGG(CASE WHEN finish = 'Champion' THEN CAST(season AS varchar(20)) END, ', '), 'N/A'),
+                '.'
+            )
+        WHEN COUNT(CASE WHEN finish = 'Runner-up' THEN 1 END) > 0
+            THEN CONCAT(
+                '{str(team_label).replace("'", "''")}',
+                ' have not won the IPL in this dataset, but reached the final in: ',
+                COALESCE(STRING_AGG(CASE WHEN finish = 'Runner-up' THEN CAST(season AS varchar(20)) END, ', '), 'N/A'),
+                '.'
+            )
+        ELSE CONCAT(
+            '{str(team_label).replace("'", "''")}',
+            ' have no title or final appearance recorded in the local dataset.'
+        )
+    END AS trophy_summary
+FROM team_finals;
+""".strip()
+
+    return run_query(trophy_sql), trophy_sql
+
 def analyze_team_report_squad_extras(team_condition, team_label):
     """
     Enhanced squad/team report extras.
@@ -1696,26 +1890,41 @@ def analyze_team_report_squad_extras(team_condition, team_label):
         },
     }
 
-    current_priority = {
-        "CSK": ["MS Dhoni", "Ruturaj Gaikwad", "Ravindra Jadeja", "Shivam Dube", "Noor Ahmad", "Matheesha Pathirana"],
-        "RCB": ["Virat Kohli", "Rajat Patidar", "Phil Salt", "Josh Hazlewood", "Bhuvneshwar Kumar", "Yash Dayal"],
-        "MI": ["Rohit Sharma", "Suryakumar Yadav", "Jasprit Bumrah", "Hardik Pandya", "Tilak Varma", "Trent Boult"],
-        "GT": ["Shubman Gill", "Rashid Khan", "Sai Sudharsan", "Jos Buttler", "Mohammed Siraj", "Kagiso Rabada"],
-        "KKR": ["Sunil Narine", "Andre Russell", "Rinku Singh", "Varun Chakaravarthy", "Quinton de Kock", "Venkatesh Iyer"],
-        "SRH": ["Travis Head", "Abhishek Sharma", "Heinrich Klaasen", "Pat Cummins", "Ishan Kishan", "Mohammed Shami"],
-        "RR": ["Sanju Samson", "Yashasvi Jaiswal", "Riyan Parag", "Jofra Archer", "Wanindu Hasaranga", "Dhruv Jurel"],
-        "DC": ["KL Rahul", "Axar Patel", "Kuldeep Yadav", "Tristan Stubbs", "Faf du Plessis", "Mitchell Starc"],
-        "PBKS": ["Shreyas Iyer", "Arshdeep Singh", "Yuzvendra Chahal", "Glenn Maxwell", "Marcus Stoinis", "Prabhsimran Singh"],
-        "LSG": ["Nicholas Pooran", "Rishabh Pant", "Ravi Bishnoi", "Aiden Markram", "Mitchell Marsh", "Mayank Yadav"],
+    current_batting_priority = {
+    "CSK": ["MS Dhoni", "Ruturaj Gaikwad", "Ravindra Jadeja", "Shivam Dube", "Devon Conway", "Rahul Tripathi"],
+    "RCB": ["Virat Kohli", "Rajat Patidar", "Phil Salt", "Liam Livingstone", "Jitesh Sharma", "Tim David"],
+    "MI": ["Rohit Sharma", "Suryakumar Yadav", "Hardik Pandya", "Tilak Varma", "Ryan Rickelton", "Naman Dhir"],
+    "GT": ["Shubman Gill", "Sai Sudharsan", "Jos Buttler", "Sherfane Rutherford", "Rahul Tewatia", "Shahrukh Khan"],
+    "KKR": ["Sunil Narine", "Andre Russell", "Rinku Singh", "Quinton de Kock", "Venkatesh Iyer", "Ajinkya Rahane"],
+    "SRH": ["Travis Head", "Abhishek Sharma", "Heinrich Klaasen", "Ishan Kishan", "Nitish Kumar Reddy", "Aniket Verma"],
+    "RR": ["Sanju Samson", "Yashasvi Jaiswal", "Riyan Parag", "Dhruv Jurel", "Shimron Hetmyer", "Nitish Rana"],
+    "DC": ["KL Rahul", "Axar Patel", "Tristan Stubbs", "Faf du Plessis", "Abishek Porel", "Ashutosh Sharma"],
+    "PBKS": ["Shreyas Iyer", "Glenn Maxwell", "Marcus Stoinis", "Prabhsimran Singh", "Nehal Wadhera", "Shashank Singh"],
+    "LSG": ["Nicholas Pooran", "Rishabh Pant", "Aiden Markram", "Mitchell Marsh", "Ayush Badoni", "David Miller"],
+    }   
+
+    current_bowling_priority = {
+        "CSK": ["Ravindra Jadeja", "Noor Ahmad", "Matheesha Pathirana", "Khaleel Ahmed", "Ravichandran Ashwin", "Sam Curran"],
+        "RCB": ["Josh Hazlewood", "Bhuvneshwar Kumar", "Yash Dayal", "Krunal Pandya", "Suyash Sharma", "Liam Livingstone"],
+        "MI": ["Jasprit Bumrah", "Hardik Pandya", "Trent Boult", "Deepak Chahar", "Mitchell Santner", "Allah Ghazanfar"],
+        "GT": ["Rashid Khan", "Mohammed Siraj", "Kagiso Rabada", "Prasidh Krishna", "R Sai Kishore", "Noor Ahmad"],
+        "KKR": ["Sunil Narine", "Andre Russell", "Varun Chakaravarthy", "Anrich Nortje", "Harshit Rana", "Vaibhav Arora"],
+        "SRH": ["Pat Cummins", "Mohammed Shami", "Harshal Patel", "Rahul Chahar", "Adam Zampa", "Jaydev Unadkat"],
+        "RR": ["Jofra Archer", "Wanindu Hasaranga", "Maheesh Theekshana", "Sandeep Sharma", "Tushar Deshpande", "Akash Madhwal"],
+        "DC": ["Axar Patel", "Kuldeep Yadav", "Mitchell Starc", "T Natarajan", "Mukesh Kumar", "Dushmantha Chameera"],
+        "PBKS": ["Arshdeep Singh", "Yuzvendra Chahal", "Marco Jansen", "Glenn Maxwell", "Marcus Stoinis", "Lockie Ferguson"],
+        "LSG": ["Ravi Bishnoi", "Mayank Yadav", "Avesh Khan", "Mohsin Khan", "Shardul Thakur", "Shahbaz Ahmed"],
     }
 
     priority_batters = historical_priority.get(team_key, {}).get("batters", [])
     priority_bowlers = historical_priority.get(team_key, {}).get("bowlers", [])
-    priority_current_players = current_priority.get(team_key, [])
+    priority_current_batters = current_batting_priority.get(team_key, [])
+    priority_current_bowlers = current_bowling_priority.get(team_key, [])
 
     priority_batters_sql = sql_string_list(priority_batters)
     priority_bowlers_sql = sql_string_list(priority_bowlers)
-    priority_current_sql = sql_string_list(priority_current_players)
+    priority_current_batting_sql = sql_string_list(priority_current_batters)
+    priority_current_bowling_sql = sql_string_list(priority_current_bowlers)
 
     batting_team_condition = to_col(team_condition, "d.batting_team")
     bowling_team_condition = to_col(team_condition, "d.bowling_team")
@@ -1908,6 +2117,17 @@ current_players AS (
     FROM current_squads cs
     WHERE cs.is_active = 1
       AND {current_team_condition}
+      AND (
+          cs.display_name IN ({priority_current_batting_sql})
+          OR LOWER(cs.role) LIKE '%batter%'
+          OR LOWER(cs.role) LIKE '%keeper%'
+          OR LOWER(cs.role) LIKE '%all%'
+      )
+      AND NOT (
+          LOWER(cs.role) LIKE '%bowler%'
+          AND LOWER(cs.role) NOT LIKE '%all%'
+          AND cs.display_name NOT IN ({priority_current_batting_sql})
+      )
 ),
 career AS (
     SELECT
@@ -1946,18 +2166,21 @@ scored AS (
         cp.display_name,
         cp.cricsheet_name,
         cp.role,
+        l.latest_season,
+        CONCAT(CAST(l.latest_season - 2 AS varchar(4)), '-', CAST(l.latest_season AS varchar(4))) AS recent_window,
         COALESCE(c.career_runs, 0) AS career_runs,
         COALESCE(r.recent_runs, 0) AS recent_runs,
         c.career_strike_rate,
         r.recent_strike_rate,
         ROUND(
-            CASE WHEN cp.display_name IN ({priority_current_sql}) THEN 100000 ELSE 0 END
+            CASE WHEN cp.display_name IN ({priority_current_batting_sql}) THEN 100000 ELSE 0 END
             + COALESCE(r.recent_runs, 0) * 2.0
             + COALESCE(c.career_runs, 0) * 0.35
             + COALESCE(r.recent_strike_rate, c.career_strike_rate, 0) * 1.0,
             2
         ) AS watch_score
     FROM current_players cp
+    CROSS JOIN latest l
     LEFT JOIN career c
         ON cp.cricsheet_name = c.striker
     LEFT JOIN recent r
@@ -1970,6 +2193,7 @@ SELECT TOP 3
     display_name,
     cricsheet_name,
     role,
+    recent_window,
     career_runs,
     recent_runs,
     CAST(CAST(career_strike_rate AS decimal(10, 2)) AS float) AS career_strike_rate,
@@ -1988,12 +2212,18 @@ SELECT TOP 3
             display_name,
             ' is a current batting watch because he has ',
             recent_runs,
-            ' recent runs and ',
+            ' recent runs from ',
+            recent_window,
+            ' and ',
             career_runs,
             ' career IPL runs.'
         )
     END AS reason
 FROM scored
+WHERE
+    display_name IN ({priority_current_batting_sql})
+    OR recent_runs >= 150
+    OR career_runs >= 750
 ORDER BY
     watch_score DESC,
     recent_runs DESC,
@@ -2070,10 +2300,12 @@ scored AS (
         cp.bowling_style,
         COALESCE(c.career_wickets, 0) AS career_wickets,
         COALESCE(r.recent_wickets, 0) AS recent_wickets,
+        COALESCE(c.career_legal_balls, 0) AS career_legal_balls,
+        COALESCE(r.recent_legal_balls, 0) AS recent_legal_balls,
         c.career_economy,
         r.recent_economy,
         ROUND(
-            CASE WHEN cp.display_name IN ({priority_current_sql}) THEN 100000 ELSE 0 END
+            CASE WHEN cp.display_name IN ({priority_current_bowling_sql}) THEN 100000 ELSE 0 END
             + COALESCE(r.recent_wickets, 0) * 35.0
             + COALESCE(c.career_wickets, 0) * 5.0
             + CASE
@@ -2122,6 +2354,12 @@ SELECT TOP 3
         )
     END AS reason
 FROM scored
+WHERE
+    display_name IN ({priority_current_bowling_sql})
+    OR recent_wickets >= 3
+    OR career_wickets >= 15
+    OR recent_legal_balls >= 60
+    OR career_legal_balls >= 300
 ORDER BY
     watch_score DESC,
     recent_wickets DESC,
@@ -2151,6 +2389,10 @@ ORDER BY
     current_batters_to_watch_df = run_query(current_batters_to_watch_sql)
     current_bowlers_to_watch_df = run_query(current_bowlers_to_watch_sql)
     squad_snapshot_df = run_query(squad_snapshot_sql)
+    trophy_record_df, trophy_record_sql = analyze_team_trophy_record(
+        team_condition=team_condition,
+        team_label=team_label,
+    )
 
     historical_legends_df = pd.concat(
         [historical_batting_legends_df, historical_bowling_legends_df],
@@ -2168,9 +2410,10 @@ ORDER BY
     top_bowling_legend = safe_first_value(historical_bowling_legends_df, "player", "their bowling legends")
     top_current_batter = safe_first_value(current_batters_to_watch_df, "display_name", "their current batting core")
     top_current_bowler = safe_first_value(current_bowlers_to_watch_df, "display_name", "their current bowling core")
-
+    trophy_summary = safe_first_value(trophy_record_df, "trophy_summary", "")
     paragraph = (
         f"{franchise_history} "
+        f"{trophy_summary} "
         f"For historical legends, the batting/all-round group is led by {top_batting_legend}, while the bowling/all-round group is led by {top_bowling_legend}. "
         f"In the current squad, the batting watch starts with {top_current_batter}, and the bowling watch starts with {top_current_bowler}."
     )
@@ -2211,12 +2454,14 @@ ORDER BY
         "current_bowlers_to_watch": current_bowlers_to_watch_df,
         "current_players_to_watch": current_players_to_watch_df,
         "squad_snapshot": squad_snapshot_df,
+        "trophy_record": trophy_record_df,
         "sql_queries": {
             "historical_batting_legends": historical_batting_legends_sql,
             "historical_bowling_legends": historical_bowling_legends_sql,
             "current_batters_to_watch": current_batters_to_watch_sql,
             "current_bowlers_to_watch": current_bowlers_to_watch_sql,
             "squad_snapshot": squad_snapshot_sql,
+            "trophy_record": trophy_record_sql,
         },
     }
 def analyze_enhanced_team_profile(team_condition, team_label):
@@ -2279,6 +2524,7 @@ def analyze_enhanced_team_profile(team_condition, team_label):
         "current_bowlers_to_watch": squad_context["current_bowlers_to_watch"],
         "current_players_to_watch": squad_context["current_players_to_watch"],
         "squad_snapshot": squad_context["squad_snapshot"],
+        "trophy_record": squad_context["trophy_record"],
         "sql_queries": sql_queries,
     }
 def analyze_player_dismissals(player_condition):
