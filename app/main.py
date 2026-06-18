@@ -56,7 +56,10 @@ HIDDEN_COLUMNS = {
     "second_innings_wickets",
     "matchup_score",
     "legal_balls",   
-}
+    "legal_balls",
+    "analysis_area",
+    "insight",
+    }
 
 LONG_TEXT_COLUMNS = {
     "reason",
@@ -121,6 +124,29 @@ def should_show_table(value):
         return len(value) > 0
 
     return True
+
+def pretty_table_title(title):
+    title_key = str(title).lower().strip()
+
+    title_map = {
+        "career": "Career summary",
+        "season_trend": "Season-by-season trend",
+        "phase_performance": "Phase performance",
+        "opponent_performance": "Opponent record",
+        "venue_performance": "Venue record",
+        "playoff_performance": "Playoff record",
+        "dismissal_types": "Dismissal types",
+        "bowler_success": "Bowlers he scores well against",
+        "bowler_dismissals": "Bowlers who dismiss him most",
+        "quiet_bowlers": "Bowlers who keep him quiet",
+        "preferred_bowler_types": "Preferred bowling types",
+        "difficult_bowler_types": "Difficult bowling types",
+        "active_quiet_bowlers": "Active/recent restrictive bowlers",
+        "batter_matchups": "Best batter matchups",
+        "bowler_matchups": "Bowler matchups",
+    }
+
+    return title_map.get(title_key, str(title).replace("_", " ").title())
 
 
 def pretty_column_name(column_name):
@@ -372,6 +398,81 @@ def format_bowler_matchups_table(df):
 
     return clean_df.rename(columns=rename_map)
 
+def format_player_profile_table(df, title):
+    clean_df = df.copy()
+    title_key = str(title).lower().strip()
+
+    preferred_orders = {
+        "career": [
+            "batter", "bowler", "matches", "innings", "total_runs", "highest_score",
+            "balls_faced", "dismissals", "batting_average", "strike_rate",
+            "fours", "sixes", "fifties", "hundreds", "overs", "runs_conceded",
+            "wickets", "economy_rate", "bowling_average", "bowling_strike_rate",
+            "dot_ball_pct",
+        ],
+        "season_trend": [
+            "season_year", "matches", "innings", "runs", "highest_score",
+            "balls_faced", "dismissals", "batting_average", "strike_rate",
+            "overs", "runs_conceded", "wickets", "economy_rate",
+        ],
+        "phase_performance": [
+            "phase", "runs", "balls_faced", "dismissals", "strike_rate",
+            "overs", "runs_conceded", "wickets", "economy_rate",
+        ],
+        "opponent_performance": [
+            "opponent", "runs", "balls_faced", "dismissals", "batting_average",
+            "strike_rate", "overs", "runs_conceded", "wickets", "economy_rate",
+        ],
+        "venue_performance": [
+            "venue", "runs", "balls_faced", "dismissals", "strike_rate",
+            "overs", "runs_conceded", "wickets", "economy_rate",
+        ],
+        "batter_matchups": [
+            "batter", "balls", "runs", "dismissals", "batter_strike_rate", "verdict",
+        ],
+    }
+
+    if title_key in preferred_orders:
+        order = [col for col in preferred_orders[title_key] if col in clean_df.columns]
+        remaining = [col for col in clean_df.columns if col not in order]
+        clean_df = clean_df[order + remaining]
+
+    rename_map = {
+        "batter": "Batter",
+        "bowler": "Bowler",
+        "matches": "Matches",
+        "innings": "Innings",
+        "total_runs": "Runs",
+        "highest_score": "Highest Score",
+        "balls_faced": "Balls",
+        "dismissals": "Dismissals",
+        "batting_average": "Average",
+        "strike_rate": "Strike Rate",
+        "fours": "4s",
+        "sixes": "6s",
+        "fifties": "50s",
+        "hundreds": "100s",
+        "season_year": "Season",
+        "phase": "Phase",
+        "opponent": "Opponent",
+        "venue": "Venue",
+        "overs": "Overs",
+        "runs_conceded": "Runs Conceded",
+        "wickets": "Wickets",
+        "economy_rate": "Economy",
+        "bowling_average": "Bowling Average",
+        "bowling_strike_rate": "Bowling Strike Rate",
+        "dot_ball_pct": "Dot Ball %",
+        "batter_strike_rate": "Batter SR",
+        "verdict": "Verdict",
+        "wicket_type": "Dismissal Type",
+        "bowling_style": "Bowling Style",
+    }
+
+    clean_df = clean_df.rename(columns={col: rename_map.get(col, col) for col in clean_df.columns})
+
+    return clean_df
+
 def render_action_plan(df):
     clean_df = clean_dataframe_for_display(df)
 
@@ -437,72 +538,307 @@ def render_long_text_details(original_df, long_text_columns):
                     )
 
 
-def display_result(title, value):
-    if value is None:
+def display_result(response, table_value=None):
+    if response is None:
+        st.warning("No result returned.")
         return
 
-    if isinstance(value, pd.DataFrame):
-        if value.empty:
-            st.info(f"No rows returned for {title}.")
-            return
+    def _clean_text(value):
+        if value is None:
+            return ""
+        try:
+            return clean_user_text(value)
+        except Exception:
+            return str(value)
 
-        clean_value = clean_dataframe_for_display(value)
+    def _pretty_title(title):
+        try:
+            return pretty_table_title(title)
+        except Exception:
+            return str(title).replace("_", " ").title()
 
-        if str(title).lower() == "head to head":
-            clean_value = rename_head_to_head_columns(clean_value)
-        if str(title).lower() == "recent head to head results":
-            clean_value = format_recent_h2h_table(clean_value)
-        if str(title).lower() == "bowler matchups":
-            clean_value = format_bowler_matchups_table(clean_value)
+    def _is_dataframe(value):
+        return hasattr(value, "copy") and hasattr(value, "columns")
 
-        lower_columns = {str(col).lower() for col in clean_value.columns}
+    def _is_empty_table(value):
+        if value is None:
+            return True
+        if _is_dataframe(value) and value.empty:
+            return True
+        return False
 
-        if {"phase", "plan", "why"}.issubset(lower_columns):
-            render_action_plan(clean_value)
-            return
+    def _drop_hidden_columns(df):
+        clean_df = df.copy()
+        original_df = df.copy()
 
-        long_text_columns = [
-            col for col in clean_value.columns
-            if str(col).lower() in LONG_TEXT_COLUMNS
+        hidden_columns = set(globals().get("HIDDEN_COLUMNS", set()))
+        hidden_columns_lower = {str(col).lower() for col in hidden_columns}
+
+        columns_to_drop = [
+            col for col in clean_df.columns
+            if str(col).lower() in hidden_columns_lower
         ]
 
-        table_value = clean_value.copy()
+        if columns_to_drop:
+            clean_df = clean_df.drop(columns=columns_to_drop, errors="ignore")
 
-        if long_text_columns:
-            table_value = table_value.drop(columns=long_text_columns)
+        # Safety: never return a zero-column table if the original had useful columns.
+        if len(clean_df.columns) == 0 and len(original_df.columns) > 0:
+            return original_df
 
-        remaining_columns = {str(col).lower() for col in table_value.columns}
+        return clean_df
 
-        show_dataframe = (
-            not table_value.empty
-            and len(table_value.columns) > 0
-            and not remaining_columns.issubset(LABEL_ONLY_COLUMNS)
-        )
+    def _apply_special_formatters(df, title):
+        clean_df = df.copy()
+        title_key = str(title).lower().strip()
 
-        if show_dataframe:
-            display_table = table_value.rename(columns=pretty_column_name)
-            st.dataframe(display_table, use_container_width=True, hide_index=True)
+        if title_key == "recent head to head results":
+            try:
+                clean_df = format_recent_h2h_table(clean_df)
+            except Exception:
+                pass
 
-        if long_text_columns:
-            render_long_text_details(clean_value, long_text_columns)
+        if title_key == "bowler matchups":
+            try:
+                clean_df = format_bowler_matchups_table(clean_df)
+            except Exception:
+                pass
 
-        return
+        player_profile_tables = {
+            "career",
+            "season_trend",
+            "phase_performance",
+            "opponent_performance",
+            "venue_performance",
+            "playoff_performance",
+            "dismissal_types",
+            "bowler_success",
+            "bowler_dismissals",
+            "quiet_bowlers",
+            "preferred_bowler_types",
+            "difficult_bowler_types",
+            "active_quiet_bowlers",
+            "batter_matchups",
+        }
 
-    if isinstance(value, (list, tuple)):
-        if len(value) == 0:
-            st.info(f"No rows returned for {title}.")
-        else:
+        if title_key in player_profile_tables:
+            try:
+                clean_df = format_player_profile_table(clean_df, title)
+            except Exception:
+                pass
+
+        return clean_df
+
+    def _is_summary_like_table(df):
+        if not _is_dataframe(df):
+            return False
+
+        lower_cols = {str(col).lower() for col in df.columns}
+
+        if lower_cols == {"analysis_area", "insight"}:
+            return True
+
+        if lower_cols == {"section", "summary"}:
+            return True
+
+        return False
+
+    def _long_text_columns(df):
+        long_text_set = set(globals().get("LONG_TEXT_COLUMNS", set()))
+        long_text_set = {str(col).lower() for col in long_text_set}
+
+        detected = []
+
+        for col in df.columns:
+            col_key = str(col).lower()
+
+            if col_key in long_text_set:
+                detected.append(col)
+                continue
+
+            try:
+                sample = df[col].dropna().astype(str).head(5)
+                if not sample.empty and sample.map(len).mean() > 120:
+                    detected.append(col)
+            except Exception:
+                pass
+
+        return detected
+
+    def _detail_label(row, index):
+        preferred_cols = [
+            "Bowler",
+            "Batter",
+            "Verdict",
+            "Phase",
+            "Player",
+            "Team",
+            "Opponent",
+            "Venue",
+            "Season",
+            "Context",
+            "section",
+            "Section",
+            "phase",
+            "player",
+            "team",
+            "opponent",
+            "venue",
+        ]
+
+        parts = []
+
+        for col in preferred_cols:
+            if col in row.index:
+                value = row.get(col)
+                if value is not None and str(value).strip() and str(value).lower() != "nan":
+                    parts.append(str(value).strip())
+
+        if parts:
+            return " - ".join(parts[:3])
+
+        return f"Row {index + 1}"
+
+    def _render_dataframe(title, df):
+        if not _is_dataframe(df):
+            st.write(df)
+            return
+
+        clean_df = df.copy()
+
+        if clean_df.empty:
+            return
+
+        long_cols = _long_text_columns(clean_df)
+
+        compact_df = clean_df.drop(columns=long_cols, errors="ignore")
+
+        # Safety: if long-text detection removed every column, show a shortened table instead.
+        if len(compact_df.columns) == 0:
+            compact_df = clean_df.copy()
+
+            for col in compact_df.columns:
+                try:
+                    compact_df[col] = compact_df[col].astype(str).apply(
+                        lambda x: x[:140] + "..." if len(x) > 140 else x
+                    )
+                except Exception:
+                    pass
+
+            st.dataframe(compact_df, use_container_width=True, hide_index=True)
+            return
+
+        st.dataframe(compact_df, use_container_width=True, hide_index=True)
+
+        if long_cols:
+            st.markdown("**Details**")
+
+            for idx, row in clean_df.iterrows():
+                label = _detail_label(row, idx)
+
+                with st.expander(label):
+                    for col in long_cols:
+                        value = row.get(col)
+
+                        if value is None:
+                            continue
+
+                        value_text = str(value).strip()
+
+                        if value_text == "" or value_text.lower() == "nan":
+                            continue
+
+                        st.markdown(f"**{str(col)}**")
+                        st.write(_clean_text(value_text))
+
+    def _render_table(title, value, allow_summary=False):
+        if _is_empty_table(value):
+            return
+
+        if not _is_dataframe(value):
+            st.markdown(f"### {_pretty_title(title)}")
             st.write(value)
+            return
+
+        clean_value = value.copy()
+        clean_value = _apply_special_formatters(clean_value, title)
+        clean_value = _drop_hidden_columns(clean_value)
+
+        if clean_value.empty:
+            return
+
+        if not allow_summary and _is_summary_like_table(clean_value):
+            return
+
+        st.markdown(f"### {_pretty_title(title)}")
+        _render_dataframe(title, clean_value)
+
+    # Old call style used inside run_question:
+    # display_result(pretty_name, table_value)
+    if table_value is not None:
+        _render_table(response, table_value, allow_summary=True)
         return
 
-    if isinstance(value, dict):
-        if len(value) == 0:
-            st.info(f"No data returned for {title}.")
-        else:
-            st.json(value)
+    # Full response call style:
+    # display_result(response)
+    if not isinstance(response, dict):
+        st.write(response)
         return
 
-    st.write(value)
+    paragraph = (
+        response.get("analysis_paragraph")
+        or response.get("paragraph")
+        or response.get("answer")
+        or response.get("message")
+    )
+
+    if paragraph:
+        st.markdown("### Answer")
+        st.markdown(_clean_text(paragraph))
+
+    main_result = response.get("result")
+
+    if _is_dataframe(main_result) and not main_result.empty and not _is_summary_like_table(main_result):
+        st.markdown("### Result")
+        _render_table("result", main_result, allow_summary=False)
+    elif main_result is not None and not _is_dataframe(main_result):
+        st.markdown("### Result")
+        st.write(main_result)
+
+    extra_tables = response.get("extra_tables") or {}
+
+    for title, value in extra_tables.items():
+        _render_table(title, value, allow_summary=False)
+
+    similar_questions = (
+        response.get("similar_questions")
+        or response.get("follow_up_questions")
+        or response.get("suggested_questions")
+        or []
+    )
+
+    if similar_questions:
+        st.markdown("### Similar questions and deep dives")
+
+        for question in similar_questions:
+            if st.button(str(question), key=f"similar_{hash(str(question))}"):
+                try:
+                    select_question(str(question))
+                    st.rerun()
+                except Exception:
+                    st.session_state.question_input = str(question)
+                    st.session_state.run_requested = True
+                    st.rerun()
+
+    sql_text = (
+        response.get("sql")
+        or response.get("sql_query")
+        or response.get("combined_sql")
+    )
+
+    if sql_text:
+        with st.expander("SQL used"):
+            st.code(str(sql_text), language="sql")
 
 def select_question(question):
     st.session_state.question_input = question
