@@ -539,11 +539,7 @@ def render_long_text_details(original_df, long_text_columns):
 
 
 def display_result(response, table_value=None):
-    if response is None:
-        st.warning("No result returned.")
-        return
-
-    def _clean_text(value):
+    def clean_text_safe(value):
         if value is None:
             return ""
         try:
@@ -551,58 +547,53 @@ def display_result(response, table_value=None):
         except Exception:
             return str(value)
 
-    def _pretty_title(title):
+    def is_dataframe(value):
+        return hasattr(value, "copy") and hasattr(value, "columns")
+
+    def is_empty(value):
+        if value is None:
+            return True
+        if is_dataframe(value) and value.empty:
+            return True
+        return False
+
+    def title_safe(title):
         try:
             return pretty_table_title(title)
         except Exception:
             return str(title).replace("_", " ").title()
 
-    def _is_dataframe(value):
-        return hasattr(value, "copy") and hasattr(value, "columns")
-
-    def _is_empty_table(value):
-        if value is None:
-            return True
-        if _is_dataframe(value) and value.empty:
-            return True
-        return False
-
-    def _drop_hidden_columns(df):
+    def drop_hidden_columns(df):
         clean_df = df.copy()
-        original_df = df.copy()
 
         hidden_columns = set(globals().get("HIDDEN_COLUMNS", set()))
         hidden_columns_lower = {str(col).lower() for col in hidden_columns}
 
-        columns_to_drop = [
+        keep_cols = [
             col for col in clean_df.columns
-            if str(col).lower() in hidden_columns_lower
+            if str(col).lower() not in hidden_columns_lower
         ]
 
-        if columns_to_drop:
-            clean_df = clean_df.drop(columns=columns_to_drop, errors="ignore")
-
-        # Safety: never return a zero-column table if the original had useful columns.
-        if len(clean_df.columns) == 0 and len(original_df.columns) > 0:
-            return original_df
+        if keep_cols:
+            return clean_df[keep_cols]
 
         return clean_df
 
-    def _apply_special_formatters(df, title):
+    def apply_formatters(df, title):
         clean_df = df.copy()
         title_key = str(title).lower().strip()
 
         if title_key == "recent head to head results":
             try:
-                clean_df = format_recent_h2h_table(clean_df)
+                return format_recent_h2h_table(clean_df)
             except Exception:
-                pass
+                return clean_df
 
         if title_key == "bowler matchups":
             try:
-                clean_df = format_bowler_matchups_table(clean_df)
+                return format_bowler_matchups_table(clean_df)
             except Exception:
-                pass
+                return clean_df
 
         player_profile_tables = {
             "career",
@@ -623,14 +614,14 @@ def display_result(response, table_value=None):
 
         if title_key in player_profile_tables:
             try:
-                clean_df = format_player_profile_table(clean_df, title)
+                return format_player_profile_table(clean_df, title)
             except Exception:
-                pass
+                return clean_df
 
         return clean_df
 
-    def _is_summary_like_table(df):
-        if not _is_dataframe(df):
+    def is_summary_table(df):
+        if not is_dataframe(df):
             return False
 
         lower_cols = {str(col).lower() for col in df.columns}
@@ -643,52 +634,53 @@ def display_result(response, table_value=None):
 
         return False
 
-    def _long_text_columns(df):
-        long_text_set = set(globals().get("LONG_TEXT_COLUMNS", set()))
-        long_text_set = {str(col).lower() for col in long_text_set}
+    def get_long_text_columns(df):
+        long_text_names = set(globals().get("LONG_TEXT_COLUMNS", set()))
+        long_text_names = {str(col).lower() for col in long_text_names}
 
-        detected = []
+        long_cols = []
 
         for col in df.columns:
             col_key = str(col).lower()
 
-            if col_key in long_text_set:
-                detected.append(col)
+            if col_key in long_text_names:
+                long_cols.append(col)
                 continue
 
             try:
                 sample = df[col].dropna().astype(str).head(5)
-                if not sample.empty and sample.map(len).mean() > 120:
-                    detected.append(col)
+                if not sample.empty and sample.map(len).mean() > 130:
+                    long_cols.append(col)
             except Exception:
                 pass
 
-        return detected
+        return long_cols
 
-    def _detail_label(row, index):
-        preferred_cols = [
+    def detail_label(row, index):
+        label_cols = [
             "Bowler",
             "Batter",
             "Verdict",
-            "Phase",
             "Player",
             "Team",
             "Opponent",
             "Venue",
+            "Phase",
             "Season",
             "Context",
-            "section",
-            "Section",
-            "phase",
+            "bowler",
+            "batter",
+            "verdict",
             "player",
             "team",
             "opponent",
             "venue",
+            "phase",
         ]
 
         parts = []
 
-        for col in preferred_cols:
+        for col in label_cols:
             if col in row.index:
                 value = row.get(col)
                 if value is not None and str(value).strip() and str(value).lower() != "nan":
@@ -699,44 +691,43 @@ def display_result(response, table_value=None):
 
         return f"Row {index + 1}"
 
-    def _render_dataframe(title, df):
-        if not _is_dataframe(df):
-            st.write(df)
+    def render_table(title, value, show_title=True, allow_summary=False):
+        if is_empty(value):
             return
 
-        clean_df = df.copy()
-
-        if clean_df.empty:
+        if not is_dataframe(value):
+            if show_title:
+                st.markdown(f"### {title_safe(title)}")
+            st.write(value)
             return
 
-        long_cols = _long_text_columns(clean_df)
+        df = value.copy()
+        df = apply_formatters(df, title)
+        df = drop_hidden_columns(df)
 
-        compact_df = clean_df.drop(columns=long_cols, errors="ignore")
-
-        # Safety: if long-text detection removed every column, show a shortened table instead.
-        if len(compact_df.columns) == 0:
-            compact_df = clean_df.copy()
-
-            for col in compact_df.columns:
-                try:
-                    compact_df[col] = compact_df[col].astype(str).apply(
-                        lambda x: x[:140] + "..." if len(x) > 140 else x
-                    )
-                except Exception:
-                    pass
-
-            st.dataframe(compact_df, use_container_width=True, hide_index=True)
+        if df.empty:
             return
 
-        st.dataframe(compact_df, use_container_width=True, hide_index=True)
+        if is_summary_table(df) and not allow_summary:
+            return
+
+        if show_title:
+            st.markdown(f"### {title_safe(title)}")
+
+        long_cols = get_long_text_columns(df)
+        compact_df = df.drop(columns=long_cols, errors="ignore")
+
+        if compact_df.empty:
+            compact_df = df.copy()
+
+        # Use st.table for reliability. It avoids the blank dataframe rendering issue.
+        st.table(compact_df)
 
         if long_cols:
             st.markdown("**Details**")
 
-            for idx, row in clean_df.iterrows():
-                label = _detail_label(row, idx)
-
-                with st.expander(label):
+            for index, row in df.iterrows():
+                with st.expander(detail_label(row, index)):
                     for col in long_cols:
                         value = row.get(col)
 
@@ -745,42 +736,24 @@ def display_result(response, table_value=None):
 
                         value_text = str(value).strip()
 
-                        if value_text == "" or value_text.lower() == "nan":
+                        if not value_text or value_text.lower() == "nan":
                             continue
 
                         st.markdown(f"**{str(col)}**")
-                        st.write(_clean_text(value_text))
+                        st.write(clean_text_safe(value_text))
 
-    def _render_table(title, value, allow_summary=False):
-        if _is_empty_table(value):
-            return
-
-        if not _is_dataframe(value):
-            st.markdown(f"### {_pretty_title(title)}")
-            st.write(value)
-            return
-
-        clean_value = value.copy()
-        clean_value = _apply_special_formatters(clean_value, title)
-        clean_value = _drop_hidden_columns(clean_value)
-
-        if clean_value.empty:
-            return
-
-        if not allow_summary and _is_summary_like_table(clean_value):
-            return
-
-        st.markdown(f"### {_pretty_title(title)}")
-        _render_dataframe(title, clean_value)
-
-    # Old call style used inside run_question:
-    # display_result(pretty_name, table_value)
+    # Old call style:
+    # display_result(title, table_value)
     if table_value is not None:
-        _render_table(response, table_value, allow_summary=True)
+        render_table(response, table_value, show_title=False, allow_summary=True)
         return
 
-    # Full response call style:
+    # Full response style:
     # display_result(response)
+    if response is None:
+        st.warning("No result returned.")
+        return
+
     if not isinstance(response, dict):
         st.write(response)
         return
@@ -794,21 +767,25 @@ def display_result(response, table_value=None):
 
     if paragraph:
         st.markdown("### Answer")
-        st.markdown(_clean_text(paragraph))
+        st.markdown(clean_text_safe(paragraph))
 
     main_result = response.get("result")
 
-    if _is_dataframe(main_result) and not main_result.empty and not _is_summary_like_table(main_result):
-        st.markdown("### Result")
-        _render_table("result", main_result, allow_summary=False)
-    elif main_result is not None and not _is_dataframe(main_result):
+    if is_dataframe(main_result) and not main_result.empty:
+        if not is_summary_table(main_result):
+            st.markdown("### Result")
+            render_table("result", main_result, show_title=False, allow_summary=False)
+    elif main_result is not None and not is_dataframe(main_result):
         st.markdown("### Result")
         st.write(main_result)
 
     extra_tables = response.get("extra_tables") or {}
 
     for title, value in extra_tables.items():
-        _render_table(title, value, allow_summary=False)
+        if is_empty(value):
+            continue
+
+        render_table(title, value, show_title=True, allow_summary=False)
 
     similar_questions = (
         response.get("similar_questions")
@@ -822,13 +799,8 @@ def display_result(response, table_value=None):
 
         for question in similar_questions:
             if st.button(str(question), key=f"similar_{hash(str(question))}"):
-                try:
-                    select_question(str(question))
-                    st.rerun()
-                except Exception:
-                    st.session_state.question_input = str(question)
-                    st.session_state.run_requested = True
-                    st.rerun()
+                select_question(str(question))
+                st.rerun()
 
     sql_text = (
         response.get("sql")
@@ -991,50 +963,55 @@ if "question_input" not in st.session_state:
 
 
 
-example_groups = {
+EXAMPLE_QUESTION_GROUPS = {
+    "Classic analytics": [
+        "who are the top 10 run scorers in IPL",
+        "who are the top 10 wicket takers in IPL",
+        "who has the fastest 50 in ipl history",
+        "which team has the most trophies",
+    ],
+    "Player profiles": [
+        "analyse Kohli",
+        "analyse Bumrah",
+        "analyse Dhoni",
+        "analyse Rohit Sharma",
+    ],
     "Match plans": [
-        "how can MI beat KKR at Eden Gardens",
+        "how can MI beat RCB",
         "how can CSK beat GT at Chepauk",
-        "how can RCB beat GT",
+        "how can RCB beat GT at Chinnaswamy",
+        "how can GT beat RR at Narendra Modi Stadium",
     ],
     "Venue profiles": [
         "tell me about Eden Gardens",
         "tell me about Chepauk",
         "tell me about Wankhede",
+        "tell me about Chinnaswamy",
     ],
     "Squad and prediction": [
-        "analyse GT",
-        "analyse CSK",
         "which team has the strongest current squad",
+        "analyse CSK squad",
+        "analyse RCB squad",
         "who will win next season",
     ],
     "Tactical matchups": [
-        "how should Bumrah bowl to Narine",
-        "what length should Rashid bowl to Kohli",
-        "which bowlers should be used against Kohli as a batter",
-    ],
-    "Classic analytics": [
-        "top 10 run scorers",
-        "top 10 wicket takers",
-        "venues with highest average first innings score",
+        "how should Bumrah bowl to Kohli",
+        "what length should Rashid bowl to Suryavanshi",
+        "best bowlers against Kohli for GT",
+        "best bowlers against Dhoni at Chepauk",
     ],
 }
+st.markdown("## Example questions")
 
-st.markdown("### Example questions")
-
-for group_name, examples in example_groups.items():
-    with st.expander(group_name, expanded=False):
+for section_name, questions in EXAMPLE_QUESTION_GROUPS.items():
+    with st.expander(section_name, expanded=(section_name == "Classic analytics")):
         cols = st.columns(2)
 
-        for index, example in enumerate(examples):
+        for index, question in enumerate(questions):
             with cols[index % 2]:
-                st.button(
-                    example,
-                    key=f"example_{group_name}_{index}",
-                    on_click=select_question,
-                    args=(example,),
-                    use_container_width=True,
-                )
+                if st.button(question, key=f"example_{section_name}_{index}"):
+                    select_question(question)
+                    st.rerun()
 
 st.markdown("### Ask your question")
 

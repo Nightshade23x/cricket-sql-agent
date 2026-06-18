@@ -2873,7 +2873,7 @@ ORDER BY wickets DESC, economy_rate ASC, runs_conceded ASC;
         if venue_context:
             where_clauses.append(venue_condition)
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 WITH legal_bowler_balls AS (
@@ -3064,7 +3064,7 @@ ORDER BY total_{metric_name} DESC;
         if venue_context:
             where_clauses.append(venue_condition.replace("m.", "wm."))
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 WITH match_teams AS (
@@ -3120,7 +3120,7 @@ ORDER BY wm.winner_runs DESC;
         if venue_context:
             where_clauses.append(venue_condition.replace("m.", ""))
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 WITH chase_balls AS (
@@ -3171,7 +3171,7 @@ ORDER BY balls_remaining DESC;
         if venue_context:
             where_clauses.append(venue_condition.replace("m.", "wm."))
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 WITH match_teams AS (
@@ -3227,7 +3227,7 @@ ORDER BY wm.winner_runs DESC;
         if venue_context:
             where_clauses.append(venue_condition.replace("m.", ""))
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 WITH chase_balls AS (
@@ -3279,7 +3279,7 @@ ORDER BY balls_remaining DESC;
         if venue_context:
             where_clauses.append(venue_condition.replace("m.", "wm."))
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 WITH match_teams AS (
@@ -3335,7 +3335,7 @@ ORDER BY wm.winner_runs DESC;
         if venue_context:
             where_clauses.append(venue_condition.replace("m.", ""))
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 WITH chase_balls AS (
@@ -3588,7 +3588,7 @@ ORDER BY streak_length DESC, season;
         if venue_context:
             where_clauses.append(venue_condition)
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         wicket_filter = ""
 
@@ -4106,7 +4106,7 @@ GROUP BY d.striker, d.season;
                 where_clauses.append(opponent_condition)
                 select_parts.append(f"'{opponent_label}' AS opponent_group")
 
-            where_sql = build_and_sql(where_clauses)
+            where_sql = " AND ".join(where_clauses)
             select_sql = ",\n    ".join(select_parts)
             group_sql = ", ".join(group_parts)
 
@@ -4955,7 +4955,7 @@ ORDER BY team_score DESC;
         if venue_context:
             where_clauses.append(venue_condition)
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 SELECT TOP 10
@@ -6094,7 +6094,7 @@ ORDER BY runs_conceded DESC;
         if venue_context:
             where_clauses.append(venue_condition)
 
-        where_sql = build_and_sql(where_clauses)
+        where_sql = " AND ".join(where_clauses)
 
         return f"""
 SELECT TOP 10
@@ -7612,40 +7612,6 @@ AND EXISTS (
 
 
 
-def sanitize_sql_before_execution(sql_query):
-    if sql_query is None:
-        return None
-
-    sql = str(sql_query)
-
-    # Fix optional-filter bugs where helpers returned None or (None, None)
-    bad_filter_patterns = [
-        (r"\bWHERE\s+\(\s*None\s*,\s*None\s*\)", "WHERE 1=1"),
-        (r"\bAND\s+\(\s*None\s*,\s*None\s*\)", ""),
-        (r"\bOR\s+\(\s*None\s*,\s*None\s*\)", ""),
-
-        (r"\bWHERE\s+None\b", "WHERE 1=1"),
-        (r"\bAND\s+None\b", ""),
-        (r"\bOR\s+None\b", ""),
-
-        (r"\bWHERE\s+NULL\b", "WHERE 1=1"),
-        (r"\bAND\s+NULL\b", ""),
-        (r"\bOR\s+NULL\b", ""),
-
-        (r"\bWHERE\s+False\b", "WHERE 1=1"),
-        (r"\bAND\s+False\b", ""),
-        (r"\bOR\s+False\b", ""),
-    ]
-
-    for pattern, replacement in bad_filter_patterns:
-        sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
-
-    # Clean accidental duplicated spaces caused by removals
-    sql = re.sub(r"[ \t]+", " ", sql)
-    sql = re.sub(r"\n\s+\n", "\n", sql)
-
-    return sql.strip()
-
 def answer_question_with_fallback(user_question):
     if needs_team_clarification(user_question):
         return {
@@ -7664,7 +7630,6 @@ def answer_question_with_fallback(user_question):
     curated_sql = build_curated_sql(user_question)
 
     if curated_sql is not None:
-        curated_sql = sanitize_sql_before_execution(curated_sql)
         result = run_query(curated_sql)
         return {
             "method": "curated_template",
@@ -7759,54 +7724,4 @@ def build_where_sql(where_clauses):
         return ""
 
     return "WHERE " + " AND ".join(clean_clauses)
-
-def build_and_sql(where_clauses):
-    def flatten_clause(clause):
-        if clause is None:
-            return []
-
-        if isinstance(clause, tuple):
-            if len(clause) == 0:
-                return []
-            return flatten_clause(clause[0])
-
-        if isinstance(clause, list):
-            output = []
-            for item in clause:
-                output.extend(flatten_clause(item))
-            return output
-
-        clause_text = str(clause).strip()
-
-        if not clause_text:
-            return []
-
-        if clause_text.lower() in {"none", "null", "false"}:
-            return []
-
-        if clause_text.upper().startswith("WHERE "):
-            clause_text = clause_text[6:].strip()
-
-        if not clause_text:
-            return []
-
-        if clause_text.lower() in {"none", "null", "false"}:
-            return []
-
-        return [clause_text]
-
-    clean_clauses = []
-
-    for clause in where_clauses or []:
-        clean_clauses.extend(flatten_clause(clause))
-
-    clean_clauses = [
-        clause for clause in clean_clauses
-        if clause and str(clause).strip().lower() not in {"none", "null", "false"}
-    ]
-
-    if not clean_clauses:
-        return "1=1"
-
-    return " AND ".join(clean_clauses)
 

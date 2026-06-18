@@ -7612,40 +7612,6 @@ AND EXISTS (
 
 
 
-def sanitize_sql_before_execution(sql_query):
-    if sql_query is None:
-        return None
-
-    sql = str(sql_query)
-
-    # Fix optional-filter bugs where helpers returned None or (None, None)
-    bad_filter_patterns = [
-        (r"\bWHERE\s+\(\s*None\s*,\s*None\s*\)", "WHERE 1=1"),
-        (r"\bAND\s+\(\s*None\s*,\s*None\s*\)", ""),
-        (r"\bOR\s+\(\s*None\s*,\s*None\s*\)", ""),
-
-        (r"\bWHERE\s+None\b", "WHERE 1=1"),
-        (r"\bAND\s+None\b", ""),
-        (r"\bOR\s+None\b", ""),
-
-        (r"\bWHERE\s+NULL\b", "WHERE 1=1"),
-        (r"\bAND\s+NULL\b", ""),
-        (r"\bOR\s+NULL\b", ""),
-
-        (r"\bWHERE\s+False\b", "WHERE 1=1"),
-        (r"\bAND\s+False\b", ""),
-        (r"\bOR\s+False\b", ""),
-    ]
-
-    for pattern, replacement in bad_filter_patterns:
-        sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
-
-    # Clean accidental duplicated spaces caused by removals
-    sql = re.sub(r"[ \t]+", " ", sql)
-    sql = re.sub(r"\n\s+\n", "\n", sql)
-
-    return sql.strip()
-
 def answer_question_with_fallback(user_question):
     if needs_team_clarification(user_question):
         return {
@@ -7664,7 +7630,6 @@ def answer_question_with_fallback(user_question):
     curated_sql = build_curated_sql(user_question)
 
     if curated_sql is not None:
-        curated_sql = sanitize_sql_before_execution(curated_sql)
         result = run_query(curated_sql)
         return {
             "method": "curated_template",
