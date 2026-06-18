@@ -162,3 +162,5 @@ added similar ques box and fixed a bug where it didnt work
 improved tactical wording
 bowling matchups are better now
 fixed best bowlers against kohli ques,so kohli is treated as a batter not bowler
+improved front end bugs
+improved venue grouping
