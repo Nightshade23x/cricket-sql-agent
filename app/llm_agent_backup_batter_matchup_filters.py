@@ -24,7 +24,6 @@ from app.analysis import (
     analyze_team_vs_team_match_plan,
     analyze_venue_profile,
     analyze_bowlers_against_batter,
-    analyze_player_profile_smart,
 )
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -6720,19 +6719,10 @@ AND ms.season_year = {season}
         batter_condition = get_player_condition_from_question(user_question, "d.striker")
         batter_label = get_player_label_from_question(user_question)
 
-        bowling_team_condition = get_team_condition_from_question(user_question, "d.bowling_team")
-        bowling_team_label = get_team_label_from_question(user_question)
-
-        venue_condition, venue_label = get_venue_condition_from_question(user_question)
-
         if batter_condition is not None:
             analysis_result = analyze_bowlers_against_batter(
                 batter_condition=batter_condition,
                 batter_label=batter_label,
-                bowling_team_condition=bowling_team_condition,
-                bowling_team_label=bowling_team_label if bowling_team_condition is not None else None,
-                venue_condition=venue_condition,
-                venue_label=venue_label if venue_condition is not None else None,
             )
 
             combined_sql = ""
@@ -7512,18 +7502,21 @@ AND ms.season_year = {season}
         player_condition = get_player_condition_from_question(user_question, "d.striker")
 
         if player_condition is not None:
-            player_label = get_player_label_from_question(user_question)
+            analysis_result = analyze_player_profile(player_condition)
 
-            analysis_result = analyze_player_profile_smart(
-                player_condition=player_condition,
-                player_label=player_label,
-            )
-            combined_sql = ""
-
-            for query_name, query_sql in (analysis_result.get("sql_queries") or {}).items():
-                if query_sql:
-                    combined_sql += f"\n\n--- {query_name} ---\n{query_sql}"
-                        
+            combined_sql = "\n\n--- career ---\n" + analysis_result["sql_queries"]["career"]
+            combined_sql += "\n\n--- season_trend ---\n" + analysis_result["sql_queries"]["season_trend"]
+            combined_sql += "\n\n--- phase_performance ---\n" + analysis_result["sql_queries"]["phase_performance"]
+            combined_sql += "\n\n--- opponent_performance ---\n" + analysis_result["sql_queries"]["opponent_performance"]
+            combined_sql += "\n\n--- venue_performance ---\n" + analysis_result["sql_queries"]["venue_performance"]
+            combined_sql += "\n\n--- playoff_performance ---\n" + analysis_result["sql_queries"]["playoff_performance"]
+            combined_sql += "\n\n--- dismissal_types ---\n" + analysis_result["sql_queries"]["dismissal_types"]
+            combined_sql += "\n\n--- bowler_success ---\n" + analysis_result["sql_queries"]["bowler_success"]
+            combined_sql += "\n\n--- bowler_dismissals ---\n" + analysis_result["sql_queries"]["bowler_dismissals"]
+            combined_sql += "\n\n--- quiet_bowlers ---\n" + analysis_result["sql_queries"]["quiet_bowlers"]
+            combined_sql += "\n\n--- preferred_bowler_types ---\n" + analysis_result["sql_queries"]["preferred_bowler_types"]
+            combined_sql += "\n\n--- difficult_bowler_types ---\n" + analysis_result["sql_queries"]["difficult_bowler_types"]
+            combined_sql += "\n\n--- active_quiet_bowlers ---\n" + analysis_result["sql_queries"]["active_quiet_bowlers"]
             return {
                 "method": "analysis_layer",
                 "matched_question": "Full player profile analysis",
@@ -7531,21 +7524,20 @@ AND ms.season_year = {season}
                 "result": analysis_result["summary"],
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "career": analysis_result.get("career"),
-                    "season_trend": analysis_result.get("season_trend"),
-                    "phase_performance": analysis_result.get("phase_performance"),
-                    "opponent_performance": analysis_result.get("opponent_performance"),
-                    "venue_performance": analysis_result.get("venue_performance"),
-                    "playoff_performance": analysis_result.get("playoff_performance"),
-                    "dismissal_types": analysis_result.get("dismissal_types"),
-                    "bowler_success": analysis_result.get("bowler_success"),
-                    "bowler_dismissals": analysis_result.get("bowler_dismissals"),
-                    "quiet_bowlers": analysis_result.get("quiet_bowlers"),
-                    "preferred_bowler_types": analysis_result.get("preferred_bowler_types"),
-                    "difficult_bowler_types": analysis_result.get("difficult_bowler_types"),
-                    "active_quiet_bowlers": analysis_result.get("active_quiet_bowlers"),
-                    "batter_matchups": analysis_result.get("batter_matchups"),
-                },                
+                    "career": analysis_result["career"],
+                    "season_trend": analysis_result["season_trend"],
+                    "phase_performance": analysis_result["phase_performance"],
+                    "opponent_performance": analysis_result["opponent_performance"],
+                    "venue_performance": analysis_result["venue_performance"],
+                    "playoff_performance": analysis_result["playoff_performance"],
+                    "dismissal_types": analysis_result["dismissal_types"],
+                    "bowler_success": analysis_result["bowler_success"],
+                    "bowler_dismissals": analysis_result["bowler_dismissals"],
+                    "quiet_bowlers": analysis_result["quiet_bowlers"],
+                    "preferred_bowler_types": analysis_result["preferred_bowler_types"],
+                    "difficult_bowler_types": analysis_result["difficult_bowler_types"],
+                    "active_quiet_bowlers": analysis_result["active_quiet_bowlers"],
+                },
                 "error": None
             }
     # Last N encounters between two teams, e.g. last 5 encounters of MI vs CSK

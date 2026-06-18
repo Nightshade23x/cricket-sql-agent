@@ -54,8 +54,6 @@ HIDDEN_COLUMNS = {
     "full_name_bowler",
     "first_innings_wickets",
     "second_innings_wickets",
-    "matchup_score",
-    "legal_balls",   
 }
 
 LONG_TEXT_COLUMNS = {
@@ -67,10 +65,6 @@ LONG_TEXT_COLUMNS = {
     "result_summary",
     "plan",
     "toss_plan",
-    "reason",
-    "Reason",
-    "battle note",
-    "battle_note",
 }
 
 LABEL_ONLY_COLUMNS = {
@@ -129,8 +123,6 @@ def pretty_column_name(column_name):
 
 def clean_user_text(text):
     text = str(text)
-    text = re.sub(r"(\d+\.\d)0{3,}", r"\1", text)
-    text = re.sub(r"(\d+)\.0{3,}", r"\1", text)
 
     text = re.sub(r"(\d+)\.0\+", r"\1+", text)
     text = re.sub(r"(\d+)\.0 or below", r"\1 or below", text)
@@ -338,39 +330,6 @@ def format_recent_h2h_table(df):
 
     return clean_df.rename(columns=rename_map)
 
-def format_bowler_matchups_table(df):
-    clean_df = df.copy()
-
-    preferred_order = [
-        "bowler",
-        "batter",
-        "verdict",
-        "innings",
-        "balls",
-        "runs",
-        "dismissals",
-        "batter_sr",
-        "battle_note",
-    ]
-
-    existing_order = [col for col in preferred_order if col in clean_df.columns]
-    remaining_cols = [col for col in clean_df.columns if col not in existing_order]
-
-    clean_df = clean_df[existing_order + remaining_cols]
-
-    rename_map = {
-        "bowler": "Bowler",
-        "batter": "Batter",
-        "verdict": "Verdict",
-        "innings": "Innings",
-        "balls": "Balls",
-        "runs": "Runs",
-        "dismissals": "Dismissals",
-        "batter_sr": "Batter SR",
-        "battle_note": "Battle Note",
-    }
-
-    return clean_df.rename(columns=rename_map)
 
 def render_action_plan(df):
     clean_df = clean_dataframe_for_display(df)
@@ -403,9 +362,6 @@ def render_long_text_details(original_df, long_text_columns):
         for possible_label in [
             "display_name",
             "player",
-            "Bowler",
-            "Batter",
-            "Verdict",
             "team_a_bowler",
             "team_a_batter",
             "phase",
@@ -452,8 +408,6 @@ def display_result(title, value):
             clean_value = rename_head_to_head_columns(clean_value)
         if str(title).lower() == "recent head to head results":
             clean_value = format_recent_h2h_table(clean_value)
-        if str(title).lower() == "bowler matchups":
-            clean_value = format_bowler_matchups_table(clean_value)
 
         lower_columns = {str(col).lower() for col in clean_value.columns}
 

@@ -20,7 +20,7 @@ def extract_player_name_from_condition(player_condition):
 
 
 
-def format_metric(value):
+def format_metric(value, decimals=2):
     if value is None:
         return "N/A"
 
@@ -31,12 +31,7 @@ def format_metric(value):
         pass
 
     try:
-        number = float(value)
-
-        if abs(number - round(number)) < 0.000001:
-            return str(int(round(number)))
-
-        return f"{number:.2f}".rstrip("0").rstrip(".")
+        return f"{float(value):.{decimals}f}"
     except Exception:
         return str(value)
     
@@ -662,177 +657,63 @@ def make_avoid_matchup_sentence(matchup_text):
 
     return str(matchup_text)
 
-def analyze_bowlers_against_batter(
-    batter_condition,
-    batter_label,
-    bowling_team_condition=None,
-    bowling_team_label=None,
-    venue_condition=None,
-    venue_label=None,
-):
+def analyze_bowlers_against_batter(batter_condition, batter_label):
     batter_condition = batter_condition.replace("d.bowler", "d.striker")
     batter_label_sql = str(batter_label).replace("'", "''")
-    bowling_team_filter = ""
-    venue_filter = ""
-
-    if bowling_team_condition is not None:
-        bowling_team_filter = f"AND {bowling_team_condition}"
-
-    if venue_condition is not None:
-        venue_filter = f"AND {venue_condition}"
-
-    scope_parts = []
-
-    if bowling_team_label:
-        scope_parts.append(f"from {bowling_team_label}")
-
-    if venue_label:
-        scope_parts.append(f"at {venue_label}")
-
-    scope_text = " ".join(scope_parts)
 
     sql = f"""
-WITH matchup AS (
-    SELECT
-        d.bowler,
-        '{batter_label_sql}' AS batter,
-        COUNT(DISTINCT CONCAT(CAST(d.match_id AS varchar(30)), '-', CAST(d.innings AS varchar(10)))) AS innings,
-        COUNT(CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1
-        END) AS balls,
-        SUM(d.runs_off_bat) AS runs,
-        COUNT(CASE
+SELECT TOP 10
+    d.bowler,
+    '{batter_label_sql}' AS batter,
+    COUNT(CASE
+        WHEN COALESCE(d.wides, 0) = 0
+         AND COALESCE(d.noballs, 0) = 0
+        THEN 1
+    END) AS balls,
+    SUM(d.runs_off_bat) AS runs_conceded,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.player_dismissed = d.striker
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(
+        SUM(d.runs_off_bat) * 100.0 /
+        NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END), 0),
+        2
+    ) AS batter_strike_rate,
+    CASE
+        WHEN COUNT(CASE
             WHEN d.wicket_type IS NOT NULL
              AND d.player_dismissed = d.striker
              AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
             THEN 1
-        END) AS dismissals
-    FROM deliveries d
-    JOIN matches m
-        ON d.match_id = m.match_id
-    WHERE {batter_condition}
-      {bowling_team_filter}
-      {venue_filter}
-    GROUP BY d.bowler
-),
-rates AS (
-    SELECT
-        bowler,
-        batter,
-        innings,
-        balls,
-        runs,
-        dismissals,
-        ROUND(runs * 100.0 / NULLIF(balls, 0), 1) AS batter_sr,
-        ROUND(
-            dismissals * 40.0
-            + CASE WHEN balls >= 12 THEN 20 ELSE 0 END
-            + CASE WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 1) <= 120 THEN 25 ELSE 0 END
-            - CASE WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 1) >= 160 THEN 20 ELSE 0 END,
-            2
-        ) AS matchup_score
-    FROM matchup
-    WHERE balls >= 6
-),
-classified AS (
-    SELECT
-        bowler,
-        batter,
-        innings,
-        balls,
-        runs,
-        dismissals,
-        batter_sr,
-        matchup_score,
-        CASE
-            WHEN balls >= 12 AND dismissals >= 2 AND batter_sr <= 130 THEN 'Elite matchup'
-            WHEN balls >= 12 AND dismissals >= 2 THEN 'Wicket option'
-            WHEN balls >= 12 AND dismissals >= 1 AND batter_sr <= 130 THEN 'Wicket and control option'
-            WHEN balls >= 12 AND batter_sr <= 120 THEN 'Control option'
-            WHEN balls < 12 AND dismissals >= 1 THEN 'Small sample wicket option'
-            WHEN balls >= 12 AND batter_sr >= 160 THEN 'Risky matchup'
-            ELSE 'Useful sample'
-        END AS verdict
-    FROM rates
-)
-SELECT TOP 10
-    bowler,
-    batter,
-    innings,
-    balls,
-    runs,
-    dismissals,
-    batter_sr,
-    verdict,
-    CASE
-        WHEN verdict = 'Elite matchup'
-            THEN CONCAT(
-                bowler, ' has both wicket threat and control against ', batter,
-                '. Across ', innings, ' innings, he has taken ', dismissals,
-                ' wickets while keeping the scoring rate to ', batter_sr,
-                '. This is the kind of matchup a captain can actively plan around.'
-            )
-        WHEN verdict = 'Wicket option'
-            THEN CONCAT(
-                bowler, ' is mainly a wicket option against ', batter,
-                '. The strike rate is not fully controlled, but ', dismissals,
-                ' dismissals across ', innings, ' innings means this matchup has clear breakthrough value.'
-            )
-        WHEN verdict = 'Wicket and control option'
-            THEN CONCAT(
-                bowler, ' gives a balanced matchup against ', batter,
-                ': wicket threat plus scoring control. He has ', dismissals,
-                ' dismissal(s), and the batter scores at ', batter_sr,
-                ' across this sample.'
-            )
-        WHEN verdict = 'Control option'
-            THEN CONCAT(
-                bowler, ' looks more like a control option than a pure wicket option against ', batter,
-                '. The main value is keeping the scoring rate down across ', balls,
-                ' legal balls.'
-            )
-        WHEN verdict = 'Small sample wicket option'
-            THEN CONCAT(
-                bowler, ' has a wicket in this matchup, but the sample is small. Use it as a clue, not as a guaranteed plan.'
-            )
-        WHEN verdict = 'Risky matchup'
-            THEN CONCAT(
-                bowler, ' is a risky matchup against ', batter,
-                '. The batter has scored at ', batter_sr,
-                ', so this pairing needs protection, a specific field, or should be avoided in attacking phases.'
-            )
-        ELSE CONCAT(
-            bowler, ' has a usable sample against ', batter,
-            ', but the data does not strongly mark it as a wicket, control, or risk matchup.'
-        )
-    END AS battle_note
-FROM classified
+        END) >= 2
+            THEN CONCAT(d.bowler, ' has dismissed {batter_label_sql} multiple times and is a strong wicket option.')
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) >= 12
+         AND ROUND(
+                SUM(d.runs_off_bat) * 100.0 /
+                NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END), 0),
+                2
+             ) <= 120
+            THEN CONCAT(d.bowler, ' has controlled {batter_label_sql} well by keeping the scoring rate down.')
+        ELSE CONCAT(d.bowler, ' has some useful matchup evidence against {batter_label_sql}, but the sample should be checked.')
+    END AS reason
+FROM deliveries d
+WHERE {batter_condition}
+GROUP BY d.bowler
+HAVING COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) >= 6
 ORDER BY
-    CASE
-        WHEN verdict = 'Elite matchup' THEN 1
-        WHEN verdict = 'Wicket option' THEN 2
-        WHEN verdict = 'Wicket and control option' THEN 3
-        WHEN verdict = 'Control option' THEN 4
-        WHEN verdict = 'Small sample wicket option' THEN 5
-        WHEN verdict = 'Useful sample' THEN 6
-        WHEN verdict = 'Risky matchup' THEN 7
-        ELSE 8
-    END,
     dismissals DESC,
-    matchup_score DESC,
-    balls DESC,
-    batter_sr ASC;
+    batter_strike_rate ASC,
+    balls DESC;
 """.strip()
 
     df = run_query(sql)
 
-    scope_phrase = f" {scope_text}" if scope_text else ""
-
     paragraph = (
-        f"Best bowlers against {batter_label}{scope_phrase}: look first for bowlers who combine wicket threat with scoring control. "
-        f"Innings tells us how often the matchup has appeared, while balls, runs, dismissals and strike rate show whether the bowler actually controls the battle."
+        f"Best bowlers against {batter_label}: prioritise bowlers who have either dismissed him often "
+        f"or kept his scoring rate low. The table ranks bowlers by wickets, control and sample size."
     )
 
     summary_df = pd.DataFrame(
@@ -852,187 +733,6 @@ ORDER BY
             "best_bowlers_against_batter": sql,
         },
     }
-
-def join_player_names(names, max_names=3):
-    clean_names = []
-
-    for name in names:
-        if name is None:
-            continue
-
-        name_text = str(name).strip()
-
-        if name_text and name_text.lower() != "nan" and name_text not in clean_names:
-            clean_names.append(name_text)
-
-    clean_names = clean_names[:max_names]
-
-    if not clean_names:
-        return "their key batters"
-
-    if len(clean_names) == 1:
-        return clean_names[0]
-
-    if len(clean_names) == 2:
-        return f"{clean_names[0]} and {clean_names[1]}"
-
-    return f"{', '.join(clean_names[:-1])} and {clean_names[-1]}"
-
-
-def get_numeric_series(df, column_name, default_value=0):
-    if df is None:
-        return pd.Series([])
-
-    if df.empty or column_name not in df.columns:
-        return pd.Series([default_value] * len(df))
-
-    return pd.to_numeric(df[column_name], errors="coerce").fillna(default_value)
-
-
-def choose_current_key_batter_group(current_key_batters_df, opponent_label):
-    if current_key_batters_df is None or current_key_batters_df.empty:
-        return (
-            "their main current batters",
-            f"The current-squad batting table is empty, so {opponent_label}'s danger group could not be ranked from current squad data."
-        )
-
-    df = current_key_batters_df.copy()
-
-    if "is_active" in df.columns:
-        df = df[df["is_active"].astype(str).str.lower().isin(["1", "true", "yes"])]
-
-    if df.empty:
-        return (
-            "their main current batters",
-            f"No active current-squad batting records were found for {opponent_label}."
-        )
-
-    name_column = None
-
-    for possible_column in ["display_name", "player", "batter", "striker", "cricsheet_name"]:
-        if possible_column in df.columns:
-            name_column = possible_column
-            break
-
-    if name_column is None:
-        return (
-            "their main current batters",
-            f"The current-squad batting table has no player-name column for {opponent_label}."
-        )
-
-    recent_runs = get_numeric_series(df, "recent_runs", 0)
-    career_runs = get_numeric_series(df, "career_runs", 0)
-    recent_strike_rate = get_numeric_series(df, "recent_strike_rate", 0)
-    career_strike_rate = get_numeric_series(df, "career_strike_rate", 0)
-
-    if "role" in df.columns:
-        role_text = df["role"].fillna("").astype(str).str.lower()
-
-        batting_role_mask = (
-            role_text.str.contains("batter")
-            | role_text.str.contains("bat")
-            | role_text.str.contains("keeper")
-            | role_text.str.contains("wk")
-            | role_text.str.contains("all")
-        )
-
-        evidence_mask = (recent_runs >= 100) | (career_runs >= 500)
-
-        df = df[batting_role_mask | evidence_mask]
-        recent_runs = get_numeric_series(df, "recent_runs", 0)
-        career_runs = get_numeric_series(df, "career_runs", 0)
-        recent_strike_rate = get_numeric_series(df, "recent_strike_rate", 0)
-        career_strike_rate = get_numeric_series(df, "career_strike_rate", 0)
-
-    if df.empty:
-        return (
-            "their main current batters",
-            f"No clear current batting threats were found for {opponent_label} after filtering out non-batting roles."
-        )
-
-    df["_frontend_key_batter_score"] = (
-        recent_runs * 2.5
-        + career_runs * 0.35
-        + recent_strike_rate * 1.0
-        + career_strike_rate * 0.35
-    )
-
-    df = df.sort_values(
-        by=["_frontend_key_batter_score"],
-        ascending=False,
-    )
-
-    top_names = df[name_column].head(3).tolist()
-    key_group = join_player_names(top_names)
-
-    top_row = df.iloc[0]
-    top_player = str(top_row.get(name_column, "the leading batter"))
-
-    top_recent_runs = top_row.get("recent_runs", None)
-    top_career_runs = top_row.get("career_runs", None)
-    top_recent_sr = top_row.get("recent_strike_rate", None)
-
-    reason_parts = [
-        f"{key_group} look like the main current batting threats for {opponent_label}."
-    ]
-
-    try:
-        if pd.notna(top_recent_runs):
-            reason_parts.append(
-                f"{top_player} ranks highest in this current-squad check with {format_metric(top_recent_runs)} recent runs."
-            )
-    except Exception:
-        pass
-
-    try:
-        if pd.notna(top_recent_sr):
-            reason_parts.append(
-                f"His recent strike rate is {format_metric(top_recent_sr)}, showing scoring impact as well as volume."
-            )
-    except Exception:
-        pass
-
-    try:
-        if pd.notna(top_career_runs):
-            reason_parts.append(
-                f"The career sample also supports the selection with {format_metric(top_career_runs)} IPL runs in the local dataset."
-            )
-    except Exception:
-        pass
-
-    return key_group, " ".join(reason_parts)
-
-
-def make_top_order_dependency_text(opponent_label, key_batter_group, top3_win_pct):
-    try:
-        top3_win_pct_number = float(top3_win_pct)
-    except Exception:
-        top3_win_pct_number = None
-
-    if top3_win_pct_number is None:
-        return (
-            f"There is not enough top-order split data to make a strong claim about {opponent_label}'s first three batters. "
-            f"The safer plan is to prepare for {key_batter_group} across the innings."
-        )
-
-    if top3_win_pct_number >= 70:
-        return (
-            f"{opponent_label} are very dangerous when their first three batters combine for 120+ runs. "
-            f"In those games, they win {format_metric(top3_win_pct_number)}% of the time, so early wickets against {key_batter_group} are a major priority."
-        )
-
-    if top3_win_pct_number >= 55:
-        return (
-            f"{opponent_label}'s top order matters, but the pattern is not extreme. "
-            f"When their first three batters combine for 120+ runs, they win {format_metric(top3_win_pct_number)}% of the time. "
-            f"That means {key_batter_group} should be controlled early, but the plan also needs to cover the middle order and finishers."
-        )
-
-    return (
-        f"The data does not show a strong top-order dependency for {opponent_label}. "
-        f"Do not focus only on early wickets; the plan should cover {key_batter_group}, the middle order and the finishers."
-    )
-
 def analyze_team_vs_team_match_plan(
     team_a_condition,
     team_b_condition,
@@ -1922,16 +1622,65 @@ WHERE first_innings_score IS NOT NULL;
     target_source = locals().get("target_source", f"{team_b_label} historical/recent sample")
     restrict_source = locals().get("restrict_source", f"{team_b_label} historical/recent sample")
 
-    key_batter, key_batter_reason = choose_current_key_batter_group(
-        opponent_current_key_batters_df,
-        team_b_label,
-    )
+    key_batter = locals().get("key_batter", None)
 
-    top3_plan_text = make_top_order_dependency_text(
-        opponent_label=team_b_label,
-        key_batter_group=key_batter,
-        top3_win_pct=top3_win_pct,
-    )
+    if key_batter is None:
+        key_batter = safe_first_value(opponent_current_key_batters_df, "display_name", "their key batter")
+
+    key_batter_reason = locals().get("key_batter_reason", None)
+
+    if key_batter_reason is None:
+        if opponent_current_key_batters_df is not None and not opponent_current_key_batters_df.empty:
+            row = opponent_current_key_batters_df.iloc[0]
+            recent_runs = row.get("recent_runs", 0)
+            career_runs = row.get("career_runs", 0)
+            strike_rate = row.get("strike_rate", row.get("recent_strike_rate", "N/A"))
+
+            key_batter_reason = (
+                f"{key_batter} is the main current batting threat because he has "
+                f"{recent_runs} recent runs, {career_runs} career IPL runs, "
+                f"and a strike rate of {strike_rate}."
+            )
+        else:
+            key_batter_reason = f"{key_batter} grades as the main current-squad batting threat."
+
+    top3_dependency_is_clear = locals().get("top3_dependency_is_clear", False)
+
+    top3_plan_text = locals().get("top3_plan_text", None)
+
+    if top3_plan_text is None:
+        top3_band = locals().get("top3_band", safe_first_value(opponent_top3_dependency_df, "top3_runs_band", "unknown"))
+        top3_win_pct = locals().get("top3_win_pct", safe_first_value(opponent_top3_dependency_df, "win_pct", None))
+
+        top3_dependency_is_clear = False
+
+        try:
+            top3_win_pct_num = float(top3_win_pct)
+        except Exception:
+            top3_win_pct_num = None
+
+        try:
+            avg_top3_share_num = float(locals().get("avg_top3_share", 0))
+        except Exception:
+            avg_top3_share_num = None
+
+        if top3_win_pct_num is not None and top3_win_pct_num >= 70:
+            top3_dependency_is_clear = True
+
+        if avg_top3_share_num is not None and avg_top3_share_num >= 48:
+            top3_dependency_is_clear = True
+
+        if top3_dependency_is_clear:
+            top3_plan_text = (
+                f"{team_b_label} show a clear top-order dependency. When their top three dominate, "
+                f"their win rate rises to {pct_text(top3_win_pct)}. Early wickets against players like {key_batter} should be a priority."
+            )
+        else:
+            top3_plan_text = (
+                f"The data does not show an extreme top-three dependency for {team_b_label}. "
+                f"{team_a_label} should still plan for {key_batter}, but the strategy should cover the middle order and finishers too."
+            )
+
     key_bowling_matchup = locals().get("key_bowling_matchup", "no clear direct phase matchup")
     key_bowling_matchup_reason = locals().get("key_bowling_matchup_reason", None)
 
@@ -2033,14 +1782,17 @@ WHERE first_innings_score IS NOT NULL;
             }
     paragraph = (
         f"Match plan for {team_a_label} to beat {team_b_label}{venue_text}: "
-        f"If batting first, {team_a_label} should aim for {best_target_text} because {team_b_label}'s failure rate when chasing that threshold is {pct_text(chase_failure)}. "
-        f"If bowling first, {team_a_label} should try to restrict {team_b_label} to {best_restrict_text}; in the historical sample, {team_b_label}'s loss rate at or below that score is {pct_text(restrict_loss_pct)}. "
-        f"{top3_plan_text} "
+        f"If batting first, {team_a_label} should aim for around {best_target}+ because {team_b_label}'s "
+        f"failure rate when chasing that threshold is {format_metric(chase_failure)}%. "
+        f"If bowling first, {team_a_label} should try to restrict {team_b_label} to about {best_restrict_score} or below; "
+        f"in the historical sample, {team_b_label}'s loss rate at or below that score is {format_metric(restrict_loss_pct)}%. "
+        f"The top-order dependency check says that when {team_b_label}'s top three are in the {top3_band} run band, "
+        f"their win rate is {format_metric(top3_win_pct)}%, so early wickets against players like {key_batter} are important. "
         f"{make_bowling_matchup_sentence(key_bowling_matchup)} "
         f"{make_batting_matchup_sentence(key_batting_matchup)} "
         f"{make_avoid_matchup_sentence(avoid_matchup) if avoid_matchup else ''} "
         f"{venue_plan_text} "
-        f"These are data-backed tactical suggestions, not guarantees."
+        f"These are data-led tactical suggestions, not guarantees."
     )
     action_plan_rows = [
         {
@@ -2064,7 +1816,7 @@ WHERE first_innings_score IS NOT NULL;
         [
             {
                 "phase": "Opponent batting core",
-                "plan": f"Prepare specific plans for {key_batter}.",
+                "plan": f"Build plans around removing or controlling {key_batter}.",
                 "why": key_batter_reason,
                 "key_players": key_batter,
             },
@@ -2091,13 +1843,6 @@ WHERE first_innings_score IS NOT NULL;
                 "key_players": avoid_matchup,
             }
         )
-    top3_dependency_is_clear = False
-
-    try:
-        top3_win_pct_number = float(top3_win_pct)
-        top3_dependency_is_clear = top3_win_pct_number >= 70
-    except Exception:
-        top3_dependency_is_clear = False
 
     if top3_dependency_is_clear:
         action_plan_rows.insert(
@@ -4396,423 +4141,6 @@ ORDER BY dismissals DESC;
             "active_quiet_bowlers": bowler_matchup_result["sql_queries"]["active_quiet_bowlers"],
         },
     }
-
-def polish_batter_profile_result(profile_result, player_label):
-    career_df = profile_result.get("career")
-    phase_df = profile_result.get("phase_performance")
-    opponent_df = profile_result.get("opponent_performance")
-    venue_df = profile_result.get("venue_performance")
-    dismissal_df = profile_result.get("dismissal_types")
-    bowler_dismissals_df = profile_result.get("bowler_dismissals")
-    quiet_bowlers_df = profile_result.get("quiet_bowlers")
-    active_quiet_bowlers_df = profile_result.get("active_quiet_bowlers")
-    preferred_types_df = profile_result.get("preferred_bowler_types")
-    difficult_types_df = profile_result.get("difficult_bowler_types")
-
-    total_runs = safe_first_value(career_df, "total_runs", "N/A")
-    highest_score = safe_first_value(career_df, "highest_score", "N/A")
-    batting_average = safe_first_value(career_df, "batting_average", "N/A")
-    strike_rate = safe_first_value(career_df, "strike_rate", "N/A")
-    fifties = safe_first_value(career_df, "fifties", "N/A")
-    hundreds = safe_first_value(career_df, "hundreds", "N/A")
-
-    strongest_phase = safe_first_value(phase_df, "phase", "a main scoring phase")
-    strongest_opponent = safe_first_value(opponent_df, "opponent", "multiple opponents")
-    strongest_venue = safe_first_value(venue_df, "venue", "multiple venues")
-    common_dismissal = safe_first_value(dismissal_df, "wicket_type", "no single dismissal type")
-
-    most_dismissed_by = safe_first_value(bowler_dismissals_df, "bowler", "no clear bowler")
-    quiet_bowler = safe_first_value(quiet_bowlers_df, "bowler", "no clear historical control bowler")
-    active_quiet_bowler = safe_first_value(active_quiet_bowlers_df, "bowler", "no clear current control bowler")
-
-    preferred_type = safe_first_value(preferred_types_df, "bowling_style", "no clear bowling type")
-    difficult_type = safe_first_value(difficult_types_df, "bowling_style", "no clear bowling type")
-
-    paragraph = (
-        f"{player_label} is best analysed as a batter in this local IPL dataset. "
-        f"He has scored {format_metric(total_runs)} runs, with a highest score of {format_metric(highest_score)}, "
-        f"{format_metric(fifties)} fifties and {format_metric(hundreds)} hundreds. "
-        f"His batting average is {format_metric(batting_average)} and his strike rate is {format_metric(strike_rate)}. "
-        f"His biggest scoring phase is {strongest_phase}, while his strongest opponent record is against {strongest_opponent} "
-        f"and his strongest venue record is at {strongest_venue}. "
-        f"The most common dismissal type is {common_dismissal}. "
-        f"{most_dismissed_by} has dismissed him most often, while {quiet_bowler} has historically kept him quietest. "
-        f"Among active or recent bowlers in the local data, {active_quiet_bowler} looks like the most restrictive option. "
-        f"By bowling type, he scores fastest against {preferred_type}, while {difficult_type} appears to be the tougher style."
-    )
-
-    summary_df = pd.DataFrame(
-        [
-            {
-                "section": "Player profile",
-                "summary": paragraph,
-            }
-        ]
-    )
-
-    profile_result["paragraph"] = paragraph
-    profile_result["summary"] = summary_df
-
-    return profile_result
-
-
-def analyze_bowler_player_profile(bowling_condition, player_label):
-    player_label_sql = str(player_label).replace("'", "''")
-
-    career_sql = f"""
-WITH balls AS (
-    SELECT
-        d.match_id,
-        d.innings,
-        d.batting_team,
-        d.bowler,
-        CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1 ELSE 0
-        END AS legal_ball,
-        COALESCE(d.runs_off_bat, 0) + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0) AS bowler_runs,
-        CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1 ELSE 0
-        END AS bowler_wicket,
-        CASE
-            WHEN COALESCE(d.runs_off_bat, 0) = 0
-             AND COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1 ELSE 0
-        END AS dot_ball
-    FROM deliveries d
-    WHERE {bowling_condition}
-)
-SELECT
-    '{player_label_sql}' AS bowler,
-    COUNT(DISTINCT match_id) AS matches,
-    COUNT(DISTINCT CONCAT(CAST(match_id AS varchar(30)), '-', CAST(innings AS varchar(10)))) AS innings,
-    SUM(legal_ball) AS legal_balls,
-    CONCAT(SUM(legal_ball) / 6, '.', SUM(legal_ball) % 6) AS overs,
-    SUM(bowler_runs) AS runs_conceded,
-    SUM(bowler_wicket) AS wickets,
-    ROUND(SUM(bowler_runs) * 6.0 / NULLIF(SUM(legal_ball), 0), 2) AS economy_rate,
-    ROUND(SUM(bowler_runs) * 1.0 / NULLIF(SUM(bowler_wicket), 0), 2) AS bowling_average,
-    ROUND(SUM(legal_ball) * 1.0 / NULLIF(SUM(bowler_wicket), 0), 2) AS bowling_strike_rate,
-    ROUND(SUM(dot_ball) * 100.0 / NULLIF(COUNT(*), 0), 2) AS dot_ball_pct
-FROM balls;
-""".strip()
-
-    season_trend_sql = f"""
-WITH balls AS (
-    SELECT
-        YEAR(CAST(m.start_date AS date)) AS season_year,
-        d.match_id,
-        CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1 ELSE 0
-        END AS legal_ball,
-        COALESCE(d.runs_off_bat, 0) + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0) AS bowler_runs,
-        CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1 ELSE 0
-        END AS bowler_wicket
-    FROM deliveries d
-    JOIN matches m
-        ON d.match_id = m.match_id
-    WHERE {bowling_condition}
-)
-SELECT
-    season_year,
-    COUNT(DISTINCT match_id) AS matches,
-    SUM(legal_ball) AS legal_balls,
-    CONCAT(SUM(legal_ball) / 6, '.', SUM(legal_ball) % 6) AS overs,
-    SUM(bowler_runs) AS runs_conceded,
-    SUM(bowler_wicket) AS wickets,
-    ROUND(SUM(bowler_runs) * 6.0 / NULLIF(SUM(legal_ball), 0), 2) AS economy_rate,
-    ROUND(SUM(legal_ball) * 1.0 / NULLIF(SUM(bowler_wicket), 0), 2) AS strike_rate
-FROM balls
-GROUP BY season_year
-ORDER BY season_year;
-""".strip()
-
-    phase_sql = f"""
-WITH balls AS (
-    SELECT
-        CASE
-            WHEN FLOOR(d.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
-            WHEN FLOOR(d.ball) BETWEEN 6 AND 14 THEN 'Middle overs'
-            ELSE 'Death overs'
-        END AS phase,
-        CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1 ELSE 0
-        END AS legal_ball,
-        COALESCE(d.runs_off_bat, 0) + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0) AS bowler_runs,
-        CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1 ELSE 0
-        END AS bowler_wicket
-    FROM deliveries d
-    WHERE {bowling_condition}
-)
-SELECT
-    phase,
-    SUM(legal_ball) AS legal_balls,
-    CONCAT(SUM(legal_ball) / 6, '.', SUM(legal_ball) % 6) AS overs,
-    SUM(bowler_runs) AS runs_conceded,
-    SUM(bowler_wicket) AS wickets,
-    ROUND(SUM(bowler_runs) * 6.0 / NULLIF(SUM(legal_ball), 0), 2) AS economy_rate,
-    ROUND(SUM(legal_ball) * 1.0 / NULLIF(SUM(bowler_wicket), 0), 2) AS strike_rate
-FROM balls
-GROUP BY phase
-ORDER BY
-    CASE
-        WHEN phase = 'Powerplay' THEN 1
-        WHEN phase = 'Middle overs' THEN 2
-        ELSE 3
-    END;
-""".strip()
-
-    opponent_sql = f"""
-WITH balls AS (
-    SELECT
-        d.batting_team AS opponent,
-        CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1 ELSE 0
-        END AS legal_ball,
-        COALESCE(d.runs_off_bat, 0) + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0) AS bowler_runs,
-        CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1 ELSE 0
-        END AS bowler_wicket
-    FROM deliveries d
-    WHERE {bowling_condition}
-)
-SELECT TOP 10
-    opponent,
-    SUM(legal_ball) AS legal_balls,
-    CONCAT(SUM(legal_ball) / 6, '.', SUM(legal_ball) % 6) AS overs,
-    SUM(bowler_runs) AS runs_conceded,
-    SUM(bowler_wicket) AS wickets,
-    ROUND(SUM(bowler_runs) * 6.0 / NULLIF(SUM(legal_ball), 0), 2) AS economy_rate,
-    ROUND(SUM(legal_ball) * 1.0 / NULLIF(SUM(bowler_wicket), 0), 2) AS strike_rate
-FROM balls
-GROUP BY opponent
-ORDER BY wickets DESC, economy_rate ASC;
-""".strip()
-
-    venue_sql = f"""
-WITH balls AS (
-    SELECT
-        m.venue,
-        CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1 ELSE 0
-        END AS legal_ball,
-        COALESCE(d.runs_off_bat, 0) + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0) AS bowler_runs,
-        CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1 ELSE 0
-        END AS bowler_wicket
-    FROM deliveries d
-    JOIN matches m
-        ON d.match_id = m.match_id
-    WHERE {bowling_condition}
-)
-SELECT TOP 10
-    venue,
-    SUM(legal_ball) AS legal_balls,
-    CONCAT(SUM(legal_ball) / 6, '.', SUM(legal_ball) % 6) AS overs,
-    SUM(bowler_runs) AS runs_conceded,
-    SUM(bowler_wicket) AS wickets,
-    ROUND(SUM(bowler_runs) * 6.0 / NULLIF(SUM(legal_ball), 0), 2) AS economy_rate,
-    ROUND(SUM(legal_ball) * 1.0 / NULLIF(SUM(bowler_wicket), 0), 2) AS strike_rate
-FROM balls
-GROUP BY venue
-ORDER BY wickets DESC, economy_rate ASC;
-""".strip()
-
-    batter_matchups_sql = f"""
-WITH matchup AS (
-    SELECT
-        d.striker AS batter,
-        COUNT(CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1
-        END) AS balls,
-        SUM(d.runs_off_bat) AS runs,
-        COUNT(CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.player_dismissed = d.striker
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1
-        END) AS dismissals
-    FROM deliveries d
-    WHERE {bowling_condition}
-    GROUP BY d.striker
-)
-SELECT TOP 10
-    batter,
-    balls,
-    runs,
-    dismissals,
-    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS batter_strike_rate,
-    CASE
-        WHEN balls >= 12 AND dismissals >= 2 THEN 'Wicket matchup'
-        WHEN balls < 12 AND dismissals >= 2 THEN 'Small sample wicket matchup'
-        WHEN balls >= 12 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 120 THEN 'Control matchup'
-        WHEN balls >= 12 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 'Risky matchup'
-        ELSE 'Useful sample'
-    END AS verdict
-FROM matchup
-WHERE balls >= 6
-ORDER BY dismissals DESC, batter_strike_rate ASC, balls DESC;
-""".strip()
-
-    career_df = run_query(career_sql)
-    season_trend_df = run_query(season_trend_sql)
-    phase_df = run_query(phase_sql)
-    opponent_df = run_query(opponent_sql)
-    venue_df = run_query(venue_sql)
-    batter_matchups_df = run_query(batter_matchups_sql)
-
-    wickets = safe_first_value(career_df, "wickets", "N/A")
-    economy = safe_first_value(career_df, "economy_rate", "N/A")
-    bowling_average = safe_first_value(career_df, "bowling_average", "N/A")
-    strike_rate = safe_first_value(career_df, "bowling_strike_rate", "N/A")
-    dot_ball_pct = safe_first_value(career_df, "dot_ball_pct", "N/A")
-
-    best_phase = safe_first_value(phase_df.sort_values(by="wickets", ascending=False), "phase", "multiple phases") if phase_df is not None and not phase_df.empty else "multiple phases"
-    best_opponent = safe_first_value(opponent_df, "opponent", "multiple opponents")
-    best_venue = safe_first_value(venue_df, "venue", "multiple venues")
-    best_batter_matchup = safe_first_value(batter_matchups_df, "batter", "no clear batter")
-
-    paragraph = (
-        f"{player_label} is best analysed as a bowler in this local IPL dataset. "
-        f"He has taken {format_metric(wickets)} wickets with an economy rate of {format_metric(economy)}, "
-        f"a bowling average of {format_metric(bowling_average)}, and a strike rate of {format_metric(strike_rate)} balls per wicket. "
-        f"His dot-ball percentage is {format_metric(dot_ball_pct)}%, showing how often he prevents scoring. "
-        f"By phase, his strongest wicket-taking area is {best_phase}. "
-        f"He has taken the most wickets against {best_opponent}, and his strongest venue record is at {best_venue}. "
-        f"The batter matchup table suggests {best_batter_matchup} is one of his strongest individual matchups."
-    )
-
-    summary_df = pd.DataFrame(
-        [
-            {
-                "section": "Bowler profile",
-                "summary": paragraph,
-            }
-        ]
-    )
-
-    return {
-        "paragraph": paragraph,
-        "summary": summary_df,
-        "career": career_df,
-        "season_trend": season_trend_df,
-        "phase_performance": phase_df,
-        "opponent_performance": opponent_df,
-        "venue_performance": venue_df,
-        "batter_matchups": batter_matchups_df,
-        "sql_queries": {
-            "career": career_sql,
-            "season_trend": season_trend_sql,
-            "phase_performance": phase_sql,
-            "opponent_performance": opponent_sql,
-            "venue_performance": venue_sql,
-            "batter_matchups": batter_matchups_sql,
-        },
-    }
-
-
-def analyze_player_profile_smart(player_condition, player_label):
-    batting_condition = player_condition.replace("d.bowler", "d.striker")
-    bowling_condition = player_condition.replace("d.striker", "d.bowler")
-
-    role_check_sql = f"""
-WITH batting AS (
-    SELECT
-        SUM(d.runs_off_bat) AS batting_runs,
-        COUNT(CASE
-            WHEN COALESCE(d.wides, 0) = 0
-            THEN 1
-        END) AS balls_faced
-    FROM deliveries d
-    WHERE {batting_condition}
-),
-bowling AS (
-    SELECT
-        COUNT(CASE
-            WHEN COALESCE(d.wides, 0) = 0
-             AND COALESCE(d.noballs, 0) = 0
-            THEN 1
-        END) AS legal_balls,
-        COUNT(CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1
-        END) AS wickets
-    FROM deliveries d
-    WHERE {bowling_condition}
-)
-SELECT
-    batting.batting_runs,
-    batting.balls_faced,
-    bowling.legal_balls,
-    bowling.wickets
-FROM batting
-CROSS JOIN bowling;
-""".strip()
-
-    role_check_df = run_query(role_check_sql)
-
-    balls_faced = safe_first_value(role_check_df, "balls_faced", 0)
-    legal_balls = safe_first_value(role_check_df, "legal_balls", 0)
-    wickets = safe_first_value(role_check_df, "wickets", 0)
-
-    try:
-        balls_faced_number = float(balls_faced)
-    except Exception:
-        balls_faced_number = 0
-
-    try:
-        legal_balls_number = float(legal_balls)
-    except Exception:
-        legal_balls_number = 0
-
-    try:
-        wickets_number = float(wickets)
-    except Exception:
-        wickets_number = 0
-
-    is_bowler_profile = (
-        legal_balls_number >= 120
-        and wickets_number >= 10
-        and legal_balls_number > balls_faced_number
-    )
-
-    if is_bowler_profile:
-        return analyze_bowler_player_profile(
-            bowling_condition=bowling_condition,
-            player_label=player_label,
-        )
-
-    batter_profile = analyze_player_profile(batting_condition)
-
-    return polish_batter_profile_result(
-        profile_result=batter_profile,
-        player_label=player_label,
-    )
 
 def analyze_batter_bowler_matchups(player_condition):
     """
