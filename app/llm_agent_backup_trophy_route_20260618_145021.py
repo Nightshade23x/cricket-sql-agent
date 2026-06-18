@@ -2223,53 +2223,7 @@ FROM first_milestones
 ORDER BY innings_to_{wicket_threshold}_wickets ASC, balls_bowled_to_{wicket_threshold}_wickets ASC;
 """.strip()
 
-def build_team_trophies_sql():
-    return """
-WITH season_final_dates AS (
-    SELECT
-        season,
-        MAX(CAST(start_date AS date)) AS final_date
-    FROM matches
-    WHERE winner IS NOT NULL
-    GROUP BY season
-),
-season_finals AS (
-    SELECT
-        m.season,
-        m.start_date,
-        m.winner
-    FROM matches m
-    JOIN season_final_dates f
-        ON m.season = f.season
-       AND CAST(m.start_date AS date) = f.final_date
-    WHERE m.winner IS NOT NULL
-)
-SELECT
-    winner AS team,
-    COUNT(*) AS trophies
-FROM season_finals
-GROUP BY winner
-ORDER BY trophies DESC, team ASC;
-""".strip()
-
 def build_curated_sql(user_question):
-
-    trophy_question_terms = [
-        "most trophies",
-        "most trophy",
-        "most titles",
-        "most title",
-        "most championships",
-        "most championship",
-        "ipl trophies",
-        "ipl titles",
-        "ipl champions",
-        "team has won the most",
-    ]
-
-    if any(term in user_question.lower() for term in trophy_question_terms):
-        return build_team_trophies_sql()
-
     question_lower = user_question.lower()
 
     venue_condition = get_venue_condition_from_question(user_question)

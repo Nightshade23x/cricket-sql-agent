@@ -4281,7 +4281,7 @@ ORDER BY dismissals DESC;
     season_df = run_query(season_sql)
     phase_df = run_query(phase_sql)
     opponent_df = run_query(opponent_sql)
-    venue_df = run_query(venue_performance_sql)
+    venue_df = run_query(venue_sql)
     playoff_df = run_query(playoff_sql)
     dismissal_df = run_query(dismissal_sql)
     bowler_matchup_result = analyze_batter_bowler_matchups(condition_se)
@@ -4386,7 +4386,7 @@ ORDER BY dismissals DESC;
             "season_trend": season_sql,
             "phase_performance": phase_sql,
             "opponent_performance": opponent_sql,
-            "venue_performance": venue_performance_sql,
+            "venue_performance": venue_sql,
             "playoff_performance": playoff_sql,
             "dismissal_types": dismissal_sql,
             "bowler_success": bowler_matchup_result["sql_queries"]["bowler_success"],
@@ -4699,7 +4699,7 @@ ORDER BY dismissals DESC, batter_strike_rate ASC, balls DESC;
     season_trend_df = run_query(season_trend_sql)
     phase_df = run_query(phase_sql)
     opponent_df = run_query(opponent_sql)
-    venue_df = run_query(venue_sql)
+    venue_df = run_query(venue_performance_sql)
     batter_matchups_df = run_query(batter_matchups_sql)
 
     wickets = safe_first_value(career_df, "wickets", "N/A")
@@ -4746,7 +4746,7 @@ ORDER BY dismissals DESC, batter_strike_rate ASC, balls DESC;
             "season_trend": season_trend_sql,
             "phase_performance": phase_sql,
             "opponent_performance": opponent_sql,
-            "venue_performance": venue_sql,
+            "venue_performance": venue_performance_sql,
             "batter_matchups": batter_matchups_sql,
         },
     }
