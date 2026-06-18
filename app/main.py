@@ -458,7 +458,10 @@ def display_result(title, value):
 
     st.write(value)
 
-
+def select_question(question):
+    st.session_state.question_input = question
+    st.session_state.run_requested = True
+    
 def get_similar_questions(question, response):
     question_lower = str(question).lower()
     matched_question = str(response.get("matched_question", "")).lower()
@@ -511,6 +514,7 @@ def get_similar_questions(question, response):
     ]
 
 
+
 def show_similar_questions(question, response):
     suggestions = get_similar_questions(question, response)
 
@@ -523,10 +527,13 @@ def show_similar_questions(question, response):
 
     for index, suggestion in enumerate(suggestions):
         with cols[index % 2]:
-            if st.button(suggestion, key=f"suggestion_{index}_{suggestion}"):
-                st.session_state.pending_question = suggestion
-                st.rerun()
-
+            st.button(
+                suggestion,
+                key=f"suggestion_{index}_{suggestion}",
+                on_click=select_question,
+                args=(suggestion,),
+                use_container_width=True,
+            )
 
 def run_question(question):
     question = str(question).strip()
@@ -600,8 +607,7 @@ st.caption("Ask IPL analytics questions using the local SQL Server database.")
 if "question_input" not in st.session_state:
     st.session_state.question_input = ""
 
-if "pending_question" in st.session_state:
-    st.session_state.question_input = st.session_state.pop("pending_question")
+
 
 example_groups = {
     "Match plans": [
@@ -640,9 +646,13 @@ for group_name, examples in example_groups.items():
 
         for index, example in enumerate(examples):
             with cols[index % 2]:
-                if st.button(example, key=f"example_{group_name}_{index}"):
-                    st.session_state.pending_question = example
-                    st.rerun()
+                st.button(
+                    example,
+                    key=f"example_{group_name}_{index}",
+                    on_click=select_question,
+                    args=(example,),
+                    use_container_width=True,
+                )
 
 st.markdown("### Ask your question")
 
@@ -652,5 +662,11 @@ question = st.text_input(
     placeholder="Example: how can MI beat KKR at Eden Gardens",
 )
 
-if st.button("Give answer", type="primary"):
+manual_submit = st.button("Give answer", type="primary")
+
+if manual_submit:
+    st.session_state.run_requested = True
+
+if st.session_state.get("run_requested", False):
+    st.session_state.run_requested = False
     run_question(st.session_state.question_input)
