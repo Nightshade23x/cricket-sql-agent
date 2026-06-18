@@ -153,3 +153,12 @@ added venue intelligence to team vs team match plans
 improved team reports
 improved the ui
 fixed bowling overs error
+
+day 11
+improved frontend
+matchplan now shows cleaner ans
+action plan cards are easier to read
+added similar ques box and fixed a bug where it didnt work
+improved tactical wording
+bowling matchups are better now
+fixed best bowlers against kohli ques,so kohli is treated as a batter not bowler
