@@ -603,136 +603,6 @@ ORDER BY wickets DESC, legal_balls DESC;
             "non_home_bowlers": non_home_bowlers_sql,
         },
     }
-
-def format_matchup_pair(matchup_text):
-    if matchup_text is None:
-        return "", "", ""
-
-    text = str(matchup_text).strip()
-
-    if " vs " not in text:
-        return text, "", ""
-
-    left, right_part = text.split(" vs ", 1)
-
-    if " in the " in right_part:
-        right, phase = right_part.split(" in the ", 1)
-        return left.strip(), right.strip(), phase.strip()
-
-    return left.strip(), right_part.strip(), ""
-
-
-def make_batting_matchup_sentence(matchup_text):
-    batter, bowler, phase = format_matchup_pair(matchup_text)
-
-    if batter and bowler and phase:
-        return f"{batter} can target {bowler} in the {phase}."
-
-    if batter and bowler:
-        return f"{batter} can target {bowler}."
-
-    return str(matchup_text)
-
-
-def make_bowling_matchup_sentence(matchup_text):
-    bowler, batter, phase = format_matchup_pair(matchup_text)
-
-    if bowler and batter and phase:
-        return f"Use {bowler} against {batter} in the {phase}."
-
-    if bowler and batter:
-        return f"Use {bowler} against {batter}."
-
-    return str(matchup_text)
-
-
-def make_avoid_matchup_sentence(matchup_text):
-    bowler, batter, phase = format_matchup_pair(matchup_text)
-
-    if bowler and batter and phase:
-        return f"Avoid overusing {bowler} against {batter} in the {phase}."
-
-    if bowler and batter:
-        return f"Avoid overusing {bowler} against {batter}."
-
-    return str(matchup_text)
-
-def analyze_bowlers_against_batter(batter_condition, batter_label):
-    batter_condition = batter_condition.replace("d.bowler", "d.striker")
-    batter_label_sql = str(batter_label).replace("'", "''")
-
-    sql = f"""
-SELECT TOP 10
-    d.bowler,
-    '{batter_label_sql}' AS batter,
-    COUNT(CASE
-        WHEN COALESCE(d.wides, 0) = 0
-         AND COALESCE(d.noballs, 0) = 0
-        THEN 1
-    END) AS balls,
-    SUM(d.runs_off_bat) AS runs_conceded,
-    COUNT(CASE
-        WHEN d.wicket_type IS NOT NULL
-         AND d.player_dismissed = d.striker
-         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-        THEN 1
-    END) AS dismissals,
-    ROUND(
-        SUM(d.runs_off_bat) * 100.0 /
-        NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END), 0),
-        2
-    ) AS batter_strike_rate,
-    CASE
-        WHEN COUNT(CASE
-            WHEN d.wicket_type IS NOT NULL
-             AND d.player_dismissed = d.striker
-             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
-            THEN 1
-        END) >= 2
-            THEN CONCAT(d.bowler, ' has dismissed {batter_label_sql} multiple times and is a strong wicket option.')
-        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) >= 12
-         AND ROUND(
-                SUM(d.runs_off_bat) * 100.0 /
-                NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END), 0),
-                2
-             ) <= 120
-            THEN CONCAT(d.bowler, ' has controlled {batter_label_sql} well by keeping the scoring rate down.')
-        ELSE CONCAT(d.bowler, ' has some useful matchup evidence against {batter_label_sql}, but the sample should be checked.')
-    END AS reason
-FROM deliveries d
-WHERE {batter_condition}
-GROUP BY d.bowler
-HAVING COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) >= 6
-ORDER BY
-    dismissals DESC,
-    batter_strike_rate ASC,
-    balls DESC;
-""".strip()
-
-    df = run_query(sql)
-
-    paragraph = (
-        f"Best bowlers against {batter_label}: prioritise bowlers who have either dismissed him often "
-        f"or kept his scoring rate low. The table ranks bowlers by wickets, control and sample size."
-    )
-
-    summary_df = pd.DataFrame(
-        [
-            {
-                "section": "Best bowlers against batter",
-                "summary": paragraph,
-            }
-        ]
-    )
-
-    return {
-        "paragraph": paragraph,
-        "summary": summary_df,
-        "bowler_matchups": df,
-        "sql_queries": {
-            "best_bowlers_against_batter": sql,
-        },
-    }
 def analyze_team_vs_team_match_plan(
     team_a_condition,
     team_b_condition,
@@ -1726,37 +1596,6 @@ WHERE first_innings_score IS NOT NULL;
             key_batting_matchup_reason = "No direct current-squad batting matchup had enough evidence."
         venue_plan_text = ""
         venue_action_row = None
-        avoid_matchup = ""
-        avoid_matchup_reason = ""
-
-        try:
-            avoid_candidates = bowling_phase_matchups_df.copy()
-
-            avoid_candidates = avoid_candidates[
-                (avoid_candidates["balls"] >= 6)
-                & (avoid_candidates["strike_rate"] >= 160)
-            ].sort_values(
-                by=["strike_rate", "runs"],
-                ascending=[False, False],
-            )
-
-            if not avoid_candidates.empty:
-                avoid_row = avoid_candidates.iloc[0]
-
-                avoid_matchup = (
-                    f"{avoid_row['team_a_bowler']} vs {avoid_row['team_b_batter']} "
-                    f"in the {avoid_row['phase']}"
-                )
-
-                avoid_matchup_reason = (
-                    f"{avoid_row['team_b_batter']} has scored quickly in this matchup: "
-                    f"{format_metric(avoid_row['runs'])} runs from {format_metric(avoid_row['balls'])} balls "
-                    f"at a strike rate of {format_metric(avoid_row['strike_rate'])}. "
-                    f"Use this only with protection or a clear plan."
-                )
-        except Exception:
-            avoid_matchup = ""
-            avoid_matchup_reason = ""
 
         if venue_profile_df is not None and not venue_profile_df.empty:
             avg_first_score = safe_first_value(venue_profile_df, "avg_first_innings_score", None)
@@ -1788,9 +1627,7 @@ WHERE first_innings_score IS NOT NULL;
         f"in the historical sample, {team_b_label}'s loss rate at or below that score is {format_metric(restrict_loss_pct)}%. "
         f"The top-order dependency check says that when {team_b_label}'s top three are in the {top3_band} run band, "
         f"their win rate is {format_metric(top3_win_pct)}%, so early wickets against players like {key_batter} are important. "
-        f"{make_bowling_matchup_sentence(key_bowling_matchup)} "
-        f"{make_batting_matchup_sentence(key_batting_matchup)} "
-        f"{make_avoid_matchup_sentence(avoid_matchup) if avoid_matchup else ''} "
+        f"One potential bowling matchup is {key_bowling_matchup}. One batting matchup to target is {key_batting_matchup}. "
         f"{venue_plan_text} "
         f"These are data-led tactical suggestions, not guarantees."
     )
@@ -1822,27 +1659,19 @@ WHERE first_innings_score IS NOT NULL;
             },
             {
                 "phase": "Bowling matchup",
-                "plan": make_bowling_matchup_sentence(key_bowling_matchup),
+                "plan": f"Use {key_bowling_matchup}.",
                 "why": key_bowling_matchup_reason,
                 "key_players": key_bowling_matchup,
             },
             {
                 "phase": "Batting matchup",
-                "plan": make_batting_matchup_sentence(key_batting_matchup),
+                "plan": f"Target {key_batting_matchup}.",
                 "why": key_batting_matchup_reason,
                 "key_players": key_batting_matchup,
             },
         ]
     )
-    if avoid_matchup:
-        action_plan_rows.append(
-            {
-                "phase": "Matchup to avoid",
-                "plan": make_avoid_matchup_sentence(avoid_matchup),
-                "why": avoid_matchup_reason,
-                "key_players": avoid_matchup,
-            }
-        )
+    
 
     if top3_dependency_is_clear:
         action_plan_rows.insert(

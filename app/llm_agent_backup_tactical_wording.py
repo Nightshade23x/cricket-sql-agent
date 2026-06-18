@@ -23,7 +23,6 @@ from app.analysis import (
     analyze_enhanced_team_profile,
     analyze_team_vs_team_match_plan,
     analyze_venue_profile,
-    analyze_bowlers_against_batter,
 )
 def build_sql_prompt(user_question):#builds the full prompt that we send to the local model
     prompt=f"""
@@ -6602,42 +6601,6 @@ def get_player_condition_after_keyword(user_question, keyword, column_name):
 
     text_after = user_question[index + len(keyword):]
     return get_player_condition_from_question(text_after, column_name)
-def get_player_label_from_condition(player_condition):
-    if player_condition is None:
-        return "the player"
-
-    condition_text = str(player_condition)
-
-    readable_names = {
-        "V Kohli": "Virat Kohli",
-        "RG Sharma": "Rohit Sharma",
-        "MS Dhoni": "MS Dhoni",
-        "JJ Bumrah": "Jasprit Bumrah",
-        "Rashid Khan": "Rashid Khan",
-        "N Pooran": "Nicholas Pooran",
-        "S Dube": "Shivam Dube",
-        "AD Russell": "Andre Russell",
-        "SP Narine": "Sunil Narine",
-        "Shubman Gill": "Shubman Gill",
-        "B Sai Sudharsan": "Sai Sudharsan",
-    }
-
-    for short_name, readable_name in readable_names.items():
-        if short_name in condition_text:
-            return readable_name
-
-    # Fallback: take first quoted player name from the SQL condition.
-    if "'" in condition_text:
-        parts = condition_text.split("'")
-        if len(parts) >= 2:
-            return parts[1]
-
-    return "the player"
-
-
-def get_player_label_from_question(user_question):
-    player_condition = get_player_condition_from_question(user_question, "d.striker")
-    return get_player_label_from_condition(player_condition)
 
 def build_analysis_response(user_question):
     question_lower = user_question.lower()
@@ -6705,38 +6668,6 @@ AND ms.season_year = {season}
                     "best_bowling_figures": analysis_result.get("best_bowling_figures"),
                     "best_non_home_batters": analysis_result.get("non_home_batters"),
                     "best_non_home_bowlers": analysis_result.get("non_home_bowlers"),
-                },
-                "error": None,
-            }
-    is_best_bowlers_against_batter_question = (
-        "best bowlers against" in question_lower
-        or "bowlers against" in question_lower
-        or "bowlers should be used against" in question_lower
-        or "which bowlers should be used against" in question_lower
-    )
-
-    if is_best_bowlers_against_batter_question:
-        batter_condition = get_player_condition_from_question(user_question, "d.striker")
-        batter_label = get_player_label_from_question(user_question)
-
-        if batter_condition is not None:
-            analysis_result = analyze_bowlers_against_batter(
-                batter_condition=batter_condition,
-                batter_label=batter_label,
-            )
-
-            combined_sql = ""
-            for name, sql in analysis_result["sql_queries"].items():
-                combined_sql += f"\n\n--- {name} ---\n{sql}"
-
-            return {
-                "method": "analysis_layer",
-                "matched_question": "Best bowlers against batter",
-                "sql_query": combined_sql.strip(),
-                "result": analysis_result["summary"],
-                "analysis_paragraph": analysis_result.get("paragraph"),
-                "extra_tables": {
-                    "bowler_matchups": analysis_result.get("bowler_matchups"),
                 },
                 "error": None,
             }
