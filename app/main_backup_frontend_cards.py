@@ -12,31 +12,6 @@ st.set_page_config(
 )
 
 
-st.markdown(
-    '''
-    <style>
-    .small-note {
-        color: #d7dae3;
-        font-size: 0.95rem;
-        line-height: 1.45;
-        margin-top: 0.35rem;
-    }
-    .card-title {
-        font-size: 1.05rem;
-        font-weight: 700;
-        margin-bottom: 0.45rem;
-    }
-    .card-main {
-        font-size: 1.02rem;
-        line-height: 1.45;
-        margin-bottom: 0.55rem;
-    }
-    </style>
-    ''',
-    unsafe_allow_html=True,
-)
-
-
 HIDDEN_COLUMNS = {
     "watch_score",
     "rank_score",
@@ -47,13 +22,6 @@ HIDDEN_COLUMNS = {
     "score",
     "match_id",
     "sql_query",
-    "team_name",
-    "cricsheet_name",
-    "full_name",
-    "full_name_striker",
-    "full_name_bowler",
-    "first_innings_wickets",
-    "second_innings_wickets",
 }
 
 LONG_TEXT_COLUMNS = {
@@ -67,41 +35,9 @@ LONG_TEXT_COLUMNS = {
     "toss_plan",
 }
 
-LABEL_ONLY_COLUMNS = {
-    "analysis_area",
-    "section",
-    "watch_type",
-}
-
 SKIP_EXTRA_TABLES = {
     "team_report_squad_summary",
 }
-
-
-TEAM_SHORT_NAMES = [
-    ("royal challengers bangalore/bengaluru", "RCB"),
-    ("royal challengers bengaluru", "RCB"),
-    ("royal challengers bangalore", "RCB"),
-    ("rcb", "RCB"),
-    ("gujarat titans", "GT"),
-    ("gt", "GT"),
-    ("mumbai indians", "MI"),
-    ("mi", "MI"),
-    ("kolkata knight riders", "KKR"),
-    ("kkr", "KKR"),
-    ("chennai super kings", "CSK"),
-    ("csk", "CSK"),
-    ("sunrisers hyderabad", "SRH"),
-    ("srh", "SRH"),
-    ("rajasthan royals", "RR"),
-    ("rr", "RR"),
-    ("punjab kings", "PBKS"),
-    ("pbks", "PBKS"),
-    ("delhi capitals", "Delhi Capitals"),
-    ("dc", "Delhi Capitals"),
-    ("lucknow super giants", "LSG"),
-    ("lsg", "LSG"),
-]
 
 
 def should_show_table(value):
@@ -121,135 +57,6 @@ def pretty_column_name(column_name):
     return str(column_name).replace("_", " ").title()
 
 
-def clean_user_text(text):
-    text = str(text)
-
-    text = re.sub(r"(\d+)\.0\+", r"\1+", text)
-    text = re.sub(r"(\d+)\.0 or below", r"\1 or below", text)
-    text = text.replace("top-three band 120+", "top three score 120+")
-    text = text.replace("top-order dependency check", "top-order pattern")
-    text = text.replace("data-led tactical suggestions", "data-backed tactical suggestions")
-
-    return text
-
-
-def split_into_sentences(text):
-    text = clean_user_text(text).strip()
-
-    if not text:
-        return []
-
-    sentences = re.split(r"(?<=[.!?])\s+", text)
-    return [sentence.strip() for sentence in sentences if sentence.strip()]
-
-
-def team_short_label(team_name):
-    text = str(team_name).lower()
-
-    for alias, short_name in TEAM_SHORT_NAMES:
-        if alias in text:
-            return short_name
-
-    return str(team_name)
-
-
-def extract_team_short_labels(question):
-    question_lower = str(question).lower()
-    found = []
-
-    for alias, short_name in TEAM_SHORT_NAMES:
-        pattern = r"\b" + re.escape(alias) + r"\b"
-
-        if re.search(pattern, question_lower) and short_name not in found:
-            found.append(short_name)
-
-    if len(found) >= 2:
-        return found[0], found[1]
-
-    return "Team A", "Team B"
-
-
-def rewrite_match_plan_sentence(sentence):
-    sentence = clean_user_text(sentence)
-
-    batting_match = re.match(
-        r"If batting first, (.*?) should aim for around (\d+)\+ because (.*?)'s failure rate when chasing that threshold is ([\d.]+)%.",
-        sentence,
-    )
-    if batting_match:
-        team, target, opponent, pct = batting_match.groups()
-        return f"Batting first: aim for {target}+ because {team_short_label(opponent)} have failed to chase that kind of target {pct}% of the time."
-
-    bowling_match = re.match(
-        r"If bowling first, (.*?) should try to restrict (.*?) to about (\d+) or below;.*loss rate.*is ([\d.]+)%.",
-        sentence,
-    )
-    if bowling_match:
-        team, opponent, score, pct = bowling_match.groups()
-        return f"Bowling first: keep {team_short_label(opponent)} to {score} or below because they lose {pct}% of those games."
-
-    top_order_match = re.match(
-        r"The top-order pattern says that when (.*?)'s top three are in the 120\+ run band, their win rate is ([\d.]+)%, so early wickets against players like (.*?) are important.",
-        sentence,
-    )
-    if top_order_match:
-        opponent, pct, player = top_order_match.groups()
-        return f"Early wickets: if {team_short_label(opponent)}'s top three score 120+, they win {pct}% of those games. Target {player} early."
-
-    bowling_matchup = re.match(
-        r"One potential bowling matchup is (.*?) vs (.*?) in the (.*?).",
-        sentence,
-    )
-    if bowling_matchup:
-        bowler, batter, phase = bowling_matchup.groups()
-        return f"Bowling matchup: use {bowler} against {batter} in the {phase}."
-
-    batting_matchup = re.match(
-        r"One batting matchup to target is (.*?) vs (.*?) in the (.*?).",
-        sentence,
-    )
-    if batting_matchup:
-        batter, bowler, phase = batting_matchup.groups()
-        return f"Batting matchup: {batter} can target {bowler} in the {phase}."
-
-    return sentence
-
-
-def render_answer_paragraph(paragraph):
-    paragraph = clean_user_text(paragraph)
-
-    match_title = re.match(r"Match plan for (.*?) to beat (.*?):", paragraph)
-
-    if match_title:
-        team_a, team_b = match_title.groups()
-        st.subheader("Match plan")
-        st.caption(f"{team_short_label(team_a)} vs {team_short_label(team_b)}")
-
-        body = paragraph[match_title.end():].strip()
-        sentences = split_into_sentences(body)
-
-        for sentence in sentences:
-            rewritten = rewrite_match_plan_sentence(sentence)
-
-            if "not guarantees" in rewritten.lower():
-                st.caption(rewritten)
-            else:
-                st.markdown(f"- {rewritten}")
-
-        return
-
-    st.subheader("Answer")
-
-    sentences = split_into_sentences(paragraph)
-
-    if not sentences:
-        st.write(paragraph)
-        return
-
-    for sentence in sentences:
-        st.markdown(f"- {sentence}")
-
-
 def clean_dataframe_for_display(df):
     clean_df = df.copy()
 
@@ -267,90 +74,49 @@ def clean_dataframe_for_display(df):
     return clean_df
 
 
-def rename_head_to_head_columns(df):
-    question = st.session_state.get("current_question", "")
-    team_a, team_b = extract_team_short_labels(question)
+def split_into_sentences(text):
+    text = str(text).strip()
 
-    rename_map = {
-        "team_a_wins": f"{team_a} Wins",
-        "team_b_wins": f"{team_b} Wins",
-        "team_a_win_pct": f"{team_a} Win %",
-        "team_b_win_pct": f"{team_b} Win %",
-        "Team A Wins": f"{team_a} Wins",
-        "Team B Wins": f"{team_b} Wins",
-        "Team A Win Pct": f"{team_a} Win %",
-        "Team B Win Pct": f"{team_b} Win %",
-    }
+    if not text:
+        return []
 
-    return df.rename(columns=rename_map)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    return [sentence.strip() for sentence in sentences if sentence.strip()]
 
-def format_recent_h2h_table(df):
-    clean_df = df.copy()
 
-    for col in [
-        "team_a",
-        "team_b",
-        "winner",
-        "first_innings_team",
-        "second_innings_team",
-    ]:
-        if col in clean_df.columns:
-            clean_df[col] = clean_df[col].apply(team_short_label)
+def render_answer_paragraph(paragraph):
+    st.subheader("Answer")
 
-    preferred_order = [
-        "start_date",
-        "winner",
-        "result",
-        "venue",
-        "team_a",
-        "team_b",
-        "first_innings_team",
-        "first_innings_score",
-        "second_innings_team",
-        "second_innings_score",
-    ]
+    sentences = split_into_sentences(paragraph)
 
-    existing_order = [col for col in preferred_order if col in clean_df.columns]
-    remaining_cols = [col for col in clean_df.columns if col not in existing_order]
+    if not sentences:
+        st.write(paragraph)
+        return
 
-    clean_df = clean_df[existing_order + remaining_cols]
-
-    rename_map = {
-        "start_date": "Date",
-        "winner": "Winner",
-        "result": "Result",
-        "venue": "Venue",
-        "team_a": "Team A",
-        "team_b": "Team B",
-        "first_innings_team": "1st Innings Team",
-        "first_innings_score": "1st Innings Score",
-        "second_innings_team": "2nd Innings Team",
-        "second_innings_score": "2nd Innings Score",
-    }
-
-    return clean_df.rename(columns=rename_map)
+    for sentence in sentences:
+        st.markdown(f"- {sentence}")
 
 
 def render_action_plan(df):
     clean_df = clean_dataframe_for_display(df)
 
     for _, row in clean_df.iterrows():
-        phase = clean_user_text(row.get("phase", "Action"))
-        plan = clean_user_text(row.get("plan", ""))
-        why = clean_user_text(row.get("why", ""))
-        key_players = clean_user_text(row.get("key_players", ""))
+        phase = row.get("phase", "Action")
+        plan = row.get("plan", "")
+        why = row.get("why", "")
+        key_players = row.get("key_players", "")
 
         with st.container(border=True):
-            st.markdown(f"<div class='card-title'>{phase}</div>", unsafe_allow_html=True)
+            st.markdown(f"**{phase}**")
 
             if pd.notna(plan) and str(plan).strip():
-                st.markdown(f"<div class='card-main'>{plan}</div>", unsafe_allow_html=True)
+                st.write(str(plan))
 
             if pd.notna(why) and str(why).strip():
-                st.markdown(f"<div class='small-note'><b>Why:</b> {why}</div>", unsafe_allow_html=True)
+                st.caption(f"Why: {why}")
 
             if pd.notna(key_players) and str(key_players).strip():
-                st.markdown(f"<div class='small-note'><b>Key players:</b> {key_players}</div>", unsafe_allow_html=True)
+                st.caption(f"Key players: {key_players}")
 
 
 def render_long_text_details(original_df, long_text_columns):
@@ -373,7 +139,7 @@ def render_long_text_details(original_df, long_text_columns):
             if possible_label in original_df.columns:
                 value = row.get(possible_label, "")
                 if pd.notna(value) and str(value).strip():
-                    label_parts.append(clean_user_text(value))
+                    label_parts.append(str(value))
 
         label = " - ".join(label_parts)
 
@@ -381,16 +147,13 @@ def render_long_text_details(original_df, long_text_columns):
             label = f"Row {row_index + 1}"
 
         with st.container(border=True):
-            st.markdown(f"<div class='card-title'>{label}</div>", unsafe_allow_html=True)
+            st.markdown(f"**{label}**")
 
             for text_col in long_text_columns:
                 text_value = row.get(text_col, "")
 
                 if pd.notna(text_value) and str(text_value).strip():
-                    st.markdown(
-                        f"<div class='card-main'>{clean_user_text(text_value)}</div>",
-                        unsafe_allow_html=True,
-                    )
+                    st.write(str(text_value))
 
 
 def display_result(title, value):
@@ -403,11 +166,6 @@ def display_result(title, value):
             return
 
         clean_value = clean_dataframe_for_display(value)
-
-        if str(title).lower() == "head to head":
-            clean_value = rename_head_to_head_columns(clean_value)
-        if str(title).lower() == "recent head to head results":
-            clean_value = format_recent_h2h_table(clean_value)
 
         lower_columns = {str(col).lower() for col in clean_value.columns}
 
@@ -425,15 +183,7 @@ def display_result(title, value):
         if long_text_columns:
             table_value = table_value.drop(columns=long_text_columns)
 
-        remaining_columns = {str(col).lower() for col in table_value.columns}
-
-        show_dataframe = (
-            not table_value.empty
-            and len(table_value.columns) > 0
-            and not remaining_columns.issubset(LABEL_ONLY_COLUMNS)
-        )
-
-        if show_dataframe:
+        if not table_value.empty and len(table_value.columns) > 0:
             display_table = table_value.rename(columns=pretty_column_name)
             st.dataframe(display_table, use_container_width=True, hide_index=True)
 
@@ -475,7 +225,7 @@ def get_similar_questions(question, response):
         return [
             "how can CSK beat GT at Chepauk",
             "how can RCB beat GT",
-            "tell me about Eden Gardens",
+            "tell me about this venue",
             "which players are key in this matchup",
         ]
 
@@ -530,7 +280,6 @@ def show_similar_questions(question, response):
 
 def run_question(question):
     question = str(question).strip()
-    st.session_state.current_question = question
 
     if not question:
         st.warning("Type a question first.")
@@ -552,17 +301,7 @@ def run_question(question):
         display_result("Result", response.get("result"))
 
     result = response.get("result")
-    matched_question = str(response.get("matched_question", "")).lower()
-
-    show_main_result_table = (
-        should_show_table(result)
-        and not paragraph
-        and "team-vs-team match plan" not in matched_question
-        and "team profile" not in matched_question
-        and "venue profile" not in matched_question
-    )
-
-    if show_main_result_table:
+    if should_show_table(result):
         with st.expander("Main result table", expanded=False):
             display_result("Result", result)
 

@@ -732,7 +732,12 @@ innings_scores AS (
         d.match_id,
         d.innings,
         d.batting_team,
-        SUM(d.runs_off_bat + d.extras) AS total_runs
+        SUM(d.runs_off_bat + d.extras) AS total_runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed IS NOT NULL
+            THEN 1
+        END) AS wickets_lost
     FROM deliveries d
     GROUP BY
         d.match_id,
@@ -764,25 +769,32 @@ SELECT TOP 5
     '{team_a_label_sql}' AS team_a,
     '{team_b_label_sql}' AS team_b,
     h.start_date,
+    h.winner,
+    CASE
+        WHEN h.winner = i1.batting_team THEN
+            CONCAT(
+                h.winner,
+                ' won by ',
+                COALESCE(CAST(i1.total_runs - i2.total_runs AS varchar(20)), 'N/A'),
+                ' runs'
+            )
+        WHEN h.winner = i2.batting_team THEN
+            CONCAT(
+                h.winner,
+                ' won by ',
+                COALESCE(CAST(10 - i2.wickets_lost AS varchar(20)), 'N/A'),
+                ' wickets'
+            )
+        WHEN h.winner IS NULL THEN 'No result'
+        ELSE CONCAT(h.winner, ' won')
+    END AS result,
     h.venue,
     i1.batting_team AS first_innings_team,
     i1.total_runs AS first_innings_score,
+    i1.wickets_lost AS first_innings_wickets,
     i2.batting_team AS second_innings_team,
     i2.total_runs AS second_innings_score,
-    h.winner,
-    CONCAT(
-        CAST(h.start_date AS varchar(20)),
-        ': ',
-        COALESCE(i1.batting_team, 'Unknown'),
-        ' ',
-        COALESCE(CAST(i1.total_runs AS varchar(20)), 'N/A'),
-        ' vs ',
-        COALESCE(i2.batting_team, 'Unknown'),
-        ' ',
-        COALESCE(CAST(i2.total_runs AS varchar(20)), 'N/A'),
-        '. Winner: ',
-        COALESCE(h.winner, 'No result')
-    ) AS result_summary
+    i2.wickets_lost AS second_innings_wickets
 FROM h2h_matches h
 LEFT JOIN innings_scores i1
     ON h.match_id = i1.match_id
