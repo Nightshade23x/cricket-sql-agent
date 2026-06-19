@@ -2252,7 +2252,207 @@ GROUP BY winner
 ORDER BY trophies DESC, team ASC;
 """.strip()
 
+def build_highest_score_losing_cause_sql():
+    return """
+WITH batter_innings AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team,
+        d.bowling_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.winner,
+        SUM(d.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+             AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END) AS balls,
+        SUM(CASE WHEN d.runs_off_bat = 4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN d.runs_off_bat = 6 THEN 1 ELSE 0 END) AS sixes
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE m.winner IS NOT NULL
+      AND d.batting_team <> m.winner
+    GROUP BY
+        d.match_id,
+        d.innings,
+        d.striker,
+        d.batting_team,
+        d.bowling_team,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.winner
+)
+SELECT TOP 10
+    batter,
+    batting_team,
+    opponent,
+    season,
+    start_date,
+    venue,
+    winner,
+    runs,
+    balls,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+    fours,
+    sixes
+FROM batter_innings
+ORDER BY runs DESC, strike_rate DESC;
+""".strip()
+
+
+def build_best_bowling_losing_cause_sql():
+    return """
+WITH bowler_figures AS (
+    SELECT
+        d.match_id,
+        d.bowler,
+        d.bowling_team,
+        d.batting_team AS opponent,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.winner,
+        COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+             AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.wides, 0) + COALESCE(d.noballs, 0)) AS runs_conceded,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE m.winner IS NOT NULL
+      AND d.bowling_team <> m.winner
+    GROUP BY
+        d.match_id,
+        d.bowler,
+        d.bowling_team,
+        d.batting_team,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.winner
+)
+SELECT TOP 10
+    bowler,
+    bowling_team,
+    opponent,
+    season,
+    start_date,
+    venue,
+    winner,
+    CONCAT(legal_balls / 6, '.', legal_balls % 6) AS overs,
+    runs_conceded,
+    wickets,
+    CONCAT(wickets, '/', runs_conceded) AS bowling_figures,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy_rate
+FROM bowler_figures
+WHERE wickets > 0
+ORDER BY wickets DESC, runs_conceded ASC, economy_rate ASC;
+""".strip()
+
+
+def build_most_runs_single_over_sql():
+    return """
+WITH over_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        CAST(FLOOR(d.ball) AS int) + 1 AS over_number,
+        d.batting_team,
+        d.bowling_team,
+        MAX(d.bowler) AS bowler,
+        m.season,
+        m.start_date,
+        m.venue,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS over_runs,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS bat_runs,
+        SUM(COALESCE(d.extras, 0)) AS extras,
+        COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+             AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END) AS legal_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    GROUP BY
+        d.match_id,
+        d.innings,
+        CAST(FLOOR(d.ball) AS int) + 1,
+        d.batting_team,
+        d.bowling_team,
+        m.season,
+        m.start_date,
+        m.venue
+)
+SELECT TOP 10
+    batting_team,
+    bowling_team,
+    bowler,
+    season,
+    start_date,
+    venue,
+    innings,
+    over_number,
+    over_runs,
+    bat_runs,
+    extras,
+    legal_balls
+FROM over_scores
+ORDER BY over_runs DESC, bat_runs DESC;
+""".strip()
+
 def build_curated_sql(user_question):
+
+    losing_batting_terms = [
+        "highest score in a losing cause",
+        "highest score losing cause",
+        "most runs in a losing cause",
+        "most runs losing cause",
+        "best innings in a losing cause",
+        "best batting in a losing cause",
+    ]
+
+    losing_bowling_terms = [
+        "best bowling in a losing cause",
+        "best bowling figures in a losing cause",
+        "best bowling losing cause",
+        "most wickets in a losing cause",
+        "best figures in a losing cause",
+    ]
+
+    single_over_terms = [
+        "most runs in a single over",
+        "most runs in one over",
+        "highest scoring over",
+        "most expensive over",
+        "most runs off an over",
+    ]
+
+    q_lower = user_question.lower()
+
+    if any(term in q_lower for term in losing_batting_terms):
+        return build_highest_score_losing_cause_sql()
+
+    if any(term in q_lower for term in losing_bowling_terms):
+        return build_best_bowling_losing_cause_sql()
+
+    if any(term in q_lower for term in single_over_terms):
+        return build_most_runs_single_over_sql()
+
 
     trophy_question_terms = [
         "most trophies",
@@ -6686,6 +6886,20 @@ def get_player_label_from_question(user_question):
     player_condition = get_player_condition_from_question(user_question, "d.striker")
     return get_player_label_from_condition(player_condition)
 
+def remove_empty_extra_tables(extra_tables):
+    clean_tables = {}
+
+    for key, value in (extra_tables or {}).items():
+        if value is None:
+            continue
+
+        if hasattr(value, "empty") and value.empty:
+            continue
+
+        clean_tables[key] = value
+
+    return clean_tables
+
 def build_analysis_response(user_question):
     question_lower = user_question.lower()
     # Final / specific final match summary
@@ -6707,11 +6921,11 @@ AND ms.season_year = {season}
             return {
                 "method": "analysis_layer",
                 "matched_question": "Final match summary",
-                "sql_query": analysis_result["sql_query"],
-                "result": analysis_result["summary"],
+                "sql_query": analysis_result.get("sql_query"),
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "match_summaries": analysis_result["match_summaries"],
+                    "match_summaries": analysis_result.get("match_summaries"),
                 },
                 "error": None
             }
@@ -6741,7 +6955,7 @@ AND ms.season_year = {season}
                 "method": "analysis_layer",
                 "matched_question": "Venue profile",
                 "sql_query": combined_sql.strip(),
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
                     "venue_overview": analysis_result.get("overview"),
@@ -6789,7 +7003,7 @@ AND ms.season_year = {season}
                 "method": "analysis_layer",
                 "matched_question": "Best bowlers against batter",
                 "sql_query": combined_sql.strip(),
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
                     "bowler_matchups": analysis_result.get("bowler_matchups"),
@@ -6836,7 +7050,7 @@ AND ms.season_year = {season}
                 "method": "analysis_layer",
                 "matched_question": "Team-vs-team match plan",
                 "sql_query": combined_sql.strip(),
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
                     "action_plan": analysis_result.get("action_plan"),
@@ -6871,10 +7085,10 @@ AND ms.season_year = {season}
             "method": "analysis_layer",
             "matched_question": "Strongest current squads",
             "sql_query": combined_sql,
-            "result": analysis_result["summary"],
+            "result": analysis_result.get("summary"),
             "analysis_paragraph": analysis_result.get("paragraph"),
             "extra_tables": {
-                "team_scores": analysis_result["team_scores"],
+                "team_scores": analysis_result.get("team_scores"),
             },
             "error": None,
         }
@@ -6894,26 +7108,39 @@ AND ms.season_year = {season}
                 team_label=team_label,
             )
 
-            combined_sql = analysis_result["sql_queries"]["current_squad"]
-            combined_sql += "\n\n--- current_squad_batting ---\n" + analysis_result["sql_queries"]["current_squad_batting"]
-            combined_sql += "\n\n--- current_squad_bowling ---\n" + analysis_result["sql_queries"]["current_squad_bowling"]
-            combined_sql += "\n\n--- players_to_watch ---\n" + analysis_result["sql_queries"]["players_to_watch"]
-            combined_sql += "\n\n--- historical_batting_legends ---\n" + analysis_result["sql_queries"]["historical_batting_legends"]
-            combined_sql += "\n\n--- historical_bowling_legends ---\n" + analysis_result["sql_queries"]["historical_bowling_legends"]
+            _sql_queries = analysis_result.get("sql_queries") or {}
+            combined_sql = _sql_queries.get("current_squad")
+            if not combined_sql:
+                combined_sql = "\\n\\n".join(str(value) for value in _sql_queries.values() if value)
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("current_squad_batting")
+            if _sql_piece:
+                combined_sql += "\n\n--- current_squad_batting ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("current_squad_bowling")
+            if _sql_piece:
+                combined_sql += "\n\n--- current_squad_bowling ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("players_to_watch")
+            if _sql_piece:
+                combined_sql += "\n\n--- players_to_watch ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("historical_batting_legends")
+            if _sql_piece:
+                combined_sql += "\n\n--- historical_batting_legends ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("historical_bowling_legends")
+            if _sql_piece:
+                combined_sql += "\n\n--- historical_bowling_legends ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Current squad report",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "current_squad": analysis_result["current_squad"],
-                    "current_squad_batting": analysis_result["current_squad_batting"],
-                    "current_squad_bowling": analysis_result["current_squad_bowling"],
-                    "players_to_watch": analysis_result["players_to_watch"],
-                    "historical_batting_legends": analysis_result["historical_batting_legends"],
-                    "historical_bowling_legends": analysis_result["historical_bowling_legends"],
+                    "current_squad": analysis_result.get("current_squad"),
+                    "current_squad_batting": analysis_result.get("current_squad_batting"),
+                    "current_squad_bowling": analysis_result.get("current_squad_bowling"),
+                    "players_to_watch": analysis_result.get("players_to_watch"),
+                    "historical_batting_legends": analysis_result.get("historical_batting_legends"),
+                    "historical_bowling_legends": analysis_result.get("historical_bowling_legends"),
                 },
                 "error": None,
             }
@@ -6947,16 +7174,16 @@ AND ms.season_year = {season}
                 "method": "analysis_layer",
                 "matched_question": "Enhanced team report",
                 "sql_query": combined_sql.strip(),
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "trophy_record": analysis_result["trophy_record"],
-                    "team_report_squad_summary": analysis_result["team_report_squad_summary"],
-                    "historical_batting_legends": analysis_result["historical_batting_legends"],
-                    "historical_bowling_legends": analysis_result["historical_bowling_legends"],
-                    "current_batters_to_watch": analysis_result["current_batters_to_watch"],
-                    "current_bowlers_to_watch": analysis_result["current_bowlers_to_watch"],
-                    "squad_snapshot": analysis_result["squad_snapshot"],
+                    "trophy_record": analysis_result.get("trophy_record"),
+                    "team_report_squad_summary": analysis_result.get("team_report_squad_summary"),
+                    "historical_batting_legends": analysis_result.get("historical_batting_legends"),
+                    "historical_bowling_legends": analysis_result.get("historical_bowling_legends"),
+                    "current_batters_to_watch": analysis_result.get("current_batters_to_watch"),
+                    "current_bowlers_to_watch": analysis_result.get("current_bowlers_to_watch"),
+                    "squad_snapshot": analysis_result.get("squad_snapshot"),
                 },
                 "error": None,
             }
@@ -7010,26 +7237,33 @@ AND ms.season_year = {season}
                 phase_label=phase_label,
             )
 
-            combined_sql = analysis_result["sql_queries"]["length_line_plan"]
-            combined_sql += "\n\n--- shot_response ---\n" + analysis_result["sql_queries"]["shot_response"]
-            combined_sql += "\n\n--- direct_summary ---\n" + analysis_result["sql_queries"]["direct_summary"]
+            sql_queries = analysis_result.get("sql_queries") or {}
+            combined_sql = sql_queries.get("length_line_plan")
+            if not combined_sql:
+                combined_sql = "\\n\\n".join(str(value) for value in sql_queries.values() if value)
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("shot_response")
+            if _sql_piece:
+                combined_sql += "\n\n--- shot_response ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("direct_summary")
+            if _sql_piece:
+                combined_sql += "\n\n--- direct_summary ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Bowler-specific length and line plan",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "length_line_plan": analysis_result["length_line_plan"],
-                    "direct_length_line_plan": analysis_result["direct_length_line_plan"],
-                    "proxy_bowler_style_plan": analysis_result["proxy_bowler_style_plan"],
-                    "proxy_batter_style_plan": analysis_result["proxy_batter_style_plan"],
-                    "shot_response": analysis_result["shot_response"],
-                    "shot_direction": analysis_result["shot_direction"],
-                    "direct_summary": analysis_result["direct_summary"],
-                    "batter_profile": analysis_result["batter_profile"],
-                    "bowler_profile": analysis_result["bowler_profile"],
+                    "length_line_plan": analysis_result.get("length_line_plan"),
+                    "direct_length_line_plan": analysis_result.get("direct_length_line_plan"),
+                    "proxy_bowler_style_plan": analysis_result.get("proxy_bowler_style_plan"),
+                    "proxy_batter_style_plan": analysis_result.get("proxy_batter_style_plan"),
+                    "shot_response": analysis_result.get("shot_response"),
+                    "shot_direction": analysis_result.get("shot_direction"),
+                    "direct_summary": analysis_result.get("direct_summary"),
+                    "batter_profile": analysis_result.get("batter_profile"),
+                    "bowler_profile": analysis_result.get("bowler_profile"),
                 },
                 "error": None,
             }
@@ -7068,20 +7302,27 @@ AND ms.season_year = {season}
                 venue_condition=venue_condition,
             )
 
-            combined_sql = analysis_result["sql_queries"]["direct_options"]
-            combined_sql += "\n\n--- proxy_options ---\n" + analysis_result["sql_queries"]["proxy_options"]
-            combined_sql += "\n\n--- recommended_lengths_lines ---\n" + analysis_result["sql_queries"]["recommended_lengths_lines"]
+            _sql_queries = analysis_result.get("sql_queries") or {}
+            combined_sql = _sql_queries.get("direct_options")
+            if not combined_sql:
+                combined_sql = "\\n\\n".join(str(value) for value in _sql_queries.values() if value)
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("proxy_options")
+            if _sql_piece:
+                combined_sql += "\n\n--- proxy_options ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("recommended_lengths_lines")
+            if _sql_piece:
+                combined_sql += "\n\n--- recommended_lengths_lines ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Team bowler recommendation",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "direct_options": analysis_result["direct_options"],
-                    "proxy_options": analysis_result["proxy_options"],
-                    "recommended_lengths_lines": analysis_result["recommended_lengths_lines"],
+                    "direct_options": analysis_result.get("direct_options"),
+                    "proxy_options": analysis_result.get("proxy_options"),
+                    "recommended_lengths_lines": analysis_result.get("recommended_lengths_lines"),
                 },
                 "error": None,
             }
@@ -7132,24 +7373,35 @@ AND ms.season_year = {season}
                 venue_condition=venue_condition,
             )
 
-            combined_sql = analysis_result["sql_queries"]["direct_summary"]
-            combined_sql += "\n\n--- scoring_areas ---\n" + analysis_result["sql_queries"]["scoring_areas"]
-            combined_sql += "\n\n--- scoring_shots ---\n" + analysis_result["sql_queries"]["scoring_shots"]
-            combined_sql += "\n\n--- risky_shots ---\n" + analysis_result["sql_queries"]["risky_shots"]
-            combined_sql += "\n\n--- length_line_attack ---\n" + analysis_result["sql_queries"]["length_line_attack"]
+            _sql_queries = analysis_result.get("sql_queries") or {}
+            combined_sql = _sql_queries.get("direct_summary")
+            if not combined_sql:
+                combined_sql = "\\n\\n".join(str(value) for value in _sql_queries.values() if value)
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("scoring_areas")
+            if _sql_piece:
+                combined_sql += "\n\n--- scoring_areas ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("scoring_shots")
+            if _sql_piece:
+                combined_sql += "\n\n--- scoring_shots ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("risky_shots")
+            if _sql_piece:
+                combined_sql += "\n\n--- risky_shots ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("length_line_attack")
+            if _sql_piece:
+                combined_sql += "\n\n--- length_line_attack ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Batter plan against bowler",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "direct_summary": analysis_result["direct_summary"],
-                    "scoring_areas": analysis_result["scoring_areas"],
-                    "scoring_shots": analysis_result["scoring_shots"],
-                    "risky_shots": analysis_result["risky_shots"],
-                    "length_line_attack": analysis_result["length_line_attack"],
+                    "direct_summary": analysis_result.get("direct_summary"),
+                    "scoring_areas": analysis_result.get("scoring_areas"),
+                    "scoring_shots": analysis_result.get("scoring_shots"),
+                    "risky_shots": analysis_result.get("risky_shots"),
+                    "length_line_attack": analysis_result.get("length_line_attack"),
                 },
                 "error": None,
             }
@@ -7192,34 +7444,55 @@ AND ms.season_year = {season}
                 venue_condition=venue_condition,
             )
 
-            combined_sql = analysis_result["sql_queries"]["direct_matchup"]
-            combined_sql += "\n\n--- batter_benchmark ---\n" + analysis_result["sql_queries"]["batter_benchmark"]
-            combined_sql += "\n\n--- phase_breakdown ---\n" + analysis_result["sql_queries"]["phase_breakdown"]
-            combined_sql += "\n\n--- recommended_lengths_lines ---\n" + analysis_result["sql_queries"]["recommended_lengths_lines"]
-            combined_sql += "\n\n--- shot_directions ---\n" + analysis_result["sql_queries"]["shot_directions"]
-            combined_sql += "\n\n--- shot_types ---\n" + analysis_result["sql_queries"]["shot_types"]
-            combined_sql += "\n\n--- similar_batter_matchup ---\n" + analysis_result["sql_queries"]["similar_batter_matchup"]
-            combined_sql += "\n\n--- similar_batter_benchmark ---\n" + analysis_result["sql_queries"]["similar_batter_benchmark"]
-            combined_sql += "\n\n--- similar_batter_lengths_lines ---\n" + analysis_result["sql_queries"]["similar_batter_lengths_lines"]
-            combined_sql += "\n\n--- similar_batter_shot_directions ---\n" + analysis_result["sql_queries"]["similar_batter_shot_directions"]
+            _sql_queries = analysis_result.get("sql_queries") or {}
+            combined_sql = _sql_queries.get("direct_matchup")
+            if not combined_sql:
+                combined_sql = "\\n\\n".join(str(value) for value in _sql_queries.values() if value)
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("batter_benchmark")
+            if _sql_piece:
+                combined_sql += "\n\n--- batter_benchmark ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("phase_breakdown")
+            if _sql_piece:
+                combined_sql += "\n\n--- phase_breakdown ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("recommended_lengths_lines")
+            if _sql_piece:
+                combined_sql += "\n\n--- recommended_lengths_lines ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("shot_directions")
+            if _sql_piece:
+                combined_sql += "\n\n--- shot_directions ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("shot_types")
+            if _sql_piece:
+                combined_sql += "\n\n--- shot_types ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("similar_batter_matchup")
+            if _sql_piece:
+                combined_sql += "\n\n--- similar_batter_matchup ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("similar_batter_benchmark")
+            if _sql_piece:
+                combined_sql += "\n\n--- similar_batter_benchmark ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("similar_batter_lengths_lines")
+            if _sql_piece:
+                combined_sql += "\n\n--- similar_batter_lengths_lines ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("similar_batter_shot_directions")
+            if _sql_piece:
+                combined_sql += "\n\n--- similar_batter_shot_directions ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Bowler vs batter decision",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "direct_matchup": analysis_result["direct_matchup"],
-                    "batter_benchmark": analysis_result["batter_benchmark"],
-                    "phase_breakdown": analysis_result["phase_breakdown"],
-                    "recommended_lengths_lines": analysis_result["recommended_lengths_lines"],
-                    "shot_directions": analysis_result["shot_directions"],
-                    "shot_types": analysis_result["shot_types"],
-                    "similar_batter_matchup": analysis_result["similar_batter_matchup"],
-                    "similar_batter_benchmark": analysis_result["similar_batter_benchmark"],
-                    "similar_batter_lengths_lines": analysis_result["similar_batter_lengths_lines"],
-                    "similar_batter_shot_directions": analysis_result["similar_batter_shot_directions"],
+                    "direct_matchup": analysis_result.get("direct_matchup"),
+                    "batter_benchmark": analysis_result.get("batter_benchmark"),
+                    "phase_breakdown": analysis_result.get("phase_breakdown"),
+                    "recommended_lengths_lines": analysis_result.get("recommended_lengths_lines"),
+                    "shot_directions": analysis_result.get("shot_directions"),
+                    "shot_types": analysis_result.get("shot_types"),
+                    "similar_batter_matchup": analysis_result.get("similar_batter_matchup"),
+                    "similar_batter_benchmark": analysis_result.get("similar_batter_benchmark"),
+                    "similar_batter_lengths_lines": analysis_result.get("similar_batter_lengths_lines"),
+                    "similar_batter_shot_directions": analysis_result.get("similar_batter_shot_directions"),
                 },
                 "error": None,
             }
@@ -7282,26 +7555,39 @@ AND ms.season_year = {season}
                 forced_mode=forced_mode,
             )
 
-            combined_sql = analysis_result["sql_queries"]["best_lengths"]
-            combined_sql += "\n\n--- best_lines ---\n" + analysis_result["sql_queries"]["best_lines"]
-            combined_sql += "\n\n--- bowling_types ---\n" + analysis_result["sql_queries"]["bowling_types"]
-            combined_sql += "\n\n--- pace_options ---\n" + analysis_result["sql_queries"]["pace_options"]
-            combined_sql += "\n\n--- spin_options ---\n" + analysis_result["sql_queries"]["spin_options"]
-            combined_sql += "\n\n--- active_bowler_options ---\n" + analysis_result["sql_queries"]["active_bowler_options"]
+            _sql_queries = analysis_result.get("sql_queries") or {}
+            combined_sql = _sql_queries.get("best_lengths")
+            if not combined_sql:
+                combined_sql = "\\n\\n".join(str(value) for value in _sql_queries.values() if value)
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("best_lines")
+            if _sql_piece:
+                combined_sql += "\n\n--- best_lines ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("bowling_types")
+            if _sql_piece:
+                combined_sql += "\n\n--- bowling_types ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("pace_options")
+            if _sql_piece:
+                combined_sql += "\n\n--- pace_options ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("spin_options")
+            if _sql_piece:
+                combined_sql += "\n\n--- spin_options ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("active_bowler_options")
+            if _sql_piece:
+                combined_sql += "\n\n--- active_bowler_options ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Batter bowling plan",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "best_lengths": analysis_result["best_lengths"],
-                    "best_lines": analysis_result["best_lines"],
-                    "bowling_types": analysis_result["bowling_types"],
-                    "pace_options": analysis_result["pace_options"],
-                    "spin_options": analysis_result["spin_options"],
-                    "active_bowler_options": analysis_result["active_bowler_options"],
+                    "best_lengths": analysis_result.get("best_lengths"),
+                    "best_lines": analysis_result.get("best_lines"),
+                    "bowling_types": analysis_result.get("bowling_types"),
+                    "pace_options": analysis_result.get("pace_options"),
+                    "spin_options": analysis_result.get("spin_options"),
+                    "active_bowler_options": analysis_result.get("active_bowler_options"),
                 },
                 "error": None,
             }
@@ -7321,20 +7607,27 @@ AND ms.season_year = {season}
     ):
         analysis_result = analyze_team_title_chances()
 
-        combined_sql = analysis_result["sql_queries"]["team_scores"]
-        combined_sql += "\n\n--- current_squad_batting_leaders ---\n" + analysis_result["sql_queries"]["current_squad_batting_leaders"]
-        combined_sql += "\n\n--- current_squad_bowling_leaders ---\n" + analysis_result["sql_queries"]["current_squad_bowling_leaders"]
+        _sql_queries = analysis_result.get("sql_queries") or {}
+        combined_sql = _sql_queries.get("team_scores")
+        if not combined_sql:
+            combined_sql = "\\n\\n".join(str(value) for value in _sql_queries.values() if value)
+        _sql_piece = (analysis_result.get("sql_queries") or {}).get("current_squad_batting_leaders")
+        if _sql_piece:
+            combined_sql += "\n\n--- current_squad_batting_leaders ---\n" + _sql_piece
+        _sql_piece = (analysis_result.get("sql_queries") or {}).get("current_squad_bowling_leaders")
+        if _sql_piece:
+            combined_sql += "\n\n--- current_squad_bowling_leaders ---\n" + _sql_piece
 
         return {
             "method": "analysis_layer",
             "matched_question": "Squad-aware title prediction",
             "sql_query": combined_sql,
-            "result": analysis_result["summary"],
+            "result": analysis_result.get("summary"),
             "analysis_paragraph": analysis_result.get("paragraph"),
             "extra_tables": {
-                "team_scores": analysis_result["team_scores"],
-                "current_squad_batting_leaders": analysis_result["current_squad_batting_leaders"],
-                "current_squad_bowling_leaders": analysis_result["current_squad_bowling_leaders"],
+                "team_scores": analysis_result.get("team_scores"),
+                "current_squad_batting_leaders": analysis_result.get("current_squad_batting_leaders"),
+                "current_squad_bowling_leaders": analysis_result.get("current_squad_bowling_leaders"),
             },
             "error": None,
         }
@@ -7357,25 +7650,35 @@ AND ms.season_year = {season}
             analysis_result = analyze_bowler_strategy(bowler_condition)
 
             combined_sql = "\n\n--- effective_line_length ---\n" + analysis_result["sql_queries"]["effective_line_length"]
-            combined_sql += "\n\n--- expensive_line_length ---\n" + analysis_result["sql_queries"]["expensive_line_length"]
-            combined_sql += "\n\n--- shots_conceded ---\n" + analysis_result["sql_queries"]["shots_conceded"]
-            combined_sql += "\n\n--- wicket_shots ---\n" + analysis_result["sql_queries"]["wicket_shots"]
-            combined_sql += "\n\n--- handedness ---\n" + analysis_result["sql_queries"]["handedness"]
-            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("expensive_line_length")
+            if _sql_piece:
+                combined_sql += "\n\n--- expensive_line_length ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("shots_conceded")
+            if _sql_piece:
+                combined_sql += "\n\n--- shots_conceded ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("wicket_shots")
+            if _sql_piece:
+                combined_sql += "\n\n--- wicket_shots ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("handedness")
+            if _sql_piece:
+                combined_sql += "\n\n--- handedness ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("phases")
+            if _sql_piece:
+                combined_sql += "\n\n--- phases ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Bowler strategy analysis",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "effective_line_length": analysis_result["effective_line_length"],
-                    "expensive_line_length": analysis_result["expensive_line_length"],
-                    "shots_conceded": analysis_result["shots_conceded"],
-                    "wicket_shots": analysis_result["wicket_shots"],
-                    "handedness": analysis_result["handedness"],
-                    "phases": analysis_result["phases"],
+                    "effective_line_length": analysis_result.get("effective_line_length"),
+                    "expensive_line_length": analysis_result.get("expensive_line_length"),
+                    "shots_conceded": analysis_result.get("shots_conceded"),
+                    "wicket_shots": analysis_result.get("wicket_shots"),
+                    "handedness": analysis_result.get("handedness"),
+                    "phases": analysis_result.get("phases"),
                 },
                 "error": None
             }
@@ -7399,23 +7702,31 @@ AND ms.season_year = {season}
             analysis_result = analyze_bowler_matchups(bowler_condition)
 
             combined_sql = "\n\n--- most_dismissed ---\n" + analysis_result["sql_queries"]["most_dismissed"]
-            combined_sql += "\n\n--- most_runs ---\n" + analysis_result["sql_queries"]["most_runs"]
-            combined_sql += "\n\n--- highest_average ---\n" + analysis_result["sql_queries"]["highest_average"]
-            combined_sql += "\n\n--- highest_strike_rate ---\n" + analysis_result["sql_queries"]["highest_strike_rate"]
-            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("most_runs")
+            if _sql_piece:
+                combined_sql += "\n\n--- most_runs ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("highest_average")
+            if _sql_piece:
+                combined_sql += "\n\n--- highest_average ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("highest_strike_rate")
+            if _sql_piece:
+                combined_sql += "\n\n--- highest_strike_rate ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("phases")
+            if _sql_piece:
+                combined_sql += "\n\n--- phases ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Bowler matchup analysis",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "most_dismissed": analysis_result["most_dismissed"],
-                    "most_runs": analysis_result["most_runs"],
-                    "highest_average": analysis_result["highest_average"],
-                    "highest_strike_rate": analysis_result["highest_strike_rate"],
-                    "phases": analysis_result["phases"],
+                    "most_dismissed": analysis_result.get("most_dismissed"),
+                    "most_runs": analysis_result.get("most_runs"),
+                    "highest_average": analysis_result.get("highest_average"),
+                    "highest_strike_rate": analysis_result.get("highest_strike_rate"),
+                    "phases": analysis_result.get("phases"),
                 },
                 "error": None
             }
@@ -7437,32 +7748,50 @@ AND ms.season_year = {season}
             analysis_result = analyze_team_profile(team_condition, team_label)
 
             combined_sql = "\n\n--- overall ---\n" + analysis_result["sql_queries"]["overall"]
-            combined_sql += "\n\n--- season_trend ---\n" + analysis_result["sql_queries"]["season_trend"]
-            combined_sql += "\n\n--- batting ---\n" + analysis_result["sql_queries"]["batting"]
-            combined_sql += "\n\n--- bowling ---\n" + analysis_result["sql_queries"]["bowling"]
-            combined_sql += "\n\n--- chase_defend ---\n" + analysis_result["sql_queries"]["chase_defend"]
-            combined_sql += "\n\n--- playoff ---\n" + analysis_result["sql_queries"]["playoff"]
-            combined_sql += "\n\n--- venues ---\n" + analysis_result["sql_queries"]["venues"]
-            combined_sql += "\n\n--- phase_batting ---\n" + analysis_result["sql_queries"]["phase_batting"]
-            combined_sql += "\n\n--- top_run_scorers ---\n" + analysis_result["sql_queries"]["top_run_scorers"]
-            combined_sql += "\n\n--- top_wicket_takers ---\n" + analysis_result["sql_queries"]["top_wicket_takers"]
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("season_trend")
+            if _sql_piece:
+                combined_sql += "\n\n--- season_trend ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("batting")
+            if _sql_piece:
+                combined_sql += "\n\n--- batting ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("bowling")
+            if _sql_piece:
+                combined_sql += "\n\n--- bowling ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("chase_defend")
+            if _sql_piece:
+                combined_sql += "\n\n--- chase_defend ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("playoff")
+            if _sql_piece:
+                combined_sql += "\n\n--- playoff ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("venues")
+            if _sql_piece:
+                combined_sql += "\n\n--- venues ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("phase_batting")
+            if _sql_piece:
+                combined_sql += "\n\n--- phase_batting ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("top_run_scorers")
+            if _sql_piece:
+                combined_sql += "\n\n--- top_run_scorers ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("top_wicket_takers")
+            if _sql_piece:
+                combined_sql += "\n\n--- top_wicket_takers ---\n" + _sql_piece
             return {
                 "method": "analysis_layer",
                 "matched_question": "Full team profile analysis",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "overall": analysis_result["overall"],
-                    "season_trend": analysis_result["season_trend"],
-                    "batting": analysis_result["batting"],
-                    "bowling": analysis_result["bowling"],
-                    "chase_defend": analysis_result["chase_defend"],
-                    "playoff": analysis_result["playoff"],
-                    "venues": analysis_result["venues"],
-                    "phase_batting": analysis_result["phase_batting"],
-                    "top_run_scorers": analysis_result["top_run_scorers"],
-                    "top_wicket_takers": analysis_result["top_wicket_takers"],
+                    "overall": analysis_result.get("overall"),
+                    "season_trend": analysis_result.get("season_trend"),
+                    "batting": analysis_result.get("batting"),
+                    "bowling": analysis_result.get("bowling"),
+                    "chase_defend": analysis_result.get("chase_defend"),
+                    "playoff": analysis_result.get("playoff"),
+                    "venues": analysis_result.get("venues"),
+                    "phase_batting": analysis_result.get("phase_batting"),
+                    "top_run_scorers": analysis_result.get("top_run_scorers"),
+                    "top_wicket_takers": analysis_result.get("top_wicket_takers"),
                 },
                 "error": None
             }
@@ -7484,25 +7813,35 @@ AND ms.season_year = {season}
             analysis_result = analyze_player_shots(player_condition)
 
             combined_sql = "\n\n--- shot_summary ---\n" + analysis_result["sql_queries"]["shot_summary"]
-            combined_sql += "\n\n--- shot_dismissals ---\n" + analysis_result["sql_queries"]["shot_dismissals"]
-            combined_sql += "\n\n--- risky_shots ---\n" + analysis_result["sql_queries"]["risky_shots"]
-            combined_sql += "\n\n--- best_shots ---\n" + analysis_result["sql_queries"]["best_shots"]
-            combined_sql += "\n\n--- line_length ---\n" + analysis_result["sql_queries"]["line_length"]
-            combined_sql += "\n\n--- phase_shots ---\n" + analysis_result["sql_queries"]["phase_shots"]
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("shot_dismissals")
+            if _sql_piece:
+                combined_sql += "\n\n--- shot_dismissals ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("risky_shots")
+            if _sql_piece:
+                combined_sql += "\n\n--- risky_shots ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("best_shots")
+            if _sql_piece:
+                combined_sql += "\n\n--- best_shots ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("line_length")
+            if _sql_piece:
+                combined_sql += "\n\n--- line_length ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("phase_shots")
+            if _sql_piece:
+                combined_sql += "\n\n--- phase_shots ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Player shot selection analysis",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "shot_summary": analysis_result["shot_summary"],
-                    "shot_dismissals": analysis_result["shot_dismissals"],
-                    "risky_shots": analysis_result["risky_shots"],
-                    "best_shots": analysis_result["best_shots"],
-                    "line_length": analysis_result["line_length"],
-                    "phase_shots": analysis_result["phase_shots"],
+                    "shot_summary": analysis_result.get("shot_summary"),
+                    "shot_dismissals": analysis_result.get("shot_dismissals"),
+                    "risky_shots": analysis_result.get("risky_shots"),
+                    "best_shots": analysis_result.get("best_shots"),
+                    "line_length": analysis_result.get("line_length"),
+                    "phase_shots": analysis_result.get("phase_shots"),
                 },
                 "error": None
             }
@@ -7521,26 +7860,36 @@ AND ms.season_year = {season}
             analysis_result = analyze_player_dismissals(player_condition)
 
             combined_sql = "\n\n--- wicket_types ---\n" + analysis_result["sql_queries"]["wicket_types"]
-            combined_sql += "\n\n--- phases ---\n" + analysis_result["sql_queries"]["phases"]
-            combined_sql += "\n\n--- bowlers ---\n" + analysis_result["sql_queries"]["bowlers"]
-            combined_sql += "\n\n--- opponents ---\n" + analysis_result["sql_queries"]["opponents"]
-            combined_sql += "\n\n--- venues ---\n" + analysis_result["sql_queries"]["venues"]
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("phases")
+            if _sql_piece:
+                combined_sql += "\n\n--- phases ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("bowlers")
+            if _sql_piece:
+                combined_sql += "\n\n--- bowlers ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("opponents")
+            if _sql_piece:
+                combined_sql += "\n\n--- opponents ---\n" + _sql_piece
+            _sql_piece = (analysis_result.get("sql_queries") or {}).get("venues")
+            if _sql_piece:
+                combined_sql += "\n\n--- venues ---\n" + _sql_piece
 
             if "seasons" in analysis_result["sql_queries"]:
-                combined_sql += "\n\n--- seasons ---\n" + analysis_result["sql_queries"]["seasons"]
+                _sql_piece = (analysis_result.get("sql_queries") or {}).get("seasons")
+                if _sql_piece:
+                    combined_sql += "\n\n--- seasons ---\n" + _sql_piece
 
             return {
                 "method": "analysis_layer",
                 "matched_question": "Player dismissal analysis",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "wicket_types": analysis_result["wicket_types"],
-                    "phases": analysis_result["phases"],
-                    "bowlers": analysis_result["bowlers"],
-                    "opponents": analysis_result["opponents"],
-                    "venues": analysis_result["venues"],
+                    "wicket_types": analysis_result.get("wicket_types"),
+                    "phases": analysis_result.get("phases"),
+                    "bowlers": analysis_result.get("bowlers"),
+                    "opponents": analysis_result.get("opponents"),
+                    "venues": analysis_result.get("venues"),
                     "seasons": analysis_result.get("seasons"),
                 },
                 "error": None
@@ -7574,7 +7923,7 @@ AND ms.season_year = {season}
                 "method": "analysis_layer",
                 "matched_question": "Full player profile analysis",
                 "sql_query": combined_sql,
-                "result": analysis_result["summary"],
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
                     "career": analysis_result.get("career"),
@@ -7645,11 +7994,11 @@ AND EXISTS (
             return {
                 "method": "analysis_layer",
                 "matched_question": "Last team encounters summary",
-                "sql_query": analysis_result["sql_query"],
-                "result": analysis_result["summary"],
+                "sql_query": analysis_result.get("sql_query"),
+                "result": analysis_result.get("summary"),
                 "analysis_paragraph": analysis_result.get("paragraph"),
                 "extra_tables": {
-                    "match_summaries": analysis_result["match_summaries"],
+                    "match_summaries": analysis_result.get("match_summaries"),
                 },
                 "error": None
             }

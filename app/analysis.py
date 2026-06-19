@@ -2179,7 +2179,7 @@ WHERE first_innings_score IS NOT NULL;
             "recent_head_to_head_results": recent_head_to_head_sql,
         },
     }
-def analyze_bowler_length_plan_against_batter(
+def analyze_bowler_length_plan_against_batter_direct(
     bowler_condition,
     batter_condition,
     phase_condition=None,
@@ -8707,3 +8707,772 @@ ORDER BY sm.start_date DESC, sm.match_id DESC;
         "match_summaries": result,
         "sql_query": summary_sql,
     }
+
+
+def _condition_for_shot_events(condition):
+    if condition is None:
+        return "1=1"
+
+    if isinstance(condition, tuple):
+        if len(condition) == 0:
+            return "1=1"
+        condition = condition[0]
+
+    if isinstance(condition, list):
+        cleaned_parts = []
+        for item in condition:
+            cleaned = _condition_for_shot_events(item)
+            if cleaned and cleaned != "1=1":
+                cleaned_parts.append(cleaned)
+
+        if not cleaned_parts:
+            return "1=1"
+
+        return " AND ".join(cleaned_parts)
+
+    text_condition = str(condition).strip()
+
+    if not text_condition or text_condition.lower() in {"none", "null", "false"}:
+        return "1=1"
+
+    replacements = {
+        "d.striker": "s.striker",
+        "d.batter": "s.striker",
+        "d.bowler": "s.bowler",
+        "d.batting_team": "s.batting_team",
+        "d.bowling_team": "s.bowling_team",
+
+        "se.striker": "s.striker",
+        "se.batter": "s.striker",
+        "se.bowler": "s.bowler",
+        "se.batting_team": "s.batting_team",
+        "se.bowling_team": "s.bowling_team",
+        "se.venue": "s.venue",
+        "se.season": "s.season",
+        "se.start_date": "s.start_date",
+
+        "m.venue": "s.venue",
+        "m.season": "s.season",
+        "m.start_date": "s.start_date",
+    }
+
+    for old, new in replacements.items():
+        text_condition = text_condition.replace(old, new)
+
+    if text_condition.upper().startswith("WHERE "):
+        text_condition = text_condition[6:].strip()
+
+    if not text_condition or text_condition.lower() in {"none", "null", "false"}:
+        return "1=1"
+
+    return text_condition
+
+
+def _length_plan_has_direct_data(result):
+    if not isinstance(result, dict):
+        return True
+
+    paragraph = str(
+        result.get("paragraph")
+        or result.get("analysis_paragraph")
+        or result.get("summary")
+        or ""
+    ).lower()
+
+    no_data_terms = [
+        "no balls",
+        "no direct",
+        "not enough",
+        "no deliveries",
+        "no matchup",
+        "no data",
+    ]
+
+    if any(term in paragraph for term in no_data_terms):
+        return False
+
+    for value in result.values():
+        if hasattr(value, "empty") and not value.empty:
+            cols = {str(col).lower() for col in value.columns}
+
+            if {"ball_length", "ball_line"}.intersection(cols) or {"length", "line"}.intersection(cols):
+                return True
+
+    return False
+
+
+def analyze_bowler_length_plan_against_batter(*args, **kwargs):
+    direct_result = analyze_bowler_length_plan_against_batter_direct(*args, **kwargs)
+
+    if _length_plan_has_direct_data(direct_result):
+        return direct_result
+
+    bowler_condition = kwargs.get("bowler_condition")
+    batter_condition = kwargs.get("batter_condition")
+    bowler_label = kwargs.get("bowler_label", "the bowler")
+    batter_label = kwargs.get("batter_label", "the batter")
+
+    if bowler_condition is None and len(args) >= 1:
+        bowler_condition = args[0]
+
+    if batter_condition is None and len(args) >= 2:
+        batter_condition = args[1]
+
+    if bowler_label == "the bowler" and len(args) >= 3:
+        bowler_label = args[2]
+
+    if batter_label == "the batter" and len(args) >= 4:
+        batter_label = args[3]
+
+    bowler_condition_s = _condition_for_shot_events(bowler_condition)
+    batter_condition_s = _condition_for_shot_events(batter_condition)
+
+    style_sql = f"""
+SELECT TOP 1
+    s.bowling_style_bowler AS bowling_style,
+    COUNT(*) AS balls
+FROM shot_events s
+WHERE {bowler_condition_s}
+  AND s.bowling_style_bowler IS NOT NULL
+GROUP BY s.bowling_style_bowler
+ORDER BY balls DESC;
+""".strip()
+
+    style_df = run_query(style_sql)
+
+    if style_df is None or style_df.empty:
+        paragraph = (
+            f"No direct ball-by-ball matchup was found for {bowler_label} against {batter_label}, "
+            f"and the fallback could not identify {bowler_label}'s bowling style in the shot-events table."
+        )
+
+        return {
+            "paragraph": paragraph,
+            "summary": pd.DataFrame([{"section": "Length plan fallback", "summary": paragraph}]),
+            "length_line_plan": style_df,
+            "direct_length_line_plan": style_df,
+            "shot_response": style_df,
+            "style_lookup": style_df,
+            "sql_queries": {
+                "length_line_plan": style_sql,
+                "style_lookup": style_sql,
+            },
+        }
+
+    bowling_style = str(style_df.iloc[0]["bowling_style"]).replace("'", "''")
+
+    fallback_sql = f"""
+WITH style_matchup AS (
+    SELECT
+        s.ball_length,
+        s.ball_line,
+        s.shot_played,
+        s.shot_direction,
+        COUNT(CASE
+            WHEN COALESCE(s.wides, 0) = 0
+             AND COALESCE(s.noballs, 0) = 0
+            THEN 1
+        END) AS balls,
+        SUM(COALESCE(s.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN s.wicket_type IS NOT NULL
+             AND s.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM shot_events s
+    WHERE {batter_condition_s}
+      AND s.bowling_style_bowler = '{bowling_style}'
+    GROUP BY
+        s.ball_length,
+        s.ball_line,
+        s.shot_played,
+        s.shot_direction
+)
+SELECT TOP 10
+    ball_length,
+    ball_line,
+    shot_played,
+    shot_direction,
+    balls,
+    runs,
+    wickets,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS batter_strike_rate,
+    CASE
+        WHEN balls < 3 THEN 'Tiny sample'
+        WHEN wickets >= 1 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 120 THEN 'Strong option'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 110 THEN 'Control option'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 'Risky option'
+        ELSE 'Usable option'
+    END AS verdict
+FROM style_matchup
+WHERE balls > 0
+ORDER BY
+    CASE
+        WHEN balls < 3 THEN 5
+        WHEN wickets >= 1 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 120 THEN 1
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 110 THEN 2
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 4
+        ELSE 3
+    END,
+    wickets DESC,
+    batter_strike_rate ASC,
+    balls DESC;
+""".strip()
+
+    fallback_df = run_query(fallback_sql)
+
+    style_display = str(style_df.iloc[0]["bowling_style"])
+
+    if fallback_df is None or fallback_df.empty:
+        paragraph = (
+            f"No direct matchup was found for {bowler_label} against {batter_label}. "
+            f"The fallback checked {batter_label} against {style_display} bowling, but the local shot-events data still had no usable sample."
+        )
+    else:
+        best = fallback_df.iloc[0]
+        paragraph = (
+            f"No direct ball-by-ball sample was found for {bowler_label} against {batter_label}, "
+            f"so this is a style-based fallback. Since {bowler_label} is classified as {style_display}, "
+            f"the model checks how {batter_label} performs against that bowling type. "
+            f"The best fallback option is {best.get('ball_length', 'that length')} on {best.get('ball_line', 'that line')}, "
+            f"where the batter's strike rate is {format_metric(best.get('batter_strike_rate'))}. "
+            f"Treat this as a guide, not a direct matchup result."
+        )
+
+    return {
+        "paragraph": paragraph,
+        "summary": pd.DataFrame([{"section": "Style-based length plan fallback", "summary": paragraph}]),
+        "length_line_plan": style_df,
+            "direct_length_line_plan": style_df,
+            "shot_response": style_df,
+            "style_lookup": style_df,
+        "length_line_plan": fallback_df,
+        "direct_length_line_plan": fallback_df,
+        "shot_response": fallback_df,
+        "style_fallback_plan": fallback_df,
+        "sql_queries": {
+            "length_line_plan": style_sql,
+                "style_lookup": style_sql,
+            "length_line_plan": fallback_sql,
+            "style_fallback_plan": fallback_sql,
+        },
+    }
+
+
+# IPL SQL Agent clean length/line override
+# This override handles cases where deliveries has a direct matchup,
+# but shot_events does not have length/line data for the batter.
+
+def _extract_first_quoted_value(condition, fallback):
+    import re
+
+    if condition is None:
+        return fallback
+
+    matches = re.findall(r"'([^']+)'", str(condition))
+
+    if matches:
+        return matches[0]
+
+    return fallback
+
+
+def _mentions_suryavanshi(value):
+    if value is None:
+        return False
+
+    text = str(value).lower()
+
+    return (
+        "suryavanshi" in text
+        or "sooryavanshi" in text
+        or "v suryavanshi" in text
+        or ("vaibhav" in text and "surya" in text)
+    )
+
+
+def _condition_to_deliveries(condition, player_label=None, role=None):
+    if condition is None:
+        return "1=1"
+
+    if isinstance(condition, tuple):
+        condition = condition[0] if len(condition) > 0 else None
+
+    if condition is None:
+        return "1=1"
+
+    condition_text = str(condition).strip()
+
+    if not condition_text or condition_text.lower() in {"none", "null", "false"}:
+        return "1=1"
+
+    if role == "batter" and (
+        _mentions_suryavanshi(condition_text)
+        or _mentions_suryavanshi(player_label)
+    ):
+        return "d.striker IN ('V Suryavanshi', 'Vaibhav Suryavanshi', 'Vaibhav Sooryavanshi')"
+
+    replacements = {
+        "s.striker": "d.striker",
+        "s.batter": "d.striker",
+        "s.bowler": "d.bowler",
+        "s.batting_team": "d.batting_team",
+        "s.bowling_team": "d.bowling_team",
+
+        "se.striker": "d.striker",
+        "se.batter": "d.striker",
+        "se.bowler": "d.bowler",
+        "se.batting_team": "d.batting_team",
+        "se.bowling_team": "d.bowling_team",
+
+        "d.batter": "d.striker",
+    }
+
+    for old, new in replacements.items():
+        condition_text = condition_text.replace(old, new)
+
+    if condition_text.upper().startswith("WHERE "):
+        condition_text = condition_text[6:].strip()
+
+    return condition_text or "1=1"
+
+
+def _condition_to_shot_events(condition, player_label=None, role=None):
+    if condition is None:
+        return "1=1"
+
+    if isinstance(condition, tuple):
+        condition = condition[0] if len(condition) > 0 else None
+
+    if condition is None:
+        return "1=1"
+
+    condition_text = str(condition).strip()
+
+    if not condition_text or condition_text.lower() in {"none", "null", "false"}:
+        return "1=1"
+
+    # Important: do not use broad '%surya%' in shot_events,
+    # because that matches Suryakumar Yadav instead of Vaibhav Suryavanshi.
+    if role == "batter" and (
+        _mentions_suryavanshi(condition_text)
+        or _mentions_suryavanshi(player_label)
+    ):
+        return """
+(
+    s.striker IN ('V Suryavanshi', 'Vaibhav Suryavanshi', 'Vaibhav Sooryavanshi')
+    OR s.full_name_striker IN ('V Suryavanshi', 'Vaibhav Suryavanshi', 'Vaibhav Sooryavanshi')
+)
+""".strip()
+
+    replacements = {
+        "d.striker": "s.striker",
+        "d.batter": "s.striker",
+        "d.bowler": "s.bowler",
+        "d.batting_team": "s.batting_team",
+        "d.bowling_team": "s.bowling_team",
+
+        "se.striker": "s.striker",
+        "se.batter": "s.striker",
+        "se.bowler": "s.bowler",
+        "se.batting_team": "s.batting_team",
+        "se.bowling_team": "s.bowling_team",
+        "se.venue": "s.venue",
+        "se.season": "s.season",
+        "se.start_date": "s.start_date",
+
+        "m.venue": "s.venue",
+        "m.season": "s.season",
+        "m.start_date": "s.start_date",
+    }
+
+    for old, new in replacements.items():
+        condition_text = condition_text.replace(old, new)
+
+    if condition_text.upper().startswith("WHERE "):
+        condition_text = condition_text[6:].strip()
+
+    return condition_text or "1=1"
+
+
+def _safe_query(sql_query):
+    try:
+        return run_query(sql_query)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _result_has_length_table(result):
+    if not isinstance(result, dict):
+        return False
+
+    for key in ["length_line_plan", "direct_length_line_plan", "shot_response"]:
+        value = result.get(key)
+
+        if hasattr(value, "empty") and not value.empty:
+            lower_cols = {str(col).lower() for col in value.columns}
+
+            if "ball_length" in lower_cols or "ball_line" in lower_cols:
+                return True
+
+    return False
+
+
+def analyze_bowler_length_plan_against_batter(*args, **kwargs):
+    try:
+        direct_result = analyze_bowler_length_plan_against_batter_direct(*args, **kwargs)
+
+        if _result_has_length_table(direct_result):
+            return direct_result
+    except Exception:
+        direct_result = None
+
+    bowler_condition = kwargs.get("bowler_condition")
+    batter_condition = kwargs.get("batter_condition")
+    bowler_label = kwargs.get("bowler_label")
+    batter_label = kwargs.get("batter_label")
+
+    if bowler_condition is None and len(args) >= 1:
+        bowler_condition = args[0]
+
+    if batter_condition is None and len(args) >= 2:
+        batter_condition = args[1]
+
+    if not bowler_label:
+        bowler_label = _extract_first_quoted_value(bowler_condition, "the bowler")
+
+    if not batter_label:
+        batter_label = _extract_first_quoted_value(batter_condition, "the batter")
+
+    bowler_condition_d = _condition_to_deliveries(
+        bowler_condition,
+        player_label=bowler_label,
+        role="bowler",
+    )
+
+    batter_condition_d = _condition_to_deliveries(
+        batter_condition,
+        player_label=batter_label,
+        role="batter",
+    )
+
+    bowler_condition_s = _condition_to_shot_events(
+        bowler_condition,
+        player_label=bowler_label,
+        role="bowler",
+    )
+
+    batter_condition_s = _condition_to_shot_events(
+        batter_condition,
+        player_label=batter_label,
+        role="batter",
+    )
+
+    direct_delivery_sql = f"""
+SELECT
+    d.bowler,
+    d.striker AS batter,
+    COUNT(*) AS total_rows,
+    COUNT(CASE
+        WHEN COALESCE(d.wides, 0) = 0
+         AND COALESCE(d.noballs, 0) = 0
+        THEN 1
+    END) AS legal_balls,
+    SUM(d.runs_off_bat) AS runs,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.player_dismissed = d.striker
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+        THEN 1
+    END) AS wickets,
+    ROUND(
+        SUM(d.runs_off_bat) * 100.0 /
+        NULLIF(COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+             AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END), 0),
+        2
+    ) AS batter_strike_rate
+FROM deliveries d
+WHERE {bowler_condition_d}
+  AND {batter_condition_d}
+GROUP BY d.bowler, d.striker
+ORDER BY legal_balls DESC;
+""".strip()
+
+    direct_delivery_df = _safe_query(direct_delivery_sql)
+
+    style_sql = f"""
+SELECT TOP 1
+    s.bowling_style_bowler AS bowling_style,
+    COUNT(*) AS balls
+FROM shot_events s
+WHERE {bowler_condition_s}
+  AND s.bowling_style_bowler IS NOT NULL
+GROUP BY s.bowling_style_bowler
+ORDER BY balls DESC;
+""".strip()
+
+    style_df = _safe_query(style_sql)
+
+    bowling_style = None
+
+    if style_df is not None and not style_df.empty:
+        bowling_style = str(style_df.iloc[0]["bowling_style"])
+
+    batter_style_shot_sql = ""
+    batter_style_shot_df = pd.DataFrame()
+
+    batter_style_delivery_sql = ""
+    batter_style_delivery_df = pd.DataFrame()
+
+    bowler_general_plan_sql = ""
+    bowler_general_plan_df = pd.DataFrame()
+
+    if bowling_style:
+        bowling_style_sql = bowling_style.replace("'", "''")
+
+        batter_style_shot_sql = f"""
+WITH style_matchup AS (
+    SELECT
+        s.ball_length,
+        s.ball_line,
+        s.shot_played,
+        s.shot_direction,
+        COUNT(CASE
+            WHEN COALESCE(s.wides, 0) = 0
+             AND COALESCE(s.noballs, 0) = 0
+            THEN 1
+        END) AS balls,
+        SUM(COALESCE(s.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN s.wicket_type IS NOT NULL
+             AND s.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM shot_events s
+    WHERE {batter_condition_s}
+      AND s.bowling_style_bowler = '{bowling_style_sql}'
+    GROUP BY
+        s.ball_length,
+        s.ball_line,
+        s.shot_played,
+        s.shot_direction
+)
+SELECT TOP 10
+    ball_length,
+    ball_line,
+    shot_played,
+    shot_direction,
+    balls,
+    runs,
+    wickets,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS batter_strike_rate,
+    CASE
+        WHEN balls < 3 THEN 'Tiny sample'
+        WHEN wickets >= 1 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 120 THEN 'Strong option'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 110 THEN 'Control option'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 'Risky option'
+        ELSE 'Usable option'
+    END AS verdict
+FROM style_matchup
+WHERE balls > 0
+ORDER BY
+    CASE
+        WHEN balls < 3 THEN 5
+        WHEN wickets >= 1 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 120 THEN 1
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 110 THEN 2
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 4
+        ELSE 3
+    END,
+    wickets DESC,
+    batter_strike_rate ASC,
+    balls DESC;
+""".strip()
+
+        batter_style_shot_df = _safe_query(batter_style_shot_sql)
+
+        batter_style_delivery_sql = f"""
+WITH style_bowlers AS (
+    SELECT DISTINCT
+        s.bowler
+    FROM shot_events s
+    WHERE s.bowling_style_bowler = '{bowling_style_sql}'
+      AND s.bowler IS NOT NULL
+),
+style_matchup AS (
+    SELECT
+        d.bowler,
+        d.striker AS batter,
+        COUNT(CASE
+            WHEN COALESCE(d.wides, 0) = 0
+             AND COALESCE(d.noballs, 0) = 0
+            THEN 1
+        END) AS legal_balls,
+        SUM(d.runs_off_bat) AS runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM deliveries d
+    JOIN style_bowlers sb
+        ON d.bowler = sb.bowler
+    WHERE {batter_condition_d}
+    GROUP BY d.bowler, d.striker
+)
+SELECT TOP 10
+    bowler,
+    batter,
+    legal_balls,
+    runs,
+    wickets,
+    ROUND(runs * 100.0 / NULLIF(legal_balls, 0), 2) AS batter_strike_rate
+FROM style_matchup
+WHERE legal_balls > 0
+ORDER BY legal_balls DESC, wickets DESC;
+""".strip()
+
+        batter_style_delivery_df = _safe_query(batter_style_delivery_sql)
+
+        bowler_general_plan_sql = f"""
+WITH bowler_plan AS (
+    SELECT
+        s.ball_length,
+        s.ball_line,
+        COUNT(CASE
+            WHEN COALESCE(s.wides, 0) = 0
+             AND COALESCE(s.noballs, 0) = 0
+            THEN 1
+        END) AS balls,
+        SUM(COALESCE(s.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN s.wicket_type IS NOT NULL
+             AND s.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+            THEN 1
+        END) AS wickets
+    FROM shot_events s
+    WHERE {bowler_condition_s}
+    GROUP BY s.ball_length, s.ball_line
+)
+SELECT TOP 10
+    ball_length,
+    ball_line,
+    balls,
+    runs,
+    wickets,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS batter_strike_rate,
+    CASE
+        WHEN balls < 6 THEN 'Small sample'
+        WHEN wickets >= 3 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 130 THEN 'Wicket and control option'
+        WHEN wickets >= 3 THEN 'Wicket option'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 110 THEN 'Control option'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 'Risky option'
+        ELSE 'Usable option'
+    END AS verdict
+FROM bowler_plan
+WHERE balls > 0
+ORDER BY
+    CASE
+        WHEN balls < 6 THEN 5
+        WHEN wickets >= 3 AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 130 THEN 1
+        WHEN wickets >= 3 THEN 2
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 110 THEN 3
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 6
+        ELSE 4
+    END,
+    wickets DESC,
+    batter_strike_rate ASC,
+    balls DESC;
+""".strip()
+
+        bowler_general_plan_df = _safe_query(bowler_general_plan_sql)
+
+    direct_text = ""
+
+    if direct_delivery_df is not None and not direct_delivery_df.empty:
+        row = direct_delivery_df.iloc[0]
+
+        direct_text = (
+            f"The deliveries table confirms a direct scoring sample: "
+            f"{row.get('bowler')} to {row.get('batter')} is "
+            f"{format_metric(row.get('legal_balls'))} legal balls, "
+            f"{format_metric(row.get('runs'))} runs, "
+            f"{format_metric(row.get('wickets'))} wicket(s), "
+            f"strike rate {format_metric(row.get('batter_strike_rate'))}. "
+        )
+
+    if batter_style_shot_df is not None and not batter_style_shot_df.empty:
+        best = batter_style_shot_df.iloc[0]
+
+        paragraph = (
+            f"No direct length/line sample was found in shot_events for {bowler_label} against {batter_label}. "
+            f"{direct_text}"
+            f"As a fallback, the model checked {batter_label} against {bowling_style} bowling in shot_events. "
+            f"The best option is {best.get('ball_length', 'that length')} on {best.get('ball_line', 'that line')}, "
+            f"where the batter's strike rate is {format_metric(best.get('batter_strike_rate'))}. "
+            f"This is style-based guidance, not a direct Rashid-vs-batter length result."
+        )
+
+        final_plan_df = batter_style_shot_df
+
+    elif bowler_general_plan_df is not None and not bowler_general_plan_df.empty:
+        best = bowler_general_plan_df.iloc[0]
+
+        paragraph = (
+            f"No direct length/line sample was found in shot_events for {bowler_label} against {batter_label}. "
+            f"{direct_text}"
+            f"The reason we cannot use the direct balls for length advice is that deliveries has runs/wickets/balls, "
+            f"but not ball_length or ball_line. Since {batter_label} is also missing from shot_events, "
+            f"the safest fallback is {bowler_label}'s own general length/line pattern. "
+            f"That points to {best.get('ball_length', 'that length')} on {best.get('ball_line', 'that line')}, "
+            f"with strike rate {format_metric(best.get('batter_strike_rate'))} in that local sample."
+        )
+
+        final_plan_df = bowler_general_plan_df
+
+    else:
+        paragraph = (
+            f"No direct length/line sample was found in shot_events for {bowler_label} against {batter_label}. "
+            f"{direct_text}"
+            f"The local data can confirm the direct scoring matchup, but it cannot produce a reliable length/line plan."
+        )
+
+        final_plan_df = pd.DataFrame()
+
+    return {
+        "paragraph": paragraph,
+        "summary": pd.DataFrame([{"section": "Length plan fallback", "summary": paragraph}]),
+
+        "length_line_plan": final_plan_df,
+        "direct_length_line_plan": direct_delivery_df,
+        "shot_response": final_plan_df,
+
+        "style_lookup": style_df,
+        "style_fallback_plan": batter_style_shot_df,
+        "style_delivery_fallback": batter_style_delivery_df,
+        "bowler_general_length_plan": bowler_general_plan_df,
+
+        "proxy_bowler_style_plan": bowler_general_plan_df,
+        "proxy_batter_style_plan": batter_style_delivery_df,
+
+        "shot_direction": None,
+        "direct_summary": direct_delivery_df,
+        "batter_profile": None,
+        "bowler_profile": None,
+
+        "sql_queries": {
+            "length_line_plan": bowler_general_plan_sql or batter_style_shot_sql or direct_delivery_sql,
+            "direct_length_line_plan": direct_delivery_sql,
+            "shot_response": bowler_general_plan_sql or batter_style_shot_sql or direct_delivery_sql,
+            "style_lookup": style_sql,
+            "style_fallback_plan": batter_style_shot_sql,
+            "style_delivery_fallback": batter_style_delivery_sql,
+            "bowler_general_length_plan": bowler_general_plan_sql,
+            "proxy_bowler_style_plan": bowler_general_plan_sql,
+            "proxy_batter_style_plan": batter_style_delivery_sql,
+        },
+    }
+

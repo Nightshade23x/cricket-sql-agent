@@ -7,7 +7,7 @@ from app.llm_agent import answer_question_with_fallback
 
 
 st.set_page_config(
-    page_title="Cricket SQL Agent",
+    page_title="IPL SQL Agent",
     layout="wide",
 )
 
@@ -955,7 +955,7 @@ def run_question(question):
             st.info("No SQL query available.")
 
 
-st.title("Cricket SQL Agent")
+st.title("IPL SQL Agent")
 st.caption("Ask IPL analytics questions using the local SQL Server database.")
 
 if "question_input" not in st.session_state:
