@@ -438,3 +438,10 @@ under analyse a team,for eg analyse csk...there is a table called team report sq
 also now we dont need to show stuff like watch score etc in our result,that was just for our backend
 in the example ques,there is a ques called best bowlers against kohli...but this gives an ans of kohli as a bowler,not kohli the batsman so we fix this
 we can also add a feature called similar ques or deep dive sth like that...so if i ask top 10 run scorers,it gives me the ans...then a box called similar ques where it says for eg top 10 run scorers for csk etc
+
+i still feel player profiles can be better in terms of we give a paragraph describing the bowler such as bumrah is regarded as one of the best bowlers in the game rn,with his unorthodox action etc...like a paragraph for each player...also wheen they made their ipl debut,what teams have they played for and when etc
+the tables themselves are perfect...same with analyse rcb squad...a proper paragraph telling us about the history of rcb etc,describing them and all like what i mean is a biography on the player and team
+
+what is csk win loss percentage at chepauk failed
+
+best bowlers agaisnt kohli for gt,is not using updated squads..its giving noor ahmad who plays for csk now

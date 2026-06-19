@@ -8422,3 +8422,698 @@ def answer_question_with_fallback(user_question):
     return result
 
 # IPL SQL Agent UI postprocess override END
+
+# IPL SQL Agent venue win-loss override START
+
+def _ipl_winloss_sql_quote(value):
+    return str(value).replace("'", "''")
+
+
+def _ipl_winloss_team_from_question(user_question):
+    text = str(user_question or "").lower()
+
+    teams = {
+        "csk": ("CSK", "Chennai Super Kings"),
+        "chennai super kings": ("CSK", "Chennai Super Kings"),
+        "mi": ("MI", "Mumbai Indians"),
+        "mumbai indians": ("MI", "Mumbai Indians"),
+        "gt": ("GT", "Gujarat Titans"),
+        "gujarat titans": ("GT", "Gujarat Titans"),
+        "rcb": ("RCB", "Royal Challengers Bengaluru"),
+        "royal challengers": ("RCB", "Royal Challengers Bengaluru"),
+        "kkr": ("KKR", "Kolkata Knight Riders"),
+        "kolkata knight riders": ("KKR", "Kolkata Knight Riders"),
+        "rr": ("RR", "Rajasthan Royals"),
+        "rajasthan royals": ("RR", "Rajasthan Royals"),
+        "srh": ("SRH", "Sunrisers Hyderabad"),
+        "sunrisers hyderabad": ("SRH", "Sunrisers Hyderabad"),
+        "dc": ("DC", "Delhi Capitals"),
+        "delhi capitals": ("DC", "Delhi Capitals"),
+        "lsg": ("LSG", "Lucknow Super Giants"),
+        "lucknow super giants": ("LSG", "Lucknow Super Giants"),
+        "pbks": ("PBKS", "Punjab Kings"),
+        "punjab kings": ("PBKS", "Punjab Kings"),
+    }
+
+    # Longest names first so "mi" inside words does not win too early.
+    for key in sorted(teams, key=len, reverse=True):
+        if key in text:
+            return teams[key]
+
+    return None, None
+
+
+def _ipl_winloss_venue_from_question(user_question):
+    import re
+
+    text = str(user_question or "")
+
+    match = re.search(
+        r"\bat\s+([A-Za-z0-9 .'-]+)\s*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None, None
+
+    venue_raw = match.group(1).strip(" .?").lower()
+
+    if "chepauk" in venue_raw or "chidambaram" in venue_raw:
+        return "Chepauk", "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')"
+
+    if "wankhede" in venue_raw:
+        return "Wankhede", "m.venue LIKE '%Wankhede%'"
+
+    if "chinnaswamy" in venue_raw:
+        return "Chinnaswamy", "m.venue LIKE '%Chinnaswamy%'"
+
+    if "eden" in venue_raw:
+        return "Eden Gardens", "m.venue LIKE '%Eden Gardens%'"
+
+    if "narendra" in venue_raw or "motera" in venue_raw:
+        return (
+            "Narendra Modi Stadium",
+            "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.venue LIKE '%Sardar Patel%')",
+        )
+
+    venue_sql = _ipl_winloss_sql_quote(venue_raw)
+
+    return venue_raw.title(), f"LOWER(m.venue) LIKE '%{venue_sql}%'"
+
+
+def _ipl_answer_team_venue_winloss(user_question):
+    import pandas as pd
+
+    question = str(user_question or "").lower()
+
+    is_winloss_question = (
+        ("win loss" in question or "win-loss" in question or "win percentage" in question)
+        and " at " in question
+    )
+
+    if not is_winloss_question:
+        return None
+
+    team_code, team_name = _ipl_winloss_team_from_question(user_question)
+    venue_label, venue_condition = _ipl_winloss_venue_from_question(user_question)
+
+    if not team_code or not team_name or not venue_label or not venue_condition:
+        return None
+
+    team_name_sql = _ipl_winloss_sql_quote(team_name)
+
+    sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.venue,
+        m.winner
+    FROM matches m
+    JOIN deliveries d
+        ON m.match_id = d.match_id
+    WHERE {venue_condition}
+      AND (
+            d.batting_team = '{team_name_sql}'
+         OR d.bowling_team = '{team_name_sql}'
+      )
+)
+SELECT
+    '{team_name_sql}' AS team,
+    '{_ipl_winloss_sql_quote(venue_label)}' AS venue,
+    COUNT(*) AS matches,
+    SUM(CASE WHEN winner = '{team_name_sql}' THEN 1 ELSE 0 END) AS wins,
+    SUM(CASE WHEN winner IS NOT NULL AND winner <> '{team_name_sql}' THEN 1 ELSE 0 END) AS losses,
+    SUM(CASE WHEN winner IS NULL THEN 1 ELSE 0 END) AS no_result,
+    ROUND(
+        SUM(CASE WHEN winner = '{team_name_sql}' THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(SUM(CASE WHEN winner IS NOT NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS win_pct,
+    ROUND(
+        SUM(CASE WHEN winner IS NOT NULL AND winner <> '{team_name_sql}' THEN 1 ELSE 0 END) * 100.0 /
+        NULLIF(SUM(CASE WHEN winner IS NOT NULL THEN 1 ELSE 0 END), 0),
+        2
+    ) AS loss_pct
+FROM team_matches;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+    except Exception as error:
+        return {
+            "question": user_question,
+            "analysis_paragraph": f"I tried the curated venue win-loss query, but SQL failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    if df is None or df.empty:
+        return {
+            "question": user_question,
+            "analysis_paragraph": f"No local IPL matches found for {team_name} at {venue_label}.",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [
+                f"tell me about {venue_label}",
+                f"how can {team_code} win at {venue_label}",
+            ],
+        }
+
+    row = df.iloc[0]
+
+    paragraph = (
+        f"At {venue_label}, {team_name} have played {int(row['matches'])} local IPL match(es): "
+        f"{int(row['wins'])} win(s), {int(row['losses'])} loss(es), "
+        f"win percentage {row['win_pct']}% and loss percentage {row['loss_pct']}%."
+    )
+
+    return {
+        "question": user_question,
+        "analysis_paragraph": paragraph,
+        "result": df,
+        "extra_tables": {
+            f"{team_code} win-loss at {venue_label}": df,
+        },
+        "sql_query": sql,
+        "similar_questions": [
+            f"tell me about {venue_label}",
+            f"how can {team_code} win at {venue_label}",
+            f"{team_code} record at {venue_label}",
+        ],
+    }
+
+
+try:
+    _original_answer_question_with_fallback_for_venue_winloss = answer_question_with_fallback
+except NameError:
+    _original_answer_question_with_fallback_for_venue_winloss = None
+
+
+def answer_question_with_fallback(user_question):
+    venue_winloss_result = _ipl_answer_team_venue_winloss(user_question)
+
+    if venue_winloss_result is not None:
+        return venue_winloss_result
+
+    return _original_answer_question_with_fallback_for_venue_winloss(user_question)
+
+# IPL SQL Agent venue win-loss override END
+
+# IPL SQL Agent squad fallback postprocess override START
+
+def _ipl_squad_route_team_from_question(user_question):
+    text = str(user_question or "").lower()
+
+    if "squad" not in text and "team" not in text:
+        return None, None
+
+    mapping = {
+        "rcb": ("RCB", "Royal Challengers Bengaluru"),
+        "royal challengers": ("RCB", "Royal Challengers Bengaluru"),
+        "pbks": ("PBKS", "Punjab Kings"),
+        "kxip": ("PBKS", "Punjab Kings"),
+        "punjab": ("PBKS", "Punjab Kings"),
+        "dc": ("DC", "Delhi Capitals"),
+        "dd": ("DC", "Delhi Capitals"),
+        "delhi": ("DC", "Delhi Capitals"),
+        "csk": ("CSK", "Chennai Super Kings"),
+        "chennai": ("CSK", "Chennai Super Kings"),
+        "mi": ("MI", "Mumbai Indians"),
+        "mumbai": ("MI", "Mumbai Indians"),
+        "gt": ("GT", "Gujarat Titans"),
+        "gujarat": ("GT", "Gujarat Titans"),
+        "kkr": ("KKR", "Kolkata Knight Riders"),
+        "kolkata": ("KKR", "Kolkata Knight Riders"),
+        "rr": ("RR", "Rajasthan Royals"),
+        "rajasthan": ("RR", "Rajasthan Royals"),
+        "srh": ("SRH", "Sunrisers Hyderabad"),
+        "sunrisers": ("SRH", "Sunrisers Hyderabad"),
+        "lsg": ("LSG", "Lucknow Super Giants"),
+        "lucknow": ("LSG", "Lucknow Super Giants"),
+    }
+
+    for key, value in mapping.items():
+        if key in text:
+            return value
+
+    return None, None
+
+
+try:
+    _previous_answer_question_with_fallback_before_squad_fix = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_squad_fix = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_squad_fix(user_question)
+
+    team_code, team_name = _ipl_squad_route_team_from_question(user_question)
+
+    needs_squad_fallback = (
+        isinstance(result, dict)
+        and team_code is not None
+        and (
+            not result.get("analysis_paragraph")
+            and not result.get("paragraph")
+        )
+    )
+
+    if needs_squad_fallback:
+        try:
+            from app.analysis import analyze_current_squad_report
+
+            squad_result = analyze_current_squad_report(
+                team_condition=f"team_code = '{team_code}'",
+                team_label=team_name,
+            )
+
+            if isinstance(squad_result, dict):
+                paragraph = (
+                    squad_result.get("analysis_paragraph")
+                    or squad_result.get("paragraph")
+                )
+
+                result["analysis_paragraph"] = paragraph
+                result["paragraph"] = paragraph
+
+                extra_tables = result.get("extra_tables") or {}
+
+                for key, value in squad_result.items():
+                    if hasattr(value, "columns"):
+                        extra_tables[key] = value
+
+                result["extra_tables"] = extra_tables
+
+        except Exception:
+            pass
+
+    if isinstance(result, dict):
+        paragraph = result.get("analysis_paragraph") or result.get("paragraph")
+
+        if paragraph:
+            result["analysis_paragraph"] = paragraph
+            result["paragraph"] = paragraph
+
+    return result
+
+# IPL SQL Agent squad fallback postprocess override END
+
+# IPL SQL Agent DC/PBKS/RCB squad route override START
+
+def _ipl_squad_direct_sql_quote(value):
+    return str(value).replace("'", "''")
+
+
+def _ipl_squad_direct_team_from_question(user_question):
+    text = str(user_question or "").lower()
+
+    if "deccan" in text or "chargers" in text:
+        return None
+
+    teams = [
+        ("RCB", "Royal Challengers Bengaluru", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "royal challengers"]),
+        ("PBKS", "Punjab Kings", ["Kings XI Punjab", "Punjab Kings", "Punjab franchise"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("DC", "Delhi Capitals", ["Delhi Daredevils", "Delhi Capitals"], ["dc", "delhi"]),
+        ("CSK", "Chennai Super Kings", ["Chennai Super Kings"], ["csk", "chennai"]),
+        ("MI", "Mumbai Indians", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("GT", "Gujarat Titans", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "Kolkata Knight Riders", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "Rajasthan Royals", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "Sunrisers Hyderabad", ["Sunrisers Hyderabad"], ["srh", "sunrisers"]),
+        ("LSG", "Lucknow Super Giants", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+    ]
+
+    for team_code, team_name, aliases, triggers in teams:
+        if any(trigger in text for trigger in triggers):
+            return team_code, team_name, aliases
+
+    return None
+
+
+def _ipl_squad_direct_sql_list(values):
+    escaped = [
+        "'" + _ipl_squad_direct_sql_quote(value) + "'"
+        for value in values
+        if value and str(value).strip()
+    ]
+
+    if not escaped:
+        return "('')"
+
+    return "(" + ", ".join(escaped) + ")"
+
+
+def _ipl_squad_direct_is_squad_question(user_question):
+    text = str(user_question or "").lower()
+
+    squad_words = [
+        "analyse",
+        "analyze",
+        "profile",
+        "squad",
+        "team",
+    ]
+
+    return any(word in text for word in squad_words)
+
+
+def _ipl_squad_direct_result(user_question):
+    import pandas as pd
+
+    if not _ipl_squad_direct_is_squad_question(user_question):
+        return None
+
+    team = _ipl_squad_direct_team_from_question(user_question)
+
+    if team is None:
+        return None
+
+    team_code, team_name, aliases = team
+    aliases_sql = _ipl_squad_direct_sql_list(aliases)
+    team_code_sql = _ipl_squad_direct_sql_quote(team_code)
+    team_name_sql = _ipl_squad_direct_sql_quote(team_name)
+
+    squad_sql = f"""
+SELECT
+    team_code,
+    team_name,
+    display_name,
+    cricsheet_name,
+    role,
+    batting_style,
+    bowling_style,
+    bowling_arm,
+    is_overseas,
+    is_active
+FROM current_squads
+WHERE team_code = '{team_code_sql}'
+   OR team_name = '{team_name_sql}'
+ORDER BY
+    CASE
+        WHEN role LIKE '%Batter%' THEN 1
+        WHEN role LIKE '%WK%' THEN 2
+        WHEN role LIKE '%All%' THEN 3
+        WHEN role LIKE '%Bowler%' THEN 4
+        ELSE 5
+    END,
+    display_name;
+""".strip()
+
+    role_sql = f"""
+SELECT
+    role,
+    COUNT(*) AS players
+FROM current_squads
+WHERE team_code = '{team_code_sql}'
+   OR team_name = '{team_name_sql}'
+GROUP BY role
+ORDER BY players DESC, role;
+""".strip()
+
+    overview_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season,
+        CAST(m.start_date AS date) AS match_date,
+        m.venue,
+        m.winner
+    FROM matches m
+    JOIN deliveries d
+        ON m.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+),
+final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+final_matches AS (
+    SELECT
+        m.match_id,
+        m.season,
+        m.winner
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+),
+team_final AS (
+    SELECT DISTINCT
+        fm.season,
+        fm.match_id,
+        fm.winner
+    FROM final_matches fm
+    JOIN deliveries d
+        ON fm.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+),
+playoff_dates AS (
+    SELECT
+        season,
+        CAST(start_date AS date) AS match_date,
+        DENSE_RANK() OVER (
+            PARTITION BY season
+            ORDER BY CAST(start_date AS date) DESC
+        ) AS reverse_date_rank
+    FROM matches
+    WHERE winner IS NOT NULL
+),
+playoff_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season
+    FROM matches m
+    JOIN playoff_dates pd
+        ON m.season = pd.season
+       AND CAST(m.start_date AS date) = pd.match_date
+    WHERE pd.reverse_date_rank <= 4
+),
+team_playoff AS (
+    SELECT DISTINCT
+        pm.season
+    FROM playoff_matches pm
+    JOIN deliveries d
+        ON pm.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+),
+season_summary AS (
+    SELECT
+        season,
+        COUNT(DISTINCT match_id) AS matches,
+        SUM(CASE WHEN winner IN {aliases_sql} THEN 1 ELSE 0 END) AS wins,
+        SUM(
+            CASE
+                WHEN winner IS NOT NULL
+                 AND winner NOT IN {aliases_sql}
+                THEN 1
+                ELSE 0
+            END
+        ) AS losses,
+        SUM(CASE WHEN winner IS NULL THEN 1 ELSE 0 END) AS no_result
+    FROM team_matches
+    GROUP BY season
+)
+SELECT
+    ss.season,
+    ss.matches,
+    ss.wins,
+    ss.losses,
+    ss.no_result,
+    ROUND(ss.wins * 100.0 / NULLIF(ss.matches, 0), 2) AS win_pct,
+    CASE
+        WHEN tf.winner IN {aliases_sql} THEN 'Champions'
+        WHEN tf.match_id IS NOT NULL THEN 'Finalists'
+        WHEN tp.season IS NOT NULL THEN 'Playoffs'
+        ELSE 'Did not qualify for playoffs'
+    END AS final_result
+FROM season_summary ss
+LEFT JOIN team_final tf
+    ON ss.season = tf.season
+LEFT JOIN team_playoff tp
+    ON ss.season = tp.season
+ORDER BY
+    CASE
+        WHEN CHARINDEX('/', CAST(ss.season AS varchar(20))) > 0
+        THEN TRY_CONVERT(INT, LEFT(CAST(ss.season AS varchar(20)), 4))
+        ELSE TRY_CONVERT(INT, CAST(ss.season AS varchar(20)))
+    END,
+    ss.season;
+""".strip()
+
+    summary_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season,
+        CAST(m.start_date AS date) AS match_date,
+        m.venue,
+        m.winner
+    FROM matches m
+    JOIN deliveries d
+        ON m.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+)
+SELECT
+    COUNT(DISTINCT match_id) AS matches,
+    MIN(match_date) AS first_match,
+    MAX(match_date) AS latest_match,
+    SUM(CASE WHEN winner IN {aliases_sql} THEN 1 ELSE 0 END) AS wins,
+    COUNT(DISTINCT venue) AS venues
+FROM team_matches;
+""".strip()
+
+    trophy_sql = f"""
+WITH final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+finals AS (
+    SELECT
+        m.season,
+        m.winner
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+)
+SELECT
+    COUNT(*) AS trophies
+FROM finals
+WHERE winner IN {aliases_sql};
+""".strip()
+
+    try:
+        squad_df = run_query(squad_sql)
+    except Exception:
+        squad_df = pd.DataFrame()
+
+    try:
+        role_df = run_query(role_sql)
+    except Exception:
+        role_df = pd.DataFrame()
+
+    try:
+        season_df = run_query(overview_sql)
+    except Exception:
+        season_df = pd.DataFrame()
+
+    try:
+        summary_df = run_query(summary_sql)
+    except Exception:
+        summary_df = pd.DataFrame()
+
+    try:
+        trophy_df = run_query(trophy_sql)
+    except Exception:
+        trophy_df = pd.DataFrame()
+
+    matches = 0
+    wins = 0
+    venues = 0
+    first_year = None
+    latest_year = None
+    trophies = 0
+
+    if summary_df is not None and not summary_df.empty:
+        row = summary_df.iloc[0]
+
+        matches = int(row["matches"]) if pd.notna(row.get("matches")) else 0
+        wins = int(row["wins"]) if pd.notna(row.get("wins")) else 0
+        venues = int(row["venues"]) if pd.notna(row.get("venues")) else 0
+
+        first_match = str(row.get("first_match") or "")
+        latest_match = str(row.get("latest_match") or "")
+
+        if len(first_match) >= 4 and first_match[:4].isdigit():
+            first_year = first_match[:4]
+
+        if len(latest_match) >= 4 and latest_match[:4].isdigit():
+            latest_year = latest_match[:4]
+
+    if trophy_df is not None and not trophy_df.empty:
+        trophy_value = trophy_df.iloc[0].get("trophies")
+
+        trophies = int(trophy_value) if pd.notna(trophy_value) else 0
+
+    role_text = ""
+
+    if role_df is not None and not role_df.empty:
+        parts = [
+            f"{int(row['players'])} {str(row['role']).lower()}s"
+            for _, row in role_df.iterrows()
+            if pd.notna(row.get("role"))
+        ]
+
+        if parts:
+            role_text = " The current squad mix includes " + ", ".join(parts[:4]) + "."
+
+    if first_year and latest_year:
+        intro = (
+            f"{team_name} are an IPL franchise represented in this local database "
+            f"from {first_year} to {latest_year}."
+        )
+    else:
+        intro = f"{team_name} are an IPL franchise represented in this local database."
+
+    paragraph = (
+        intro
+        + f" Across the stored matches, they appear in {matches} games and have {wins} wins."
+        + f" Their trophy count in the local season-final method is {trophies}."
+        + f" Their matches span {venues} venues in the dataset."
+        + role_text
+        + " The season overview table includes a final result column showing whether each season ended as Champions, Finalists, Playoffs, or Did not qualify for playoffs."
+    )
+
+    return {
+        "question": user_question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": season_df,
+        "extra_tables": {
+            "Squad": squad_df,
+            "Role Split": role_df,
+            "Season Overview": season_df,
+        },
+        "sql_query": overview_sql,
+        "similar_questions": [
+            f"which players are key for {team_code}",
+            f"how can {team_code} win next season",
+            f"best bowlers against Kohli for {team_code}",
+            f"tell me about {team_name}",
+        ],
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_direct_dc_fix = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_direct_dc_fix = None
+
+
+def answer_question_with_fallback(user_question):
+    direct_squad_result = _ipl_squad_direct_result(user_question)
+
+    if direct_squad_result is not None:
+        return direct_squad_result
+
+    return _previous_answer_question_with_fallback_before_direct_dc_fix(user_question)
+
+# IPL SQL Agent DC/PBKS/RCB squad route override END

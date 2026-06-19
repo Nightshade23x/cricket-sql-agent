@@ -9969,3 +9969,2692 @@ def analyze_team_vs_team_match_plan(*args, **kwargs):
     return result
 
 # IPL SQL Agent match-plan polish override END
+
+# IPL SQL Agent current-squad matchup override START
+
+def _ipl_matchup_sql_quote(value):
+    return str(value).replace("'", "''")
+
+
+def _ipl_matchup_extract_quoted(condition, fallback=None):
+    import re
+
+    matches = re.findall(r"'([^']+)'", str(condition or ""))
+
+    if matches:
+        return matches[0]
+
+    return fallback
+
+
+def _ipl_matchup_team_code(team_label=None, team_condition=None):
+    if team_label:
+        raw = str(team_label).strip()
+    else:
+        raw = _ipl_matchup_extract_quoted(team_condition, "")
+
+    team_map = {
+        "chennai super kings": "CSK",
+        "csk": "CSK",
+        "gujarat titans": "GT",
+        "gt": "GT",
+        "royal challengers bengaluru": "RCB",
+        "royal challengers bangalore": "RCB",
+        "rcb": "RCB",
+        "mumbai indians": "MI",
+        "mi": "MI",
+        "kolkata knight riders": "KKR",
+        "kkr": "KKR",
+        "rajasthan royals": "RR",
+        "rr": "RR",
+        "sunrisers hyderabad": "SRH",
+        "srh": "SRH",
+        "delhi capitals": "DC",
+        "dc": "DC",
+        "lucknow super giants": "LSG",
+        "lsg": "LSG",
+        "punjab kings": "PBKS",
+        "pbks": "PBKS",
+    }
+
+    raw_norm = raw.lower()
+
+    if raw_norm in team_map:
+        return team_map[raw_norm]
+
+    raw_sql = _ipl_matchup_sql_quote(raw)
+
+    sql = f"""
+SELECT TOP 1
+    team_code
+FROM current_squads
+WHERE LOWER(team_code) = LOWER('{raw_sql}')
+   OR LOWER(team_name) = LOWER('{raw_sql}')
+ORDER BY season DESC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            return str(df.iloc[0]["team_code"])
+
+    except Exception:
+        pass
+
+    return None
+
+
+def _ipl_matchup_team_name_from_code(team_code):
+    team_names = {
+        "CSK": "Chennai Super Kings",
+        "GT": "Gujarat Titans",
+        "RCB": "Royal Challengers Bengaluru",
+        "MI": "Mumbai Indians",
+        "KKR": "Kolkata Knight Riders",
+        "RR": "Rajasthan Royals",
+        "SRH": "Sunrisers Hyderabad",
+        "DC": "Delhi Capitals",
+        "LSG": "Lucknow Super Giants",
+        "PBKS": "Punjab Kings",
+    }
+
+    return team_names.get(str(team_code or "").upper(), team_code)
+
+
+def _ipl_matchup_condition_to_deliveries(condition, fallback_label=None):
+    condition_text = str(condition or "").strip()
+
+    if not condition_text or condition_text.lower() in {"none", "null", "false"}:
+        if not fallback_label:
+            return "1=1"
+
+        label_sql = _ipl_matchup_sql_quote(fallback_label)
+
+        return f"""
+(
+    d.striker = '{label_sql}'
+    OR d.striker LIKE '%{label_sql}%'
+)
+""".strip()
+
+    replacements = {
+        "s.striker": "d.striker",
+        "s.batter": "d.striker",
+        "s.bowler": "d.bowler",
+        "s.batting_team": "d.batting_team",
+        "s.bowling_team": "d.bowling_team",
+        "se.striker": "d.striker",
+        "se.batter": "d.striker",
+        "se.bowler": "d.bowler",
+        "m.venue": "m.venue",
+        "m.season": "m.season",
+    }
+
+    for old, new in replacements.items():
+        condition_text = condition_text.replace(old, new)
+
+    if condition_text.upper().startswith("WHERE "):
+        condition_text = condition_text[6:].strip()
+
+    return condition_text or "1=1"
+
+
+def _ipl_matchup_condition_to_shot_events(condition, fallback_label=None):
+    condition_text = str(condition or "").strip()
+
+    if not condition_text or condition_text.lower() in {"none", "null", "false"}:
+        if not fallback_label:
+            return "1=1"
+
+        label_sql = _ipl_matchup_sql_quote(fallback_label)
+
+        return f"""
+(
+    s.striker = '{label_sql}'
+    OR s.full_name_striker = '{label_sql}'
+    OR s.striker LIKE '%{label_sql}%'
+    OR s.full_name_striker LIKE '%{label_sql}%'
+)
+""".strip()
+
+    replacements = {
+        "d.striker": "s.striker",
+        "d.batter": "s.striker",
+        "d.bowler": "s.bowler",
+        "d.batting_team": "s.batting_team",
+        "d.bowling_team": "s.bowling_team",
+        "se.striker": "s.striker",
+        "se.batter": "s.striker",
+        "se.bowler": "s.bowler",
+        "m.venue": "s.venue",
+        "m.season": "s.season",
+    }
+
+    for old, new in replacements.items():
+        condition_text = condition_text.replace(old, new)
+
+    if condition_text.upper().startswith("WHERE "):
+        condition_text = condition_text[6:].strip()
+
+    return condition_text or "1=1"
+
+
+def _ipl_matchup_venue_condition_deliveries(venue_condition=None, venue_label=None):
+    condition_text = str(venue_condition or "").strip()
+
+    if condition_text and condition_text.lower() not in {"none", "null", "false"}:
+        condition_text = condition_text.replace("s.venue", "m.venue")
+        condition_text = condition_text.replace("se.venue", "m.venue")
+
+        if condition_text.upper().startswith("WHERE "):
+            condition_text = condition_text[6:].strip()
+
+        return condition_text
+
+    if not venue_label:
+        return "1=1"
+
+    venue = str(venue_label).lower()
+
+    if "chepauk" in venue or "chidambaram" in venue:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')"
+
+    if "wankhede" in venue:
+        return "m.venue LIKE '%Wankhede%'"
+
+    if "chinnaswamy" in venue:
+        return "m.venue LIKE '%Chinnaswamy%'"
+
+    if "eden" in venue:
+        return "m.venue LIKE '%Eden Gardens%'"
+
+    if "narendra" in venue or "motera" in venue:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.venue LIKE '%Sardar Patel%')"
+
+    venue_sql = _ipl_matchup_sql_quote(venue_label)
+
+    return f"m.venue LIKE '%{venue_sql}%'"
+
+
+def _ipl_matchup_venue_condition_shot_events(venue_condition=None, venue_label=None):
+    condition_text = _ipl_matchup_venue_condition_deliveries(
+        venue_condition=venue_condition,
+        venue_label=venue_label,
+    )
+
+    return condition_text.replace("m.venue", "s.venue")
+
+
+try:
+    _original_analyze_bowlers_against_batter_for_squad_fix = analyze_bowlers_against_batter
+except NameError:
+    _original_analyze_bowlers_against_batter_for_squad_fix = None
+
+
+def analyze_bowlers_against_batter(
+    batter_condition,
+    batter_label,
+    bowling_team_condition=None,
+    bowling_team_label=None,
+    venue_condition=None,
+    venue_label=None,
+):
+    import pandas as pd
+
+    team_code = _ipl_matchup_team_code(
+        team_label=bowling_team_label,
+        team_condition=bowling_team_condition,
+    )
+
+    batter_condition_d = _ipl_matchup_condition_to_deliveries(
+        batter_condition,
+        fallback_label=batter_label,
+    )
+
+    batter_condition_s = _ipl_matchup_condition_to_shot_events(
+        batter_condition,
+        fallback_label=batter_label,
+    )
+
+    venue_condition_d = _ipl_matchup_venue_condition_deliveries(
+        venue_condition=venue_condition,
+        venue_label=venue_label,
+    )
+
+    venue_condition_s = _ipl_matchup_venue_condition_shot_events(
+        venue_condition=venue_condition,
+        venue_label=venue_label,
+    )
+
+    if team_code:
+        team_code_sql = _ipl_matchup_sql_quote(team_code)
+        team_text = f"current {team_code} squad"
+
+        current_bowlers_cte = f"""
+current_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role
+    FROM current_squads
+    WHERE team_code = '{team_code_sql}'
+      AND COALESCE(is_active, 1) = 1
+      AND (
+            role LIKE '%Bowler%'
+         OR role LIKE '%All%'
+      )
+),
+""".strip()
+
+        current_bowler_join_deliveries = """
+JOIN current_bowlers cb
+    ON d.bowler = cb.cricsheet_name
+    OR d.bowler = cb.display_name
+    OR d.bowler LIKE '%' + cb.display_name
+    OR cb.cricsheet_name LIKE '%' + d.bowler
+""".strip()
+
+        current_bowler_join_shots = """
+JOIN current_bowlers cb
+    ON s.bowler = cb.cricsheet_name
+    OR s.bowler = cb.display_name
+    OR s.bowler LIKE '%' + cb.display_name
+    OR cb.cricsheet_name LIKE '%' + s.bowler
+""".strip()
+
+    else:
+        team_text = "all bowlers"
+        current_bowlers_cte = ""
+        current_bowler_join_deliveries = ""
+        current_bowler_join_shots = ""
+
+    matchup_sql = f"""
+WITH
+{current_bowlers_cte}
+base AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        CASE
+            WHEN FLOOR(d.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+            WHEN FLOOR(d.ball) BETWEEN 6 AND 15 THEN 'Middle overs'
+            ELSE 'Death overs'
+        END AS phase,
+        d.bowler,
+        d.striker AS batter,
+        d.runs_off_bat,
+        d.wides,
+        d.noballs,
+        d.wicket_type,
+        d.player_dismissed
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    {current_bowler_join_deliveries}
+    WHERE {batter_condition_d}
+      AND {venue_condition_d}
+),
+overall AS (
+    SELECT
+        bowler,
+        batter,
+        COUNT(DISTINCT innings) AS innings,
+        COUNT(
+            CASE
+                WHEN COALESCE(wides, 0) = 0
+                 AND COALESCE(noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls,
+        SUM(COALESCE(runs_off_bat, 0)) AS runs,
+        COUNT(
+            CASE
+                WHEN wicket_type IS NOT NULL
+                 AND player_dismissed = batter
+                 AND wicket_type NOT IN (
+                    'run out',
+                    'retired hurt',
+                    'retired out',
+                    'obstructing the field'
+                 )
+                THEN 1
+            END
+        ) AS dismissals
+    FROM base
+    GROUP BY
+        bowler,
+        batter
+),
+phase_stats AS (
+    SELECT
+        bowler,
+        batter,
+        phase,
+        COUNT(
+            CASE
+                WHEN COALESCE(wides, 0) = 0
+                 AND COALESCE(noballs, 0) = 0
+                THEN 1
+            END
+        ) AS phase_balls,
+        SUM(COALESCE(runs_off_bat, 0)) AS phase_runs,
+        COUNT(
+            CASE
+                WHEN wicket_type IS NOT NULL
+                 AND player_dismissed = batter
+                 AND wicket_type NOT IN (
+                    'run out',
+                    'retired hurt',
+                    'retired out',
+                    'obstructing the field'
+                 )
+                THEN 1
+            END
+        ) AS phase_dismissals
+    FROM base
+    GROUP BY
+        bowler,
+        batter,
+        phase
+),
+best_phase AS (
+    SELECT
+        bowler,
+        batter,
+        phase AS best_phase,
+        phase_balls,
+        phase_runs,
+        phase_dismissals,
+        ROUND(
+            phase_runs * 100.0 / NULLIF(phase_balls, 0),
+            2
+        ) AS phase_sr,
+        ROW_NUMBER() OVER (
+            PARTITION BY bowler, batter
+            ORDER BY
+                phase_dismissals DESC,
+                ROUND(phase_runs * 100.0 / NULLIF(phase_balls, 0), 2) ASC,
+                phase_balls DESC
+        ) AS phase_rank
+    FROM phase_stats
+    WHERE phase_balls > 0
+),
+shot_plan AS (
+    SELECT
+        s.bowler,
+        s.striker AS batter,
+        s.ball_length,
+        s.ball_line,
+        COUNT(
+            CASE
+                WHEN COALESCE(s.wides, 0) = 0
+                 AND COALESCE(s.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS length_balls,
+        SUM(COALESCE(s.runs_off_bat, 0)) AS length_runs,
+        COUNT(
+            CASE
+                WHEN s.wicket_type IS NOT NULL
+                 AND s.wicket_type NOT IN (
+                    'run out',
+                    'retired hurt',
+                    'retired out',
+                    'obstructing the field'
+                 )
+                THEN 1
+            END
+        ) AS length_wickets
+    FROM shot_events s
+    {current_bowler_join_shots}
+    WHERE {batter_condition_s}
+      AND {venue_condition_s}
+      AND s.ball_length IS NOT NULL
+    GROUP BY
+        s.bowler,
+        s.striker,
+        s.ball_length,
+        s.ball_line
+),
+best_length AS (
+    SELECT
+        bowler,
+        batter,
+        ball_length,
+        ball_line,
+        length_balls,
+        length_runs,
+        length_wickets,
+        ROUND(
+            length_runs * 100.0 / NULLIF(length_balls, 0),
+            2
+        ) AS length_sr,
+        ROW_NUMBER() OVER (
+            PARTITION BY bowler, batter
+            ORDER BY
+                length_wickets DESC,
+                ROUND(length_runs * 100.0 / NULLIF(length_balls, 0), 2) ASC,
+                length_balls DESC
+        ) AS length_rank
+    FROM shot_plan
+    WHERE length_balls > 0
+)
+SELECT TOP 10
+    o.bowler AS bowler,
+    o.batter AS batter,
+    CASE
+        WHEN o.dismissals >= 2 THEN 'Wicket option'
+        WHEN ROUND(o.runs * 100.0 / NULLIF(o.balls, 0), 2) <= 120 THEN 'Control option'
+        WHEN o.balls < 8 THEN 'Small sample'
+        ELSE 'Useful sample'
+    END AS verdict,
+    o.innings,
+    o.balls,
+    o.runs,
+    o.dismissals,
+    ROUND(o.runs * 100.0 / NULLIF(o.balls, 0), 2) AS batter_sr,
+    bp.best_phase,
+    bp.phase_balls,
+    bp.phase_dismissals,
+    bl.ball_length AS suggested_length,
+    bl.ball_line AS suggested_line,
+    bl.length_balls,
+    CONCAT(
+        o.bowler,
+        ' vs ',
+        o.batter,
+        ': use mainly in ',
+        COALESCE(bp.best_phase, 'the best available phase'),
+        '. ',
+        CASE
+            WHEN bl.ball_length IS NOT NULL
+            THEN CONCAT(
+                'Suggested length/line: ',
+                bl.ball_length,
+                CASE
+                    WHEN bl.ball_line IS NOT NULL THEN CONCAT(' on ', bl.ball_line)
+                    ELSE ''
+                END,
+                '. '
+            )
+            ELSE 'No direct shot-events length/line sample for this batter, so use the phase matchup plus the bowler''s normal plan. '
+        END,
+        'Record: ',
+        CAST(o.balls AS varchar(20)),
+        ' balls, ',
+        CAST(o.runs AS varchar(20)),
+        ' runs, ',
+        CAST(o.dismissals AS varchar(20)),
+        ' dismissal(s), SR ',
+        CAST(ROUND(o.runs * 100.0 / NULLIF(o.balls, 0), 2) AS varchar(20)),
+        '.'
+    ) AS battle_note
+FROM overall o
+LEFT JOIN best_phase bp
+    ON o.bowler = bp.bowler
+   AND o.batter = bp.batter
+   AND bp.phase_rank = 1
+LEFT JOIN best_length bl
+    ON o.bowler = bl.bowler
+   AND o.batter = bl.batter
+   AND bl.length_rank = 1
+WHERE o.balls > 0
+ORDER BY
+    CASE
+        WHEN o.dismissals >= 2 THEN 1
+        WHEN ROUND(o.runs * 100.0 / NULLIF(o.balls, 0), 2) <= 120 THEN 2
+        WHEN o.balls < 8 THEN 4
+        ELSE 3
+    END,
+    o.dismissals DESC,
+    batter_sr ASC,
+    o.balls DESC;
+""".strip()
+
+    try:
+        matchup_df = run_query(matchup_sql)
+
+    except Exception:
+        if _original_analyze_bowlers_against_batter_for_squad_fix is not None:
+            return _original_analyze_bowlers_against_batter_for_squad_fix(
+                batter_condition=batter_condition,
+                batter_label=batter_label,
+                bowling_team_condition=bowling_team_condition,
+                bowling_team_label=bowling_team_label,
+                venue_condition=venue_condition,
+                venue_label=venue_label,
+            )
+
+        matchup_df = pd.DataFrame()
+
+    if matchup_df is None:
+        matchup_df = pd.DataFrame()
+
+    if matchup_df.empty:
+        paragraph = (
+            f"No usable bowler matchup sample was found for {batter_label} "
+            f"against {team_text} in the local IPL data."
+        )
+
+    else:
+        top = matchup_df.iloc[0]
+        paragraph = (
+            f"For {batter_label}, the matchup table now uses {team_text}, "
+            f"not old squads. The leading option is {top.get('bowler')} "
+            f"in {top.get('best_phase', 'the best available phase')}: "
+            f"{top.get('balls')} balls, {top.get('runs')} runs, "
+            f"{top.get('dismissals')} dismissal(s), SR {top.get('batter_sr')}. "
+            f"The details include phase and suggested length/line where shot-events data exists."
+        )
+
+    return {
+        "paragraph": paragraph,
+        "summary": pd.DataFrame(
+            [
+                {
+                    "section": "Current squad bowler matchup",
+                    "summary": paragraph,
+                }
+            ]
+        ),
+        "bowler_matchups": matchup_df,
+        "sql_queries": {
+            "bowler_matchups": matchup_sql,
+        },
+    }
+
+# IPL SQL Agent current-squad matchup override END
+
+# IPL SQL Agent biography narrative override START
+
+def _ipl_bio_sql_quote(value):
+    return str(value).replace("'", "''")
+
+
+def _ipl_bio_first_value(df, column, default=None):
+    try:
+        if df is not None and not df.empty and column in df.columns:
+            value = df.iloc[0][column]
+
+            if pd.notna(value):
+                return value
+
+    except Exception:
+        pass
+
+    return default
+
+
+def _ipl_bio_clean_sentence(value):
+    import re
+
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+
+    return text
+
+
+def _ipl_bio_player_search_condition(player_label):
+    label = _ipl_bio_sql_quote(player_label)
+
+    return f"""
+(
+    LOWER(COALESCE(display_name, '')) = LOWER('{label}')
+    OR LOWER(COALESCE(cricsheet_name, '')) = LOWER('{label}')
+    OR LOWER(COALESCE(display_name, '')) LIKE LOWER('%{label}%')
+    OR LOWER(COALESCE(cricsheet_name, '')) LIKE LOWER('%{label}%')
+)
+""".strip()
+
+
+def _ipl_bio_get_player_metadata(player_label):
+    label = _ipl_bio_sql_quote(player_label)
+
+    sql = f"""
+SELECT TOP 1
+    display_name,
+    cricsheet_name,
+    role,
+    batting_style,
+    bowling_style,
+    bowling_arm,
+    team_code,
+    team_name,
+    is_active
+FROM current_squads
+WHERE {_ipl_bio_player_search_condition(label)}
+ORDER BY
+    COALESCE(is_active, 1) DESC,
+    CASE
+        WHEN LOWER(display_name) = LOWER('{label}') THEN 1
+        WHEN LOWER(cricsheet_name) = LOWER('{label}') THEN 2
+        ELSE 3
+    END,
+    season DESC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            return df.iloc[0].to_dict()
+
+    except Exception:
+        pass
+
+    # Fallback to shot_events names if current_squads does not match.
+    shot_sql = f"""
+SELECT TOP 1
+    COALESCE(full_name_striker, striker, full_name_bowler, bowler) AS display_name,
+    COALESCE(striker, bowler) AS cricsheet_name,
+    COALESCE(playing_role_striker, playing_role_bowler) AS role,
+    batting_style_striker AS batting_style,
+    bowling_style_bowler AS bowling_style,
+    NULL AS bowling_arm,
+    NULL AS team_code,
+    NULL AS team_name,
+    1 AS is_active
+FROM shot_events
+WHERE LOWER(COALESCE(full_name_striker, '')) LIKE LOWER('%{label}%')
+   OR LOWER(COALESCE(striker, '')) LIKE LOWER('%{label}%')
+   OR LOWER(COALESCE(full_name_bowler, '')) LIKE LOWER('%{label}%')
+   OR LOWER(COALESCE(bowler, '')) LIKE LOWER('%{label}%')
+ORDER BY display_name;
+""".strip()
+
+    try:
+        df = run_query(shot_sql)
+
+        if df is not None and not df.empty:
+            return df.iloc[0].to_dict()
+
+    except Exception:
+        pass
+
+    return {
+        "display_name": player_label,
+        "cricsheet_name": player_label,
+        "role": None,
+        "batting_style": None,
+        "bowling_style": None,
+        "team_code": None,
+        "team_name": None,
+    }
+
+
+def _ipl_bio_player_teams(player_label, cricsheet_name=None, display_name=None):
+    names = [
+        item
+        for item in [player_label, cricsheet_name, display_name]
+        if item and str(item).strip()
+    ]
+
+    if not names:
+        return []
+
+    name_filters_batter = []
+    name_filters_bowler = []
+
+    for name in names:
+        name_sql = _ipl_bio_sql_quote(name)
+
+        name_filters_batter.append(f"d.striker = '{name_sql}'")
+        name_filters_batter.append(f"d.striker LIKE '%{name_sql}%'")
+
+        name_filters_bowler.append(f"d.bowler = '{name_sql}'")
+        name_filters_bowler.append(f"d.bowler LIKE '%{name_sql}%'")
+
+    batter_filter = " OR ".join(name_filters_batter)
+    bowler_filter = " OR ".join(name_filters_bowler)
+
+    sql = f"""
+WITH player_teams AS (
+    SELECT
+        d.batting_team AS team,
+        MIN(TRY_CONVERT(INT, d.season)) AS first_season,
+        MAX(TRY_CONVERT(INT, d.season)) AS last_season,
+        COUNT(DISTINCT d.season) AS seasons
+    FROM deliveries d
+    WHERE {batter_filter}
+    GROUP BY d.batting_team
+
+    UNION ALL
+
+    SELECT
+        d.bowling_team AS team,
+        MIN(TRY_CONVERT(INT, d.season)) AS first_season,
+        MAX(TRY_CONVERT(INT, d.season)) AS last_season,
+        COUNT(DISTINCT d.season) AS seasons
+    FROM deliveries d
+    WHERE {bowler_filter}
+    GROUP BY d.bowling_team
+),
+combined AS (
+    SELECT
+        team,
+        MIN(first_season) AS first_season,
+        MAX(last_season) AS last_season,
+        MAX(seasons) AS seasons
+    FROM player_teams
+    WHERE team IS NOT NULL
+    GROUP BY team
+)
+SELECT
+    team,
+    first_season,
+    last_season,
+    seasons
+FROM combined
+ORDER BY
+    first_season,
+    team;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is None or df.empty:
+            return []
+
+        teams = []
+
+        for _, row in df.iterrows():
+            team = str(row.get("team"))
+
+            first_season = row.get("first_season")
+            last_season = row.get("last_season")
+
+            if pd.notna(first_season) and pd.notna(last_season):
+                if int(first_season) == int(last_season):
+                    teams.append(f"{team} ({int(first_season)})")
+                else:
+                    teams.append(f"{team} ({int(first_season)}-{int(last_season)})")
+            else:
+                teams.append(team)
+
+        return teams
+
+    except Exception:
+        return []
+
+
+def _ipl_bio_player_debut(player_label, cricsheet_name=None, display_name=None):
+    names = [
+        item
+        for item in [player_label, cricsheet_name, display_name]
+        if item and str(item).strip()
+    ]
+
+    if not names:
+        return None
+
+    batter_filters = []
+    bowler_filters = []
+
+    for name in names:
+        name_sql = _ipl_bio_sql_quote(name)
+
+        batter_filters.append(f"d.striker = '{name_sql}'")
+        batter_filters.append(f"d.striker LIKE '%{name_sql}%'")
+
+        bowler_filters.append(f"d.bowler = '{name_sql}'")
+        bowler_filters.append(f"d.bowler LIKE '%{name_sql}%'")
+
+    batter_filter = " OR ".join(batter_filters)
+    bowler_filter = " OR ".join(bowler_filters)
+
+    sql = f"""
+SELECT TOP 1
+    m.season,
+    m.start_date,
+    m.venue,
+    d.batting_team,
+    d.bowling_team
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE ({batter_filter})
+   OR ({bowler_filter})
+ORDER BY
+    TRY_CONVERT(date, m.start_date),
+    TRY_CONVERT(INT, m.season);
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is None or df.empty:
+            return None
+
+        row = df.iloc[0]
+
+        season = row.get("season")
+        start_date = row.get("start_date")
+        venue = row.get("venue")
+
+        pieces = []
+
+        if pd.notna(season):
+            pieces.append(f"IPL {season}")
+
+        if pd.notna(start_date):
+            pieces.append(f"on {start_date}")
+
+        if pd.notna(venue):
+            pieces.append(f"at {venue}")
+
+        return " ".join(pieces)
+
+    except Exception:
+        return None
+
+
+def _ipl_bio_role_sentence(name, role, batting_style, bowling_style):
+    role_text = str(role or "").strip()
+    batting_text = str(batting_style or "").strip()
+    bowling_text = str(bowling_style or "").strip()
+
+    style_bits = []
+
+    if batting_text and batting_text.lower() not in {"none", "nan"}:
+        style_bits.append(f"a {batting_text.lower()} batter")
+
+    if bowling_text and bowling_text.lower() not in {"none", "nan"}:
+        style_bits.append(f"a {bowling_text.lower()} bowler")
+
+    style_phrase = ""
+
+    if style_bits:
+        style_phrase = " He is listed as " + " and ".join(style_bits) + "."
+
+    role_lower = role_text.lower()
+
+    if "wk" in role_lower:
+        profile = (
+            f"{name} profiles as a wicketkeeper-batter in this IPL database, "
+            f"a role that combines top-order batting value with keeping duties."
+        )
+
+    elif "all" in role_lower:
+        profile = (
+            f"{name} profiles as an all-rounder in this IPL database, "
+            f"giving his side value in more than one phase of the game."
+        )
+
+    elif "bowler" in role_lower:
+        profile = (
+            f"{name} profiles as a specialist bowler in this IPL database. "
+            f"His role is built around controlling scoring phases, creating wicket chances, "
+            f"and matching up against specific batters."
+        )
+
+    else:
+        profile = (
+            f"{name} profiles as a batter in this IPL database. "
+            f"His role is built around run-scoring, tempo control, and adapting across phases."
+        )
+
+    return profile + style_phrase
+
+
+def _ipl_build_player_biography(player_label, original_paragraph=None):
+    metadata = _ipl_bio_get_player_metadata(player_label)
+
+    name = (
+        metadata.get("display_name")
+        or metadata.get("cricsheet_name")
+        or player_label
+    )
+
+    cricsheet_name = metadata.get("cricsheet_name")
+    role = metadata.get("role")
+    batting_style = metadata.get("batting_style")
+    bowling_style = metadata.get("bowling_style")
+    current_team = metadata.get("team_name")
+
+    teams = _ipl_bio_player_teams(
+        player_label=player_label,
+        cricsheet_name=cricsheet_name,
+        display_name=name,
+    )
+
+    debut = _ipl_bio_player_debut(
+        player_label=player_label,
+        cricsheet_name=cricsheet_name,
+        display_name=name,
+    )
+
+    paragraphs = [
+        _ipl_bio_role_sentence(
+            name=name,
+            role=role,
+            batting_style=batting_style,
+            bowling_style=bowling_style,
+        )
+    ]
+
+    if current_team:
+        paragraphs.append(
+            f"In the current-squad table, he is attached to {current_team}."
+        )
+
+    if teams:
+        paragraphs.append(
+            "Across the local IPL records, his IPL team history includes "
+            + ", ".join(teams[:6])
+            + "."
+        )
+
+    if debut:
+        paragraphs.append(f"His first appearance in this local IPL dataset comes in {debut}.")
+
+    paragraphs.append(
+        "The statistical tables below should be used for the detailed numbers; "
+        "this overview is intended to describe the player profile rather than repeat every stat."
+    )
+
+    return " ".join(_ipl_bio_clean_sentence(item) for item in paragraphs if item)
+
+
+def _ipl_bio_playoff_fifties(player_label, cricsheet_name=None, display_name=None):
+    names = [
+        item
+        for item in [player_label, cricsheet_name, display_name]
+        if item and str(item).strip()
+    ]
+
+    if not names:
+        return pd.DataFrame()
+
+    striker_filters = []
+
+    for name in names:
+        name_sql = _ipl_bio_sql_quote(name)
+
+        striker_filters.append(f"d.striker = '{name_sql}'")
+        striker_filters.append(f"d.striker LIKE '%{name_sql}%'")
+
+    striker_filter = " OR ".join(striker_filters)
+
+    sql = f"""
+WITH season_match_dates AS (
+    SELECT
+        season,
+        CAST(start_date AS date) AS match_date,
+        DENSE_RANK() OVER (
+            PARTITION BY season
+            ORDER BY CAST(start_date AS date) DESC
+        ) AS reverse_date_rank
+    FROM matches
+    WHERE winner IS NOT NULL
+),
+playoff_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season
+    FROM matches m
+    JOIN season_match_dates smd
+        ON m.season = smd.season
+       AND CAST(m.start_date AS date) = smd.match_date
+    WHERE smd.reverse_date_rank <= 4
+),
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.season,
+        d.innings,
+        d.striker,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs
+    FROM deliveries d
+    JOIN playoff_matches pm
+        ON d.match_id = pm.match_id
+    WHERE {striker_filter}
+    GROUP BY
+        d.match_id,
+        d.season,
+        d.innings,
+        d.striker
+)
+SELECT
+    striker AS player,
+    COUNT(*) AS playoff_innings,
+    SUM(runs) AS playoff_runs,
+    MAX(runs) AS highest_playoff_score,
+    SUM(CASE WHEN runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS playoff_fifties,
+    SUM(CASE WHEN runs >= 100 THEN 1 ELSE 0 END) AS playoff_hundreds
+FROM innings_scores
+GROUP BY striker
+ORDER BY playoff_runs DESC;
+""".strip()
+
+    try:
+        return run_query(sql)
+
+    except Exception:
+        return pd.DataFrame()
+
+
+try:
+    _original_analyze_player_profile_smart_for_bio = analyze_player_profile_smart
+except NameError:
+    _original_analyze_player_profile_smart_for_bio = None
+
+
+def analyze_player_profile_smart(player_condition, player_label):
+    result = _original_analyze_player_profile_smart_for_bio(
+        player_condition=player_condition,
+        player_label=player_label,
+    )
+
+    if not isinstance(result, dict):
+        return result
+
+    biography = _ipl_build_player_biography(
+        player_label=player_label,
+        original_paragraph=result.get("paragraph"),
+    )
+
+    result["paragraph"] = biography
+    result["summary"] = pd.DataFrame(
+        [
+            {
+                "section": "Player overview",
+                "summary": biography,
+            }
+        ]
+    )
+
+    metadata = _ipl_bio_get_player_metadata(player_label)
+    role_text = str(metadata.get("role") or "").lower()
+
+    if "bowler" not in role_text or "all" in role_text or "batter" in role_text or "wk" in role_text:
+        playoff_df = _ipl_bio_playoff_fifties(
+            player_label=player_label,
+            cricsheet_name=metadata.get("cricsheet_name"),
+            display_name=metadata.get("display_name"),
+        )
+
+        if playoff_df is not None and not playoff_df.empty:
+            if "playoff_stats" in result and hasattr(result["playoff_stats"], "columns"):
+                result["playoff_stats"] = playoff_df
+            else:
+                result["playoff_stats"] = playoff_df
+
+    return result
+
+
+def _ipl_bio_team_code(team_label):
+    label = _ipl_bio_sql_quote(team_label)
+
+    sql = f"""
+SELECT TOP 1
+    team_code,
+    team_name
+FROM current_squads
+WHERE LOWER(team_name) = LOWER('{label}')
+   OR LOWER(team_code) = LOWER('{label}')
+   OR LOWER(team_name) LIKE LOWER('%{label}%')
+ORDER BY season DESC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            return str(df.iloc[0]["team_code"]), str(df.iloc[0]["team_name"])
+
+    except Exception:
+        pass
+
+    team_map = {
+        "csk": ("CSK", "Chennai Super Kings"),
+        "chennai super kings": ("CSK", "Chennai Super Kings"),
+        "gt": ("GT", "Gujarat Titans"),
+        "gujarat titans": ("GT", "Gujarat Titans"),
+        "rcb": ("RCB", "Royal Challengers Bengaluru"),
+        "royal challengers bengaluru": ("RCB", "Royal Challengers Bengaluru"),
+        "royal challengers bangalore": ("RCB", "Royal Challengers Bengaluru"),
+        "mi": ("MI", "Mumbai Indians"),
+        "mumbai indians": ("MI", "Mumbai Indians"),
+        "kkr": ("KKR", "Kolkata Knight Riders"),
+        "kolkata knight riders": ("KKR", "Kolkata Knight Riders"),
+        "rr": ("RR", "Rajasthan Royals"),
+        "rajasthan royals": ("RR", "Rajasthan Royals"),
+        "srh": ("SRH", "Sunrisers Hyderabad"),
+        "sunrisers hyderabad": ("SRH", "Sunrisers Hyderabad"),
+        "dc": ("DC", "Delhi Capitals"),
+        "delhi capitals": ("DC", "Delhi Capitals"),
+        "lsg": ("LSG", "Lucknow Super Giants"),
+        "lucknow super giants": ("LSG", "Lucknow Super Giants"),
+        "pbks": ("PBKS", "Punjab Kings"),
+        "punjab kings": ("PBKS", "Punjab Kings"),
+    }
+
+    return team_map.get(str(team_label).lower(), (None, team_label))
+
+
+def _ipl_build_team_biography(team_label):
+    team_code, team_name = _ipl_bio_team_code(team_label)
+
+    if not team_name:
+        team_name = team_label
+
+    team_sql = _ipl_bio_sql_quote(team_name)
+
+    overview_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season,
+        m.venue,
+        m.city,
+        m.winner
+    FROM matches m
+    JOIN deliveries d
+        ON m.match_id = d.match_id
+    WHERE d.batting_team = '{team_sql}'
+       OR d.bowling_team = '{team_sql}'
+),
+squad_roles AS (
+    SELECT
+        role,
+        COUNT(*) AS players
+    FROM current_squads
+    WHERE team_name = '{team_sql}'
+       OR team_code = '{_ipl_bio_sql_quote(team_code)}'
+    GROUP BY role
+)
+SELECT
+    COUNT(DISTINCT tm.match_id) AS matches,
+    MIN(TRY_CONVERT(INT, tm.season)) AS first_season,
+    MAX(TRY_CONVERT(INT, tm.season)) AS latest_season,
+    SUM(CASE WHEN tm.winner = '{team_sql}' THEN 1 ELSE 0 END) AS wins,
+    COUNT(DISTINCT tm.venue) AS venues
+FROM team_matches tm;
+""".strip()
+
+    roles_sql = f"""
+SELECT
+    role,
+    COUNT(*) AS players
+FROM current_squads
+WHERE team_name = '{team_sql}'
+   OR team_code = '{_ipl_bio_sql_quote(team_code)}'
+GROUP BY role
+ORDER BY players DESC, role;
+""".strip()
+
+    trophy_sql = f"""
+WITH final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+finals AS (
+    SELECT
+        m.season,
+        m.winner
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+)
+SELECT
+    COUNT(*) AS trophies
+FROM finals
+WHERE winner = '{team_sql}';
+""".strip()
+
+    matches = None
+    wins = None
+    first_season = None
+    latest_season = None
+    venues = None
+    trophies = None
+    roles_text = ""
+
+    try:
+        overview_df = run_query(overview_sql)
+
+        matches = _ipl_bio_first_value(overview_df, "matches")
+        wins = _ipl_bio_first_value(overview_df, "wins")
+        first_season = _ipl_bio_first_value(overview_df, "first_season")
+        latest_season = _ipl_bio_first_value(overview_df, "latest_season")
+        venues = _ipl_bio_first_value(overview_df, "venues")
+
+    except Exception:
+        pass
+
+    try:
+        roles_df = run_query(roles_sql)
+
+        if roles_df is not None and not roles_df.empty:
+            role_bits = [
+                f"{int(row['players'])} {str(row['role']).lower()}s"
+                for _, row in roles_df.iterrows()
+                if pd.notna(row.get("role"))
+            ]
+
+            if role_bits:
+                roles_text = " The current squad mix includes " + ", ".join(role_bits[:4]) + "."
+
+    except Exception:
+        pass
+
+    try:
+        trophy_df = run_query(trophy_sql)
+        trophies = _ipl_bio_first_value(trophy_df, "trophies")
+
+    except Exception:
+        pass
+
+    intro = (
+        f"{team_name} are an IPL franchise represented in this local database "
+        f"from {int(first_season)} to {int(latest_season)}."
+        if pd.notna(first_season) and pd.notna(latest_season)
+        else f"{team_name} are an IPL franchise in this local database."
+    )
+
+    record = ""
+
+    if pd.notna(matches) and pd.notna(wins):
+        record = (
+            f" Across the stored matches, they appear in {int(matches)} games "
+            f"and have {int(wins)} wins."
+        )
+
+    trophy_text = ""
+
+    if pd.notna(trophies):
+        trophy_text = f" Their trophy count in the local season-final method is {int(trophies)}."
+
+    venue_text = ""
+
+    if pd.notna(venues):
+        venue_text = f" Their matches span {int(venues)} venues in the dataset."
+
+    close = (
+        " The tables below should be used for exact squad, performance, and matchup detail; "
+        "this paragraph is a team overview."
+    )
+
+    return _ipl_bio_clean_sentence(
+        intro + record + trophy_text + venue_text + roles_text + close
+    )
+
+
+try:
+    _original_analyze_enhanced_team_profile_for_bio = analyze_enhanced_team_profile
+except NameError:
+    _original_analyze_enhanced_team_profile_for_bio = None
+
+
+def analyze_enhanced_team_profile(team_condition, team_label):
+    result = _original_analyze_enhanced_team_profile_for_bio(
+        team_condition=team_condition,
+        team_label=team_label,
+    )
+
+    if not isinstance(result, dict):
+        return result
+
+    biography = _ipl_build_team_biography(team_label)
+
+    result["paragraph"] = biography
+    result["team_report_squad_summary"] = pd.DataFrame(
+        [
+            {
+                "section": "Team overview",
+                "summary": biography,
+            }
+        ]
+    )
+
+    return result
+
+
+try:
+    _original_analyze_current_squad_report_for_bio = analyze_current_squad_report
+except NameError:
+    _original_analyze_current_squad_report_for_bio = None
+
+
+def analyze_current_squad_report(team_condition, team_label):
+    result = _original_analyze_current_squad_report_for_bio(
+        team_condition=team_condition,
+        team_label=team_label,
+    )
+
+    if not isinstance(result, dict):
+        return result
+
+    biography = _ipl_build_team_biography(team_label)
+
+    result["paragraph"] = biography
+    result["team_report_squad_summary"] = pd.DataFrame(
+        [
+            {
+                "section": "Team overview",
+                "summary": biography,
+            }
+        ]
+    )
+
+    return result
+
+
+def _ipl_build_venue_biography(venue_label):
+    label = str(venue_label or "").strip()
+    label_sql = _ipl_bio_sql_quote(label)
+
+    if "chepauk" in label.lower() or "chidambaram" in label.lower():
+        venue_condition = "(venue LIKE '%Chepauk%' OR venue LIKE '%Chidambaram%')"
+        display_name = "Chepauk / MA Chidambaram Stadium"
+    elif "wankhede" in label.lower():
+        venue_condition = "venue LIKE '%Wankhede%'"
+        display_name = "Wankhede Stadium"
+    elif "chinnaswamy" in label.lower():
+        venue_condition = "venue LIKE '%Chinnaswamy%'"
+        display_name = "M Chinnaswamy Stadium"
+    elif "eden" in label.lower():
+        venue_condition = "venue LIKE '%Eden Gardens%'"
+        display_name = "Eden Gardens"
+    elif "narendra" in label.lower() or "motera" in label.lower():
+        venue_condition = "(venue LIKE '%Narendra Modi%' OR venue LIKE '%Motera%' OR venue LIKE '%Sardar Patel%')"
+        display_name = "Narendra Modi Stadium"
+    else:
+        venue_condition = f"venue LIKE '%{label_sql}%'"
+        display_name = label or "This venue"
+
+    overview_sql = f"""
+WITH venue_matches AS (
+    SELECT
+        match_id,
+        season,
+        start_date,
+        venue,
+        city,
+        winner
+    FROM matches
+    WHERE {venue_condition}
+),
+first_innings AS (
+    SELECT
+        d.match_id,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS first_innings_runs
+    FROM deliveries d
+    JOIN venue_matches vm
+        ON d.match_id = vm.match_id
+    WHERE d.innings = 1
+    GROUP BY d.match_id
+)
+SELECT
+    COUNT(DISTINCT vm.match_id) AS matches,
+    MIN(TRY_CONVERT(INT, vm.season)) AS first_season,
+    MAX(TRY_CONVERT(INT, vm.season)) AS latest_season,
+    MAX(vm.city) AS city,
+    ROUND(AVG(CAST(fi.first_innings_runs AS float)), 2) AS avg_first_innings
+FROM venue_matches vm
+LEFT JOIN first_innings fi
+    ON vm.match_id = fi.match_id;
+""".strip()
+
+    top_teams_sql = f"""
+WITH venue_matches AS (
+    SELECT
+        match_id
+    FROM matches
+    WHERE {venue_condition}
+),
+teams AS (
+    SELECT
+        batting_team AS team,
+        COUNT(DISTINCT match_id) AS appearances
+    FROM deliveries
+    WHERE match_id IN (SELECT match_id FROM venue_matches)
+    GROUP BY batting_team
+
+    UNION ALL
+
+    SELECT
+        bowling_team AS team,
+        COUNT(DISTINCT match_id) AS appearances
+    FROM deliveries
+    WHERE match_id IN (SELECT match_id FROM venue_matches)
+    GROUP BY bowling_team
+)
+SELECT TOP 3
+    team,
+    SUM(appearances) AS appearances
+FROM teams
+GROUP BY team
+ORDER BY appearances DESC;
+""".strip()
+
+    matches = None
+    first_season = None
+    latest_season = None
+    city = None
+    avg_first = None
+    top_teams_text = ""
+
+    try:
+        overview_df = run_query(overview_sql)
+
+        matches = _ipl_bio_first_value(overview_df, "matches")
+        first_season = _ipl_bio_first_value(overview_df, "first_season")
+        latest_season = _ipl_bio_first_value(overview_df, "latest_season")
+        city = _ipl_bio_first_value(overview_df, "city")
+        avg_first = _ipl_bio_first_value(overview_df, "avg_first_innings")
+
+    except Exception:
+        pass
+
+    try:
+        teams_df = run_query(top_teams_sql)
+
+        if teams_df is not None and not teams_df.empty:
+            teams = [str(row["team"]) for _, row in teams_df.iterrows()]
+            top_teams_text = " The teams most commonly appearing here in the dataset include " + ", ".join(teams) + "."
+
+    except Exception:
+        pass
+
+    intro = f"{display_name} is an IPL venue"
+
+    if city:
+        intro += f" in {city}"
+
+    if pd.notna(first_season) and pd.notna(latest_season):
+        intro += f", represented in this local database from {int(first_season)} to {int(latest_season)}"
+
+    intro += "."
+
+    match_text = ""
+
+    if pd.notna(matches):
+        match_text = f" It has {int(matches)} stored IPL match(es) in the database."
+
+    scoring_text = ""
+
+    if pd.notna(avg_first):
+        scoring_text = f" The average first-innings score in the local sample is {format_metric(avg_first)}."
+
+    close = (
+        " Use the tables below for exact venue records, top performers, and scoring patterns; "
+        "this paragraph is a venue overview."
+    )
+
+    return _ipl_bio_clean_sentence(
+        intro + match_text + scoring_text + top_teams_text + close
+    )
+
+
+try:
+    _original_analyze_venue_profile_for_bio = analyze_venue_profile
+except NameError:
+    _original_analyze_venue_profile_for_bio = None
+
+
+def analyze_venue_profile(venue_condition, venue_label):
+    result = _original_analyze_venue_profile_for_bio(
+        venue_condition=venue_condition,
+        venue_label=venue_label,
+    )
+
+    if not isinstance(result, dict):
+        return result
+
+    biography = _ipl_build_venue_biography(venue_label)
+
+    result["paragraph"] = biography
+    result["venue_summary"] = pd.DataFrame(
+        [
+            {
+                "section": "Venue overview",
+                "summary": biography,
+            }
+        ]
+    )
+
+    return result
+
+# IPL SQL Agent biography narrative override END
+
+# IPL SQL Agent canonical team names override START
+
+def _ipl_canonical_team_name(team_name):
+    text = str(team_name or "").strip()
+    key = text.lower()
+
+    aliases = {
+        "royal challengers bangalore": "Royal Challengers Bengaluru",
+        "royal challengers bengaluru": "Royal Challengers Bengaluru",
+        "rcb": "Royal Challengers Bengaluru",
+
+        "kings xi punjab": "Punjab Kings",
+        "punjab kings": "Punjab Kings",
+        "kxip": "Punjab Kings",
+        "pbks": "Punjab Kings",
+
+        "delhi daredevils": "Delhi Capitals",
+        "delhi capitals": "Delhi Capitals",
+        "dd": "Delhi Capitals",
+        "dc": "Delhi Capitals",
+
+        "rising pune supergiant": "Rising Pune Supergiant",
+        "rising pune supergiants": "Rising Pune Supergiant",
+    }
+
+    return aliases.get(key, text)
+
+
+def _ipl_team_aliases_for_label(team_label, team_code=None, team_name=None):
+    values = [
+        str(item).strip()
+        for item in [team_label, team_code, team_name]
+        if item and str(item).strip()
+    ]
+
+    joined = " ".join(values).lower()
+
+    if (
+        "rcb" in joined
+        or "royal challengers bangalore" in joined
+        or "royal challengers bengaluru" in joined
+    ):
+        return [
+            "Royal Challengers Bangalore",
+            "Royal Challengers Bengaluru",
+        ]
+
+    if (
+        "kxip" in joined
+        or "pbks" in joined
+        or "kings xi punjab" in joined
+        or "punjab kings" in joined
+    ):
+        return [
+            "Kings XI Punjab",
+            "Punjab Kings",
+        ]
+
+    if (
+        "dd" in joined
+        or "dc" in joined
+        or "delhi daredevils" in joined
+        or "delhi capitals" in joined
+    ):
+        return [
+            "Delhi Daredevils",
+            "Delhi Capitals",
+        ]
+
+    if (
+        "rising pune supergiant" in joined
+        or "rising pune supergiants" in joined
+    ):
+        return [
+            "Rising Pune Supergiant",
+            "Rising Pune Supergiants",
+        ]
+
+    if team_name:
+        return [str(team_name).strip()]
+
+    if team_label:
+        return [str(team_label).strip()]
+
+    return []
+
+
+def _ipl_sql_in_list(values):
+    clean_values = []
+
+    for value in values or []:
+        value_text = str(value or "").strip()
+
+        if not value_text:
+            continue
+
+        clean_values.append("'" + _ipl_bio_sql_quote(value_text) + "'")
+
+    if not clean_values:
+        return "('')"
+
+    return "(" + ", ".join(clean_values) + ")"
+
+
+def _ipl_year_from_date(value):
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    text = str(value or "").strip()
+
+    if len(text) >= 4 and text[:4].isdigit():
+        return int(text[:4])
+
+    return None
+
+
+def _ipl_format_year_range(first_year, last_year):
+    if first_year is None and last_year is None:
+        return ""
+
+    if first_year is None:
+        return f"({last_year})"
+
+    if last_year is None:
+        return f"({first_year})"
+
+    if int(first_year) == int(last_year):
+        return f"({int(first_year)})"
+
+    return f"({int(first_year)}-{int(last_year)})"
+
+
+def _ipl_bio_player_teams(player_label, cricsheet_name=None, display_name=None):
+    names = [
+        item
+        for item in [player_label, cricsheet_name, display_name]
+        if item and str(item).strip()
+    ]
+
+    if not names:
+        return []
+
+    batter_filters = []
+    bowler_filters = []
+
+    for name in names:
+        name_sql = _ipl_bio_sql_quote(name)
+
+        batter_filters.append(f"d.striker = '{name_sql}'")
+        batter_filters.append(f"d.striker LIKE '%{name_sql}%'")
+
+        bowler_filters.append(f"d.bowler = '{name_sql}'")
+        bowler_filters.append(f"d.bowler LIKE '%{name_sql}%'")
+
+    batter_filter = " OR ".join(batter_filters)
+    bowler_filter = " OR ".join(bowler_filters)
+
+    sql = f"""
+WITH player_teams AS (
+    SELECT
+        d.batting_team AS team,
+        MIN(TRY_CONVERT(date, d.start_date)) AS first_date,
+        MAX(TRY_CONVERT(date, d.start_date)) AS last_date
+    FROM deliveries d
+    WHERE {batter_filter}
+    GROUP BY d.batting_team
+
+    UNION ALL
+
+    SELECT
+        d.bowling_team AS team,
+        MIN(TRY_CONVERT(date, d.start_date)) AS first_date,
+        MAX(TRY_CONVERT(date, d.start_date)) AS last_date
+    FROM deliveries d
+    WHERE {bowler_filter}
+    GROUP BY d.bowling_team
+)
+SELECT
+    team,
+    MIN(first_date) AS first_date,
+    MAX(last_date) AS last_date
+FROM player_teams
+WHERE team IS NOT NULL
+GROUP BY team
+ORDER BY first_date, team;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is None or df.empty:
+            return []
+
+        merged = {}
+
+        for _, row in df.iterrows():
+            raw_team = str(row.get("team") or "").strip()
+
+            if not raw_team:
+                continue
+
+            canonical = _ipl_canonical_team_name(raw_team)
+            first_year = _ipl_year_from_date(row.get("first_date"))
+            last_year = _ipl_year_from_date(row.get("last_date"))
+
+            if canonical not in merged:
+                merged[canonical] = {
+                    "first_year": first_year,
+                    "last_year": last_year,
+                }
+                continue
+
+            old_first = merged[canonical]["first_year"]
+            old_last = merged[canonical]["last_year"]
+
+            if first_year is not None:
+                if old_first is None or first_year < old_first:
+                    merged[canonical]["first_year"] = first_year
+
+            if last_year is not None:
+                if old_last is None or last_year > old_last:
+                    merged[canonical]["last_year"] = last_year
+
+        teams = []
+
+        for team, info in sorted(
+            merged.items(),
+            key=lambda item: (
+                item[1]["first_year"] if item[1]["first_year"] is not None else 9999,
+                item[0],
+            ),
+        ):
+            year_range = _ipl_format_year_range(
+                info.get("first_year"),
+                info.get("last_year"),
+            )
+
+            if year_range:
+                teams.append(f"{team} {year_range}")
+            else:
+                teams.append(team)
+
+        return teams
+
+    except Exception:
+        return []
+
+
+def _ipl_build_team_biography(team_label):
+    team_code, team_name = _ipl_bio_team_code(team_label)
+
+    aliases = _ipl_team_aliases_for_label(
+        team_label=team_label,
+        team_code=team_code,
+        team_name=team_name,
+    )
+
+    canonical_name = _ipl_canonical_team_name(team_name or team_label)
+    aliases_sql = _ipl_sql_in_list(aliases)
+
+    current_team_code_sql = _ipl_bio_sql_quote(team_code or "")
+    current_team_name_sql = _ipl_bio_sql_quote(canonical_name)
+
+    overview_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.winner
+    FROM matches m
+    JOIN deliveries d
+        ON m.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+)
+SELECT
+    COUNT(DISTINCT match_id) AS matches,
+    MIN(TRY_CONVERT(date, start_date)) AS first_date,
+    MAX(TRY_CONVERT(date, start_date)) AS latest_date,
+    SUM(CASE WHEN winner IN {aliases_sql} THEN 1 ELSE 0 END) AS wins,
+    COUNT(DISTINCT venue) AS venues
+FROM team_matches;
+""".strip()
+
+    roles_sql = f"""
+SELECT
+    role,
+    COUNT(*) AS players
+FROM current_squads
+WHERE team_code = '{current_team_code_sql}'
+   OR team_name = '{current_team_name_sql}'
+GROUP BY role
+ORDER BY players DESC, role;
+""".strip()
+
+    trophy_sql = f"""
+WITH final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+finals AS (
+    SELECT
+        m.season,
+        m.winner
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+)
+SELECT
+    COUNT(*) AS trophies
+FROM finals
+WHERE winner IN {aliases_sql};
+""".strip()
+
+    matches = None
+    wins = None
+    first_year = None
+    latest_year = None
+    venues = None
+    trophies = None
+    roles_text = ""
+
+    try:
+        overview_df = run_query(overview_sql)
+
+        matches = _ipl_bio_first_value(overview_df, "matches")
+        wins = _ipl_bio_first_value(overview_df, "wins")
+        venues = _ipl_bio_first_value(overview_df, "venues")
+
+        first_date = _ipl_bio_first_value(overview_df, "first_date")
+        latest_date = _ipl_bio_first_value(overview_df, "latest_date")
+
+        first_year = _ipl_year_from_date(first_date)
+        latest_year = _ipl_year_from_date(latest_date)
+
+    except Exception:
+        pass
+
+    try:
+        roles_df = run_query(roles_sql)
+
+        if roles_df is not None and not roles_df.empty:
+            role_bits = [
+                f"{int(row['players'])} {str(row['role']).lower()}s"
+                for _, row in roles_df.iterrows()
+                if pd.notna(row.get("role"))
+            ]
+
+            if role_bits:
+                roles_text = " The current squad mix includes " + ", ".join(role_bits[:4]) + "."
+
+    except Exception:
+        pass
+
+    try:
+        trophy_df = run_query(trophy_sql)
+        trophies = _ipl_bio_first_value(trophy_df, "trophies")
+
+    except Exception:
+        pass
+
+    if first_year is not None and latest_year is not None:
+        intro = (
+            f"{canonical_name} are an IPL franchise represented in this local database "
+            f"from {int(first_year)} to {int(latest_year)}."
+        )
+    else:
+        intro = f"{canonical_name} are an IPL franchise in this local database."
+
+    alias_note = ""
+
+    if len(aliases) > 1:
+        historical_names = [
+            alias
+            for alias in aliases
+            if _ipl_canonical_team_name(alias) == canonical_name and alias != canonical_name
+        ]
+
+        if historical_names:
+            alias_note = (
+                " The database treats "
+                + ", ".join(historical_names)
+                + f" as historical name(s) for {canonical_name}."
+            )
+
+    record = ""
+
+    if pd.notna(matches) and pd.notna(wins):
+        record = (
+            f" Across the stored matches, they appear in {int(matches)} games "
+            f"and have {int(wins)} wins."
+        )
+
+    trophy_text = ""
+
+    if pd.notna(trophies):
+        trophy_text = f" Their trophy count in the local season-final method is {int(trophies)}."
+
+    venue_text = ""
+
+    if pd.notna(venues):
+        venue_text = f" Their matches span {int(venues)} venues in the dataset."
+
+    close = (
+        " The tables below should be used for exact squad, performance, and matchup detail; "
+        "this paragraph is a team overview."
+    )
+
+    return _ipl_bio_clean_sentence(
+        intro + alias_note + record + trophy_text + venue_text + roles_text + close
+    )
+
+# IPL SQL Agent canonical team names override END
+
+# IPL SQL Agent team canonicalization and season result override START
+
+def _ipl_canon_team_name(team_name):
+    text = str(team_name or "").strip()
+    key = text.lower()
+
+    aliases = {
+        "royal challengers bangalore": "Royal Challengers Bengaluru",
+        "royal challengers bengaluru": "Royal Challengers Bengaluru",
+        "rcb": "Royal Challengers Bengaluru",
+
+        "kings xi punjab": "Punjab Kings",
+        "punjab kings": "Punjab Kings",
+        "punjab franchise": "Punjab Kings",
+        "kxip": "Punjab Kings",
+        "pbks": "Punjab Kings",
+
+        "delhi daredevils": "Delhi Capitals",
+        "delhi capitals": "Delhi Capitals",
+        "dd": "Delhi Capitals",
+        "dc": "Delhi Capitals",
+
+        "rising pune supergiants": "Rising Pune Supergiant",
+        "rising pune supergiant": "Rising Pune Supergiant",
+    }
+
+    return aliases.get(key, text)
+
+
+def _ipl_team_aliases(team_label=None, team_code=None, team_name=None):
+    raw_values = [
+        str(item).strip()
+        for item in [team_label, team_code, team_name]
+        if item and str(item).strip()
+    ]
+
+    joined = " ".join(raw_values).lower()
+
+    if (
+        joined == "rcb"
+        or "royal challengers" in joined
+        or "bangalore" in joined
+        or "bengaluru" in joined
+    ):
+        return "RCB", "Royal Challengers Bengaluru", [
+            "Royal Challengers Bangalore",
+            "Royal Challengers Bengaluru",
+        ]
+
+    if (
+        joined == "pbks"
+        or joined == "kxip"
+        or "punjab" in joined
+        or "kings xi" in joined
+    ):
+        return "PBKS", "Punjab Kings", [
+            "Kings XI Punjab",
+            "Punjab Kings",
+            "Punjab franchise",
+        ]
+
+    if (
+        joined == "dc"
+        or joined == "dd"
+        or "delhi" in joined
+    ):
+        return "DC", "Delhi Capitals", [
+            "Delhi Daredevils",
+            "Delhi Capitals",
+        ]
+
+    if joined == "csk" or "chennai" in joined:
+        return "CSK", "Chennai Super Kings", ["Chennai Super Kings"]
+
+    if joined == "mi" or "mumbai" in joined:
+        return "MI", "Mumbai Indians", ["Mumbai Indians"]
+
+    if joined == "gt" or "gujarat" in joined:
+        return "GT", "Gujarat Titans", ["Gujarat Titans"]
+
+    if joined == "kkr" or "kolkata" in joined:
+        return "KKR", "Kolkata Knight Riders", ["Kolkata Knight Riders"]
+
+    if joined == "rr" or "rajasthan" in joined:
+        return "RR", "Rajasthan Royals", ["Rajasthan Royals"]
+
+    if joined == "srh" or "sunrisers" in joined or "hyderabad" in joined:
+        return "SRH", "Sunrisers Hyderabad", ["Sunrisers Hyderabad"]
+
+    if joined == "lsg" or "lucknow" in joined:
+        return "LSG", "Lucknow Super Giants", ["Lucknow Super Giants"]
+
+    if "pune" in joined and "supergiant" in joined:
+        return None, "Rising Pune Supergiant", [
+            "Rising Pune Supergiant",
+            "Rising Pune Supergiants",
+        ]
+
+    label = str(team_name or team_label or "").strip()
+
+    if label:
+        return team_code, _ipl_canon_team_name(label), [label]
+
+    return team_code, team_name, []
+
+
+def _ipl_sql_list(values):
+    clean = []
+
+    for value in values or []:
+        value_text = str(value or "").strip()
+
+        if not value_text:
+            continue
+
+        clean.append("'" + _ipl_bio_sql_quote(value_text) + "'")
+
+    if not clean:
+        return "('')"
+
+    return "(" + ", ".join(clean) + ")"
+
+
+def _ipl_year_from_any_date(value):
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    text = str(value or "").strip()
+
+    if len(text) >= 4 and text[:4].isdigit():
+        return int(text[:4])
+
+    return None
+
+
+def _ipl_format_year_span(first_year, last_year):
+    if first_year is None and last_year is None:
+        return ""
+
+    if first_year is None:
+        return f"({int(last_year)})"
+
+    if last_year is None:
+        return f"({int(first_year)})"
+
+    if int(first_year) == int(last_year):
+        return f"({int(first_year)})"
+
+    return f"({int(first_year)}-{int(last_year)})"
+
+
+def _ipl_bio_team_code(team_label):
+    team_code, team_name, aliases = _ipl_team_aliases(team_label=team_label)
+
+    if team_code and team_name:
+        return team_code, team_name
+
+    label = _ipl_bio_sql_quote(team_label)
+
+    sql = f"""
+SELECT TOP 1
+    team_code,
+    team_name
+FROM current_squads
+WHERE LOWER(team_name) = LOWER('{label}')
+   OR LOWER(team_code) = LOWER('{label}')
+   OR LOWER(team_name) LIKE LOWER('%{label}%')
+ORDER BY
+    CASE
+        WHEN LOWER(team_code) = LOWER('{label}') THEN 1
+        WHEN LOWER(team_name) = LOWER('{label}') THEN 2
+        ELSE 3
+    END,
+    season DESC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            code = str(df.iloc[0]["team_code"])
+            raw_name = str(df.iloc[0]["team_name"])
+            _, canonical_name, _ = _ipl_team_aliases(
+                team_label=raw_name,
+                team_code=code,
+                team_name=raw_name,
+            )
+
+            return code, canonical_name
+
+    except Exception:
+        pass
+
+    return team_code, team_name
+
+
+def _ipl_bio_player_teams(player_label, cricsheet_name=None, display_name=None):
+    names = [
+        item
+        for item in [player_label, cricsheet_name, display_name]
+        if item and str(item).strip()
+    ]
+
+    if not names:
+        return []
+
+    batter_filters = []
+    bowler_filters = []
+
+    for name in names:
+        name_sql = _ipl_bio_sql_quote(name)
+
+        batter_filters.append(f"d.striker = '{name_sql}'")
+        batter_filters.append(f"d.striker LIKE '%{name_sql}%'")
+
+        bowler_filters.append(f"d.bowler = '{name_sql}'")
+        bowler_filters.append(f"d.bowler LIKE '%{name_sql}%'")
+
+    batter_filter = " OR ".join(batter_filters)
+    bowler_filter = " OR ".join(bowler_filters)
+
+    sql = f"""
+WITH player_teams AS (
+    SELECT
+        d.batting_team AS team,
+        MIN(TRY_CONVERT(date, d.start_date)) AS first_date,
+        MAX(TRY_CONVERT(date, d.start_date)) AS last_date
+    FROM deliveries d
+    WHERE {batter_filter}
+    GROUP BY d.batting_team
+
+    UNION ALL
+
+    SELECT
+        d.bowling_team AS team,
+        MIN(TRY_CONVERT(date, d.start_date)) AS first_date,
+        MAX(TRY_CONVERT(date, d.start_date)) AS last_date
+    FROM deliveries d
+    WHERE {bowler_filter}
+    GROUP BY d.bowling_team
+)
+SELECT
+    team,
+    MIN(first_date) AS first_date,
+    MAX(last_date) AS last_date
+FROM player_teams
+WHERE team IS NOT NULL
+GROUP BY team
+ORDER BY first_date, team;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is None or df.empty:
+            return []
+
+        merged = {}
+
+        for _, row in df.iterrows():
+            raw_team = str(row.get("team") or "").strip()
+
+            if not raw_team:
+                continue
+
+            _, canonical, _ = _ipl_team_aliases(team_label=raw_team)
+
+            canonical = _ipl_canon_team_name(canonical or raw_team)
+
+            first_year = _ipl_year_from_any_date(row.get("first_date"))
+            last_year = _ipl_year_from_any_date(row.get("last_date"))
+
+            if canonical not in merged:
+                merged[canonical] = {
+                    "first_year": first_year,
+                    "last_year": last_year,
+                }
+                continue
+
+            old_first = merged[canonical]["first_year"]
+            old_last = merged[canonical]["last_year"]
+
+            if first_year is not None and (old_first is None or first_year < old_first):
+                merged[canonical]["first_year"] = first_year
+
+            if last_year is not None and (old_last is None or last_year > old_last):
+                merged[canonical]["last_year"] = last_year
+
+        output = []
+
+        for team, years in sorted(
+            merged.items(),
+            key=lambda item: (
+                item[1]["first_year"] if item[1]["first_year"] is not None else 9999,
+                item[0],
+            ),
+        ):
+            span = _ipl_format_year_span(
+                years.get("first_year"),
+                years.get("last_year"),
+            )
+
+            if span:
+                output.append(f"{team} {span}")
+            else:
+                output.append(team)
+
+        return output
+
+    except Exception:
+        return []
+
+
+def _ipl_team_season_overview(team_label):
+    team_code, team_name = _ipl_bio_team_code(team_label)
+
+    _, canonical_name, aliases = _ipl_team_aliases(
+        team_label=team_label,
+        team_code=team_code,
+        team_name=team_name,
+    )
+
+    if not aliases:
+        return pd.DataFrame()
+
+    aliases_sql = _ipl_sql_list(aliases)
+
+    sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season,
+        CAST(m.start_date AS date) AS match_date,
+        m.winner
+    FROM matches m
+    JOIN deliveries d
+        ON m.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+),
+season_summary AS (
+    SELECT
+        season,
+        COUNT(DISTINCT match_id) AS matches,
+        SUM(CASE WHEN winner IN {aliases_sql} THEN 1 ELSE 0 END) AS wins,
+        SUM(
+            CASE
+                WHEN winner IS NOT NULL
+                 AND winner NOT IN {aliases_sql}
+                THEN 1
+                ELSE 0
+            END
+        ) AS losses,
+        SUM(CASE WHEN winner IS NULL THEN 1 ELSE 0 END) AS no_result
+    FROM team_matches
+    GROUP BY season
+),
+final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+final_matches AS (
+    SELECT
+        m.match_id,
+        m.season,
+        m.winner
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+),
+team_final AS (
+    SELECT DISTINCT
+        fm.season,
+        fm.match_id,
+        fm.winner
+    FROM final_matches fm
+    JOIN deliveries d
+        ON fm.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+),
+playoff_dates AS (
+    SELECT
+        season,
+        CAST(start_date AS date) AS match_date,
+        DENSE_RANK() OVER (
+            PARTITION BY season
+            ORDER BY CAST(start_date AS date) DESC
+        ) AS reverse_date_rank
+    FROM matches
+    WHERE winner IS NOT NULL
+),
+playoff_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season
+    FROM matches m
+    JOIN playoff_dates pd
+        ON m.season = pd.season
+       AND CAST(m.start_date AS date) = pd.match_date
+    WHERE pd.reverse_date_rank <= 4
+),
+team_playoff AS (
+    SELECT DISTINCT
+        pm.season
+    FROM playoff_matches pm
+    JOIN deliveries d
+        ON pm.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+)
+SELECT
+    ss.season,
+    ss.matches,
+    ss.wins,
+    ss.losses,
+    ss.no_result,
+    ROUND(ss.wins * 100.0 / NULLIF(ss.matches, 0), 2) AS win_pct,
+    CASE
+        WHEN tf.winner IN {aliases_sql} THEN 'Champions'
+        WHEN tf.match_id IS NOT NULL THEN 'Finalists'
+        WHEN tp.season IS NOT NULL THEN 'Playoffs'
+        ELSE 'Did not qualify for playoffs'
+    END AS final_result
+FROM season_summary ss
+LEFT JOIN team_final tf
+    ON ss.season = tf.season
+LEFT JOIN team_playoff tp
+    ON ss.season = tp.season
+ORDER BY
+    CASE
+        WHEN CHARINDEX('/', CAST(ss.season AS varchar(20))) > 0
+        THEN TRY_CONVERT(INT, LEFT(CAST(ss.season AS varchar(20)), 4))
+        ELSE TRY_CONVERT(INT, CAST(ss.season AS varchar(20)))
+    END,
+    ss.season;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is None:
+            return pd.DataFrame()
+
+        return df
+
+    except Exception:
+        return pd.DataFrame()
+
+
+def _ipl_build_team_biography(team_label):
+    team_code, team_name = _ipl_bio_team_code(team_label)
+
+    _, canonical_name, aliases = _ipl_team_aliases(
+        team_label=team_label,
+        team_code=team_code,
+        team_name=team_name,
+    )
+
+    if not canonical_name:
+        canonical_name = team_label
+
+    aliases_sql = _ipl_sql_list(aliases)
+
+    overview_sql = f"""
+WITH team_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.winner
+    FROM matches m
+    JOIN deliveries d
+        ON m.match_id = d.match_id
+    WHERE d.batting_team IN {aliases_sql}
+       OR d.bowling_team IN {aliases_sql}
+)
+SELECT
+    COUNT(DISTINCT match_id) AS matches,
+    MIN(TRY_CONVERT(date, start_date)) AS first_date,
+    MAX(TRY_CONVERT(date, start_date)) AS latest_date,
+    SUM(CASE WHEN winner IN {aliases_sql} THEN 1 ELSE 0 END) AS wins,
+    COUNT(DISTINCT venue) AS venues
+FROM team_matches;
+""".strip()
+
+    roles_sql = f"""
+SELECT
+    role,
+    COUNT(*) AS players
+FROM current_squads
+WHERE team_code = '{_ipl_bio_sql_quote(team_code)}'
+   OR team_name = '{_ipl_bio_sql_quote(canonical_name)}'
+GROUP BY role
+ORDER BY players DESC, role;
+""".strip()
+
+    trophy_sql = f"""
+WITH final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+finals AS (
+    SELECT
+        m.season,
+        m.winner
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+)
+SELECT
+    COUNT(*) AS trophies
+FROM finals
+WHERE winner IN {aliases_sql};
+""".strip()
+
+    matches = None
+    wins = None
+    first_year = None
+    latest_year = None
+    venues = None
+    trophies = None
+    roles_text = ""
+
+    try:
+        overview_df = run_query(overview_sql)
+
+        matches = _ipl_bio_first_value(overview_df, "matches")
+        wins = _ipl_bio_first_value(overview_df, "wins")
+        venues = _ipl_bio_first_value(overview_df, "venues")
+
+        first_date = _ipl_bio_first_value(overview_df, "first_date")
+        latest_date = _ipl_bio_first_value(overview_df, "latest_date")
+
+        first_year = _ipl_year_from_any_date(first_date)
+        latest_year = _ipl_year_from_any_date(latest_date)
+
+    except Exception:
+        pass
+
+    try:
+        roles_df = run_query(roles_sql)
+
+        if roles_df is not None and not roles_df.empty:
+            role_bits = [
+                f"{int(row['players'])} {str(row['role']).lower()}s"
+                for _, row in roles_df.iterrows()
+                if pd.notna(row.get("role"))
+            ]
+
+            if role_bits:
+                roles_text = " The current squad mix includes " + ", ".join(role_bits[:4]) + "."
+
+    except Exception:
+        pass
+
+    try:
+        trophy_df = run_query(trophy_sql)
+        trophies = _ipl_bio_first_value(trophy_df, "trophies")
+
+    except Exception:
+        pass
+
+    if first_year is not None and latest_year is not None:
+        intro = (
+            f"{canonical_name} are an IPL franchise represented in this local database "
+            f"from {int(first_year)} to {int(latest_year)}."
+        )
+    else:
+        intro = f"{canonical_name} are an IPL franchise in this local database."
+
+    alias_note = ""
+
+    historical_names = [
+        alias
+        for alias in aliases
+        if _ipl_canon_team_name(alias) == canonical_name and alias != canonical_name
+    ]
+
+    if historical_names:
+        alias_note = (
+            " The database treats "
+            + ", ".join(historical_names)
+            + f" as historical name(s) for {canonical_name}."
+        )
+
+    record = ""
+
+    if pd.notna(matches) and pd.notna(wins):
+        record = (
+            f" Across the stored matches, they appear in {int(matches)} games "
+            f"and have {int(wins)} wins."
+        )
+
+    trophy_text = ""
+
+    if pd.notna(trophies):
+        trophy_text = f" Their trophy count in the local season-final method is {int(trophies)}."
+
+    venue_text = ""
+
+    if pd.notna(venues):
+        venue_text = f" Their matches span {int(venues)} venues in the dataset."
+
+    close = (
+        " The tables below should be used for exact squad, performance, and matchup detail; "
+        "this paragraph is a team overview."
+    )
+
+    return _ipl_bio_clean_sentence(
+        intro + alias_note + record + trophy_text + venue_text + roles_text + close
+    )
+
+
+def _ipl_add_season_overview_to_team_result(result, team_label):
+    if not isinstance(result, dict):
+        return result
+
+    season_df = _ipl_team_season_overview(team_label)
+
+    if season_df is not None and not season_df.empty:
+        result["season_overview"] = season_df
+        result["team_season_overview"] = season_df
+
+    return result
+
+
+try:
+    _previous_analyze_enhanced_team_profile_before_canon_fix = analyze_enhanced_team_profile
+except NameError:
+    _previous_analyze_enhanced_team_profile_before_canon_fix = None
+
+
+def analyze_enhanced_team_profile(team_condition, team_label):
+    result = _previous_analyze_enhanced_team_profile_before_canon_fix(
+        team_condition=team_condition,
+        team_label=team_label,
+    )
+
+    if not isinstance(result, dict):
+        return result
+
+    biography = _ipl_build_team_biography(team_label)
+
+    result["paragraph"] = biography
+    result["analysis_paragraph"] = biography
+    result["team_report_squad_summary"] = pd.DataFrame(
+        [
+            {
+                "section": "Team overview",
+                "summary": biography,
+            }
+        ]
+    )
+
+    result = _ipl_add_season_overview_to_team_result(result, team_label)
+
+    return result
+
+
+try:
+    _previous_analyze_current_squad_report_before_canon_fix = analyze_current_squad_report
+except NameError:
+    _previous_analyze_current_squad_report_before_canon_fix = None
+
+
+def analyze_current_squad_report(team_condition, team_label):
+    result = _previous_analyze_current_squad_report_before_canon_fix(
+        team_condition=team_condition,
+        team_label=team_label,
+    )
+
+    if not isinstance(result, dict):
+        return result
+
+    biography = _ipl_build_team_biography(team_label)
+
+    result["paragraph"] = biography
+    result["analysis_paragraph"] = biography
+    result["team_report_squad_summary"] = pd.DataFrame(
+        [
+            {
+                "section": "Team overview",
+                "summary": biography,
+            }
+        ]
+    )
+
+    result = _ipl_add_season_overview_to_team_result(result, team_label)
+
+    return result
+
+# IPL SQL Agent team canonicalization and season result override END
