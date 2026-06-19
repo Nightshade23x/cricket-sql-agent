@@ -164,3 +164,13 @@ bowling matchups are better now
 fixed best bowlers against kohli ques,so kohli is treated as a batter not bowler
 improved front end bugs
 improved venue grouping
+
+day 12
+renamed title
+improved frontend to become cleaner
+changed layout
+added new routes for highest score in losing cause,most runs in a single over etc
+most fifties in playoffs
+team lost percent at a venue
+improved tactical matchups
+improved player profiles
