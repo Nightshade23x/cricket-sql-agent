@@ -9476,3 +9476,496 @@ ORDER BY
         },
     }
 
+# IPL SQL Agent match-plan polish override START
+
+def _ipl_sql_quote(value):
+    return str(value).replace("'", "''")
+
+
+def _ipl_get_team_code(team_label):
+    if not team_label:
+        return None
+
+    team_label_sql = _ipl_sql_quote(team_label)
+
+    sql = f"""
+SELECT TOP 1
+    team_code
+FROM current_squads
+WHERE LOWER(team_name) = LOWER('{team_label_sql}')
+   OR LOWER(team_code) = LOWER('{team_label_sql}')
+ORDER BY season DESC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            return str(df.iloc[0]["team_code"])
+
+    except Exception:
+        pass
+
+    team_map = {
+        "chennai super kings": "CSK",
+        "csk": "CSK",
+        "gujarat titans": "GT",
+        "gt": "GT",
+        "royal challengers bengaluru": "RCB",
+        "royal challengers bangalore": "RCB",
+        "rcb": "RCB",
+        "mumbai indians": "MI",
+        "mi": "MI",
+        "kolkata knight riders": "KKR",
+        "kkr": "KKR",
+        "rajasthan royals": "RR",
+        "rr": "RR",
+        "sunrisers hyderabad": "SRH",
+        "srh": "SRH",
+        "delhi capitals": "DC",
+        "dc": "DC",
+        "lucknow super giants": "LSG",
+        "lsg": "LSG",
+        "punjab kings": "PBKS",
+        "pbks": "PBKS",
+    }
+
+    return team_map.get(str(team_label).lower())
+
+
+def _ipl_get_mohammed_name(team_label):
+    team_label_sql = _ipl_sql_quote(team_label)
+
+    sql = f"""
+SELECT TOP 1
+    display_name
+FROM current_squads
+WHERE LOWER(team_name) = LOWER('{team_label_sql}')
+  AND (
+        LOWER(display_name) LIKE 'moh%'
+     OR LOWER(cricsheet_name) LIKE 'mohd%'
+  )
+ORDER BY
+    CASE
+        WHEN role LIKE '%Bowler%' THEN 1
+        WHEN role LIKE '%All%' THEN 2
+        ELSE 3
+    END,
+    display_name;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            return str(df.iloc[0]["display_name"])
+
+    except Exception:
+        pass
+
+    return "the relevant bowler"
+
+
+def _ipl_clean_match_plan_text(value, opponent_label=None):
+    import re
+
+    if value is None:
+        return value
+
+    clean_text = str(value)
+
+    clean_text = clean_text.replace(
+        "not enough data",
+        "too small for a reliable percentage",
+    )
+
+    clean_text = clean_text.replace(
+        "Gujarat Titans's",
+        "Gujarat Titans'",
+    )
+
+    clean_text = clean_text.replace(
+        "Chennai Super Kings's",
+        "Chennai Super Kings'",
+    )
+
+    clean_text = re.sub(
+        r"\b([A-Z])\.\s+(?=[A-Z][a-z])",
+        r"\1 ",
+        clean_text,
+    )
+
+    clean_text = clean_text.replace("Mohd.", "Mohd")
+
+    if opponent_label:
+        mohammed_name = _ipl_get_mohammed_name(opponent_label)
+
+        clean_text = clean_text.replace(
+            "target Mohd",
+            f"target {mohammed_name}",
+        )
+
+        clean_text = clean_text.replace(
+            "against Mohd",
+            f"against {mohammed_name}",
+        )
+
+    return clean_text
+
+
+def _ipl_clean_text_fields(result, opponent_label=None):
+    if not isinstance(result, dict):
+        return result
+
+    for key, value in list(result.items()):
+        if isinstance(value, str):
+            result[key] = _ipl_clean_match_plan_text(value, opponent_label)
+
+        if hasattr(value, "columns") and "summary" in value.columns:
+            value = value.copy()
+
+            value["summary"] = value["summary"].apply(
+                lambda item: _ipl_clean_match_plan_text(item, opponent_label)
+            )
+
+            result[key] = value
+
+    return result
+
+
+def _ipl_rename_head_to_head(result, team_a_label, team_b_label):
+    if not isinstance(result, dict):
+        return result
+
+    possible_keys = [
+        "head_to_head",
+        "h2h",
+        "head_to_head_record",
+    ]
+
+    for key in possible_keys:
+        df = result.get(key)
+
+        if df is None or not hasattr(df, "columns") or df.empty:
+            continue
+
+        renamed = df.copy()
+
+        renamed = renamed.rename(
+            columns={
+                "matches": "Matches",
+                "team_a_wins": f"{team_a_label} wins",
+                "team_b_wins": f"{team_b_label} wins",
+                "team_a_win_pct": f"{team_a_label} win %",
+                "team_b_win_pct": f"{team_b_label} win %",
+            }
+        )
+
+        result[key] = renamed
+
+    return result
+
+
+def _ipl_build_current_key_batters(team_label):
+    team_code = _ipl_get_team_code(team_label)
+
+    if not team_code:
+        return None
+
+    team_code_sql = _ipl_sql_quote(team_code)
+
+    sql = f"""
+WITH latest_season AS (
+    SELECT
+        MAX(TRY_CONVERT(INT, season)) AS max_season
+    FROM matches
+    WHERE TRY_CONVERT(INT, season) IS NOT NULL
+),
+active_batters AS (
+    SELECT DISTINCT
+        team_code,
+        team_name,
+        display_name,
+        cricsheet_name,
+        role
+    FROM current_squads
+    WHERE team_code = '{team_code_sql}'
+      AND (
+            role LIKE '%Batter%'
+         OR role LIKE '%WK%'
+         OR role LIKE '%All%'
+      )
+),
+batting AS (
+    SELECT
+        ab.team_code,
+        ab.display_name,
+        ab.role,
+
+        SUM(COALESCE(d.runs_off_bat, 0)) AS career_runs,
+
+        SUM(
+            CASE
+                WHEN TRY_CONVERT(INT, d.season) >= latest_season.max_season - 2
+                THEN COALESCE(d.runs_off_bat, 0)
+                ELSE 0
+            END
+        ) AS recent_runs,
+
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls_faced
+
+    FROM active_batters ab
+    CROSS JOIN latest_season
+    LEFT JOIN deliveries d
+        ON d.striker = ab.cricsheet_name
+        OR d.striker = ab.display_name
+        OR d.striker LIKE '%' + ab.display_name
+        OR ab.cricsheet_name LIKE '%' + d.striker
+    GROUP BY
+        ab.team_code,
+        ab.display_name,
+        ab.role
+)
+SELECT TOP 8
+    team_code,
+    display_name,
+    role,
+    COALESCE(career_runs, 0) AS career_runs,
+    COALESCE(recent_runs, 0) AS recent_runs,
+    COALESCE(balls_faced, 0) AS balls_faced,
+    ROUND(
+        COALESCE(career_runs, 0) * 100.0 / NULLIF(balls_faced, 0),
+        2
+    ) AS strike_rate
+FROM batting
+WHERE COALESCE(career_runs, 0) > 0
+ORDER BY
+    recent_runs DESC,
+    career_runs DESC,
+    display_name;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            return df
+
+    except Exception:
+        pass
+
+    return None
+
+
+def _ipl_build_all_venue_bowling_matchups(team_a_label, team_b_label):
+    team_a_code = _ipl_get_team_code(team_a_label)
+    team_b_code = _ipl_get_team_code(team_b_label)
+
+    if not team_a_code or not team_b_code:
+        return None
+
+    team_a_code_sql = _ipl_sql_quote(team_a_code)
+    team_b_code_sql = _ipl_sql_quote(team_b_code)
+
+    sql = f"""
+WITH team_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name
+    FROM current_squads
+    WHERE team_code = '{team_a_code_sql}'
+      AND (
+            role LIKE '%Bowler%'
+         OR role LIKE '%All%'
+      )
+),
+opponent_batters AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name
+    FROM current_squads
+    WHERE team_code = '{team_b_code_sql}'
+      AND (
+            role LIKE '%Batter%'
+         OR role LIKE '%WK%'
+         OR role LIKE '%All%'
+      )
+),
+matchups AS (
+    SELECT
+        CASE
+            WHEN FLOOR(d.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+            WHEN FLOOR(d.ball) BETWEEN 6 AND 15 THEN 'Middle overs'
+            ELSE 'Death overs'
+        END AS phase,
+
+        d.bowler AS team_a_bowler,
+        d.striker AS team_b_batter,
+
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls,
+
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+
+        COUNT(
+            CASE
+                WHEN d.wicket_type IS NOT NULL
+                 AND d.player_dismissed = d.striker
+                 AND d.wicket_type NOT IN (
+                    'run out',
+                    'retired hurt',
+                    'retired out',
+                    'obstructing the field'
+                 )
+                THEN 1
+            END
+        ) AS dismissals
+
+    FROM deliveries d
+
+    JOIN team_bowlers tb
+        ON d.bowler = tb.cricsheet_name
+        OR d.bowler = tb.display_name
+        OR d.bowler LIKE '%' + tb.display_name
+        OR tb.cricsheet_name LIKE '%' + d.bowler
+
+    JOIN opponent_batters ob
+        ON d.striker = ob.cricsheet_name
+        OR d.striker = ob.display_name
+        OR d.striker LIKE '%' + ob.display_name
+        OR ob.cricsheet_name LIKE '%' + d.striker
+
+    GROUP BY
+        CASE
+            WHEN FLOOR(d.ball) BETWEEN 0 AND 5 THEN 'Powerplay'
+            WHEN FLOOR(d.ball) BETWEEN 6 AND 15 THEN 'Middle overs'
+            ELSE 'Death overs'
+        END,
+        d.bowler,
+        d.striker
+)
+SELECT TOP 8
+    phase,
+
+    ROW_NUMBER() OVER (
+        PARTITION BY phase
+        ORDER BY
+            dismissals DESC,
+            ROUND(runs * 100.0 / NULLIF(balls, 0), 2) ASC,
+            balls DESC
+    ) AS phase_rank,
+
+    team_a_bowler,
+    team_b_batter,
+    balls,
+    runs,
+    dismissals,
+
+    ROUND(
+        runs * 100.0 / NULLIF(balls, 0),
+        2
+    ) AS strike_rate,
+
+    CASE
+        WHEN balls < 6 THEN 'Small sample, all-venue fallback'
+        WHEN dismissals >= 1
+         AND ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 120
+        THEN 'Strong all-venue matchup'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) <= 115
+        THEN 'Control all-venue matchup'
+        ELSE 'Usable all-venue matchup'
+    END AS matchup_reason
+
+FROM matchups
+WHERE balls >= 3
+ORDER BY
+    dismissals DESC,
+    strike_rate ASC,
+    balls DESC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            return df
+
+    except Exception:
+        pass
+
+    return None
+
+
+try:
+    _original_analyze_team_vs_team_match_plan = analyze_team_vs_team_match_plan
+except NameError:
+    _original_analyze_team_vs_team_match_plan = None
+
+
+def analyze_team_vs_team_match_plan(*args, **kwargs):
+    result = _original_analyze_team_vs_team_match_plan(*args, **kwargs)
+
+    team_a_label = (
+        kwargs.get("team_a_label")
+        or kwargs.get("team_label")
+        or kwargs.get("team_a")
+        or (args[2] if len(args) > 2 else "Team A")
+    )
+
+    team_b_label = (
+        kwargs.get("team_b_label")
+        or kwargs.get("opponent_label")
+        or kwargs.get("team_b")
+        or (args[3] if len(args) > 3 else "Team B")
+    )
+
+    result = _ipl_clean_text_fields(
+        result,
+        opponent_label=team_b_label,
+    )
+
+    result = _ipl_rename_head_to_head(
+        result,
+        team_a_label=team_a_label,
+        team_b_label=team_b_label,
+    )
+
+    improved_batters = _ipl_build_current_key_batters(team_b_label)
+
+    if improved_batters is not None and not improved_batters.empty:
+        result["opponent_current_key_batters"] = improved_batters
+
+    bowling_df = result.get("bowling_phase_matchups")
+    needs_fallback = True
+
+    if bowling_df is not None and hasattr(bowling_df, "empty") and not bowling_df.empty:
+        try:
+            if len(bowling_df) >= 3 and bowling_df["balls"].max() >= 6:
+                needs_fallback = False
+        except Exception:
+            needs_fallback = False
+
+    if needs_fallback:
+        fallback_matchups = _ipl_build_all_venue_bowling_matchups(
+            team_a_label,
+            team_b_label,
+        )
+
+        if fallback_matchups is not None and not fallback_matchups.empty:
+            result["bowling_phase_matchups"] = fallback_matchups
+            result["bowling_phase_matchups_all_venues"] = fallback_matchups
+
+    return result
+
+# IPL SQL Agent match-plan polish override END

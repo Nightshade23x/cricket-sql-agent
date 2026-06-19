@@ -8205,3 +8205,220 @@ def build_and_sql(where_clauses):
 
     return " AND ".join(clean_clauses)
 
+# IPL SQL Agent UI postprocess override START
+
+def _ipl_normalise_question_text(value):
+    import re
+
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+
+def _ipl_extract_venue_from_question(user_question):
+    import re
+
+    text = str(user_question or "").strip()
+
+    match = re.search(
+        r"\bat\s+([A-Za-z0-9 .'-]+)\s*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    venue = match.group(1).strip(" .?")
+
+    venue_map = {
+        "wankhede": "Wankhede",
+        "chepauk": "Chepauk",
+        "chinnaswamy": "Chinnaswamy",
+        "eden gardens": "Eden Gardens",
+        "narendra modi stadium": "Narendra Modi Stadium",
+        "motera": "Narendra Modi Stadium",
+    }
+
+    return venue_map.get(venue.lower(), venue)
+
+
+def _ipl_clean_player_initials_in_text(value):
+    import re
+
+    if value is None:
+        return value
+
+    text = str(value)
+
+    text = re.sub(
+        r"\b([A-Z])\.\s+(?=[A-Z][a-z])",
+        r"\1 ",
+        text,
+    )
+
+    text = text.replace("Mohd.", "Mohd")
+
+    return text
+
+
+def _ipl_clean_strings_recursively(value):
+    if isinstance(value, str):
+        return _ipl_clean_player_initials_in_text(value)
+
+    if isinstance(value, list):
+        return [
+            _ipl_clean_strings_recursively(item)
+            for item in value
+        ]
+
+    if isinstance(value, tuple):
+        return tuple(
+            _ipl_clean_strings_recursively(item)
+            for item in value
+        )
+
+    if isinstance(value, dict):
+        return {
+            key: _ipl_clean_strings_recursively(item)
+            for key, item in value.items()
+        }
+
+    return value
+
+
+def _ipl_rename_venue_tables(result, venue_label):
+    if not isinstance(result, dict):
+        return result
+
+    if not venue_label:
+        return result
+
+    extra_tables = result.get("extra_tables")
+
+    if not isinstance(extra_tables, dict):
+        return result
+
+    renamed_tables = {}
+
+    for key, value in extra_tables.items():
+        key_text = str(key)
+        key_norm = key_text.lower().replace(" ", "_")
+
+        if key_norm in {"head_to_head", "h2h", "head_to_head_record"}:
+            new_key = f"Head to Head in {venue_label}"
+
+        elif key_norm in {
+            "recent_head_to_head",
+            "recent_h2h",
+            "recent_head_to_head_record",
+            "recent_matches",
+        }:
+            new_key = f"Recent Head to Head in {venue_label}"
+
+        else:
+            new_key = key
+
+        renamed_tables[new_key] = value
+
+    result["extra_tables"] = renamed_tables
+
+    return result
+
+
+def _ipl_smart_similar_questions(user_question, existing_questions):
+    import re
+
+    user_norm = _ipl_normalise_question_text(user_question)
+    cleaned = []
+
+    for question in existing_questions or []:
+        question_norm = _ipl_normalise_question_text(question)
+
+        if not question_norm:
+            continue
+
+        if question_norm == user_norm:
+            continue
+
+        already_added = {
+            _ipl_normalise_question_text(item)
+            for item in cleaned
+        }
+
+        if question_norm in already_added:
+            continue
+
+        cleaned.append(question)
+
+    match = re.search(
+        r"how can\s+(.+?)\s+beat\s+(.+?)(?:\s+at\s+(.+))?$",
+        str(user_question or ""),
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        team_a = match.group(1).strip()
+        team_b = match.group(2).strip()
+        venue = (match.group(3) or "").strip()
+
+        smarter_questions = [
+            f"what are the key matchups for {team_a} vs {team_b}",
+            f"which {team_b} batters should {team_a} target first",
+            f"what bowling plan should {team_a} use against {team_b}",
+            f"which players are key for {team_a} vs {team_b}",
+        ]
+
+        if venue:
+            smarter_questions.append(f"tell me about {venue}")
+
+        for question in smarter_questions:
+            question_norm = _ipl_normalise_question_text(question)
+
+            if question_norm == user_norm:
+                continue
+
+            already_added = {
+                _ipl_normalise_question_text(item)
+                for item in cleaned
+            }
+
+            if question_norm in already_added:
+                continue
+
+            cleaned.append(question)
+
+    return cleaned[:4]
+
+
+try:
+    _original_answer_question_with_fallback_for_ui = answer_question_with_fallback
+except NameError:
+    _original_answer_question_with_fallback_for_ui = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _original_answer_question_with_fallback_for_ui(user_question)
+
+    if not isinstance(result, dict):
+        return result
+
+    result = _ipl_clean_strings_recursively(result)
+
+    venue_label = _ipl_extract_venue_from_question(user_question)
+
+    result = _ipl_rename_venue_tables(
+        result,
+        venue_label=venue_label,
+    )
+
+    result["similar_questions"] = _ipl_smart_similar_questions(
+        user_question,
+        result.get("similar_questions"),
+    )
+
+    return result
+
+# IPL SQL Agent UI postprocess override END

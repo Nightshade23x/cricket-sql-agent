@@ -8,3 +8,5 @@ data/processed/
 backups/
 *_backup_*.py
 *backup*.py
+# Local patch/backups
+patch_*.py
