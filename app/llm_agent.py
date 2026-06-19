@@ -8945,11 +8945,7 @@ LEFT JOIN team_final tf
 LEFT JOIN team_playoff tp
     ON ss.season = tp.season
 ORDER BY
-    CASE
-        WHEN CHARINDEX('/', CAST(ss.season AS varchar(20))) > 0
-        THEN TRY_CONVERT(INT, LEFT(CAST(ss.season AS varchar(20)), 4))
-        ELSE TRY_CONVERT(INT, CAST(ss.season AS varchar(20)))
-    END,
+    TRY_CONVERT(INT, ss.season),
     ss.season;
 """.strip()
 
@@ -9117,3 +9113,467 @@ def answer_question_with_fallback(user_question):
     return _previous_answer_question_with_fallback_before_direct_dc_fix(user_question)
 
 # IPL SQL Agent DC/PBKS/RCB squad route override END
+
+# IPL SQL Agent extra curated routes override START
+
+def _ipl_extra_sql_quote(value):
+    return str(value).replace("'", "''")
+
+
+def _ipl_extra_canonical_team_expr(column_name):
+    return f'''
+CASE
+    WHEN {column_name} IN ('Royal Challengers Bangalore', 'Royal Challengers Bengaluru') THEN 'Royal Challengers Bengaluru'
+    WHEN {column_name} IN ('Kings XI Punjab', 'Punjab Kings', 'Punjab franchise') THEN 'Punjab Kings'
+    WHEN {column_name} IN ('Delhi Daredevils', 'Delhi Capitals') THEN 'Delhi Capitals'
+    WHEN {column_name} IN ('Rising Pune Supergiant', 'Rising Pune Supergiants') THEN 'Rising Pune Supergiant'
+    ELSE {column_name}
+END
+'''.strip()
+
+
+def _ipl_extra_direct_most_trophies(user_question):
+    import pandas as pd
+    from app.db import run_query
+
+    q = str(user_question or '').lower()
+
+    if not (
+        'most trophies' in q
+        or 'most titles' in q
+        or 'most championships' in q
+        or 'ipl trophies' in q
+    ):
+        return None
+
+    team_expr = _ipl_extra_canonical_team_expr('m.winner')
+
+    sql = f'''
+WITH final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+finals AS (
+    SELECT
+        m.season,
+        {team_expr} AS team
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+    WHERE m.winner IS NOT NULL
+),
+summary AS (
+    SELECT
+        team,
+        COUNT(*) AS trophies,
+        STRING_AGG(CAST(season AS varchar(20)), ', ') AS years_won
+    FROM finals
+    GROUP BY team
+)
+SELECT
+    team,
+    trophies,
+    years_won
+FROM summary
+ORDER BY
+    trophies DESC,
+    team ASC;
+'''.strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            'question': user_question,
+            'analysis_paragraph': f'The trophies query failed: {error}',
+            'result': pd.DataFrame(),
+            'extra_tables': {},
+            'sql_query': sql,
+            'similar_questions': [],
+        }
+
+    if df is None:
+        df = pd.DataFrame()
+
+    paragraph = (
+        'This ranks teams by IPL trophies using the last match date in each season as the final, '
+        'with the winning years included.'
+    )
+
+    return {
+        'question': user_question,
+        'analysis_paragraph': paragraph,
+        'paragraph': paragraph,
+        'result': df,
+        'extra_tables': {'Trophies By Team': df},
+        'sql_query': sql,
+        'similar_questions': [
+            'which team has qualified for the playoffs the most',
+            'which team has played the most finals',
+            'which team has the best win percentage',
+        ],
+    }
+
+
+def _ipl_extra_direct_playoff_qualifications(user_question):
+    import pandas as pd
+    from app.db import run_query
+
+    q = str(user_question or '').lower()
+
+    if not (
+        'qualified for the playoffs' in q
+        or 'playoff qualifications' in q
+        or 'most playoffs' in q
+        or 'reached playoffs the most' in q
+    ):
+        return None
+
+    batting_expr = _ipl_extra_canonical_team_expr('d.batting_team')
+    bowling_expr = _ipl_extra_canonical_team_expr('d.bowling_team')
+
+    sql = f'''
+WITH playoff_dates AS (
+    SELECT
+        season,
+        CAST(start_date AS date) AS match_date,
+        DENSE_RANK() OVER (
+            PARTITION BY season
+            ORDER BY CAST(start_date AS date) DESC
+        ) AS reverse_date_rank
+    FROM matches
+    WHERE winner IS NOT NULL
+),
+playoff_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season
+    FROM matches m
+    JOIN playoff_dates pd
+        ON m.season = pd.season
+       AND CAST(m.start_date AS date) = pd.match_date
+    WHERE pd.reverse_date_rank <= 4
+),
+playoff_teams AS (
+    SELECT DISTINCT
+        pm.season,
+        {batting_expr} AS team
+    FROM playoff_matches pm
+    JOIN deliveries d
+        ON pm.match_id = d.match_id
+
+    UNION
+
+    SELECT DISTINCT
+        pm.season,
+        {bowling_expr} AS team
+    FROM playoff_matches pm
+    JOIN deliveries d
+        ON pm.match_id = d.match_id
+),
+summary AS (
+    SELECT
+        team,
+        COUNT(DISTINCT season) AS playoff_seasons,
+        STRING_AGG(CAST(season AS varchar(20)), ', ') AS playoff_years
+    FROM playoff_teams
+    WHERE team IS NOT NULL
+    GROUP BY team
+)
+SELECT
+    team,
+    playoff_seasons,
+    playoff_years
+FROM summary
+ORDER BY
+    playoff_seasons DESC,
+    team ASC;
+'''.strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            'question': user_question,
+            'analysis_paragraph': f'The playoff qualification query failed: {error}',
+            'result': pd.DataFrame(),
+            'extra_tables': {},
+            'sql_query': sql,
+            'similar_questions': [],
+        }
+
+    if df is None:
+        df = pd.DataFrame()
+
+    paragraph = (
+        'This counts playoff qualification by season, not by number of playoff matches. '
+        'Each team can count only once per season.'
+    )
+
+    return {
+        'question': user_question,
+        'analysis_paragraph': paragraph,
+        'paragraph': paragraph,
+        'result': df,
+        'extra_tables': {'Playoff Qualifications By Team': df},
+        'sql_query': sql,
+        'similar_questions': [
+            'which team has the most trophies',
+            'which team has played the most finals',
+            'who has the most fifties in playoffs',
+        ],
+    }
+
+
+def _ipl_extra_direct_playoff_or_final_milestones(user_question):
+    import pandas as pd
+    from app.db import run_query
+
+    q = str(user_question or '').lower()
+
+    is_fifty = 'fifties' in q or '50s' in q or 'half centuries' in q
+    is_hundred = 'hundreds' in q or '100s' in q or 'centuries' in q
+    is_final = 'final' in q
+    is_playoff = 'playoff' in q
+
+    if not (is_fifty or is_hundred):
+        return None
+
+    if not (is_final or is_playoff):
+        return None
+
+    if is_final:
+        match_scope_name = 'finals'
+
+        scope_cte = '''
+final_dates AS (
+    SELECT
+        season,
+        MAX(CAST(start_date AS date)) AS final_date
+    FROM matches
+    WHERE winner IS NOT NULL
+    GROUP BY season
+),
+target_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season
+    FROM matches m
+    JOIN final_dates fd
+        ON m.season = fd.season
+       AND CAST(m.start_date AS date) = fd.final_date
+)
+'''.strip()
+
+    else:
+        match_scope_name = 'playoffs'
+
+        scope_cte = '''
+playoff_dates AS (
+    SELECT
+        season,
+        CAST(start_date AS date) AS match_date,
+        DENSE_RANK() OVER (
+            PARTITION BY season
+            ORDER BY CAST(start_date AS date) DESC
+        ) AS reverse_date_rank
+    FROM matches
+    WHERE winner IS NOT NULL
+),
+target_matches AS (
+    SELECT DISTINCT
+        m.match_id,
+        m.season
+    FROM matches m
+    JOIN playoff_dates pd
+        ON m.season = pd.season
+       AND CAST(m.start_date AS date) = pd.match_date
+    WHERE pd.reverse_date_rank <= 4
+)
+'''.strip()
+
+    if is_hundred:
+        milestone_label = 'hundreds'
+        milestone_condition = 'runs >= 100'
+
+    else:
+        milestone_label = 'fifties'
+        milestone_condition = 'runs BETWEEN 50 AND 99'
+
+    sql = f'''
+WITH
+{scope_cte},
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.season,
+        d.innings,
+        d.striker AS batter,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls
+    FROM deliveries d
+    JOIN target_matches tm
+        ON d.match_id = tm.match_id
+    GROUP BY
+        d.match_id,
+        d.season,
+        d.innings,
+        d.striker
+),
+milestone_innings AS (
+    SELECT
+        batter,
+        season,
+        match_id,
+        innings,
+        runs,
+        balls
+    FROM innings_scores
+    WHERE {milestone_condition}
+)
+SELECT
+    batter,
+    COUNT(*) AS {milestone_label},
+    STRING_AGG(CAST(season AS varchar(20)), ', ') AS seasons,
+    MAX(runs) AS highest_score,
+    ROUND(SUM(runs) * 100.0 / NULLIF(SUM(balls), 0), 2) AS strike_rate
+FROM milestone_innings
+GROUP BY batter
+ORDER BY
+    {milestone_label} DESC,
+    highest_score DESC,
+    batter ASC;
+'''.strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            'question': user_question,
+            'analysis_paragraph': f'The {milestone_label} in {match_scope_name} query failed: {error}',
+            'result': pd.DataFrame(),
+            'extra_tables': {},
+            'sql_query': sql,
+            'similar_questions': [],
+        }
+
+    if df is None:
+        df = pd.DataFrame()
+
+    paragraph = f'This ranks batters by most {milestone_label} in IPL {match_scope_name} in the local database.'
+
+    return {
+        'question': user_question,
+        'analysis_paragraph': paragraph,
+        'paragraph': paragraph,
+        'result': df,
+        'extra_tables': {f'Most {milestone_label.title()} In {match_scope_name.title()}': df},
+        'sql_query': sql,
+        'similar_questions': [
+            'who has the most fifties in playoffs',
+            'who has the most hundreds in playoffs',
+            'who has the most fifties in finals',
+            'who has the most hundreds in finals',
+        ],
+    }
+
+
+def _ipl_extra_direct_strongest_current_squad(user_question):
+    import pandas as pd
+
+    q = str(user_question or '').lower()
+
+    if not (
+        'strongest current squad' in q
+        or 'best current squad' in q
+        or 'strongest squad' in q
+    ):
+        return None
+
+    try:
+        from app.analysis import analyze_strongest_current_squads
+
+        result = analyze_strongest_current_squads()
+
+        if isinstance(result, dict):
+            paragraph = (
+                result.get('analysis_paragraph')
+                or result.get('paragraph')
+                or 'This ranks the current IPL squads using the local squad and player-performance tables.'
+            )
+
+            extra_tables = {}
+
+            for key, value in result.items():
+                if hasattr(value, 'columns'):
+                    extra_tables[key] = value
+
+            main_result = result.get('result')
+
+            if not hasattr(main_result, 'columns'):
+                for value in extra_tables.values():
+                    main_result = value
+                    break
+
+            return {
+                'question': user_question,
+                'analysis_paragraph': paragraph,
+                'paragraph': paragraph,
+                'result': main_result if hasattr(main_result, 'columns') else pd.DataFrame(),
+                'extra_tables': extra_tables,
+                'sql_query': '\\n\\n'.join(str(v) for v in (result.get('sql_queries') or {}).values() if v),
+                'similar_questions': [
+                    'analyse RCB squad',
+                    'analyse CSK squad',
+                    'analyse GT squad',
+                    'who will win next season',
+                ],
+            }
+
+    except Exception as error:
+        return {
+            'question': user_question,
+            'analysis_paragraph': f'The strongest current squad route failed: {error}',
+            'result': pd.DataFrame(),
+            'extra_tables': {},
+            'sql_query': '',
+            'similar_questions': [],
+        }
+
+    return None
+
+
+try:
+    _previous_answer_question_with_fallback_before_extra_curated_routes = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_extra_curated_routes = None
+
+
+def answer_question_with_fallback(user_question):
+    direct_routes = [
+        _ipl_extra_direct_most_trophies,
+        _ipl_extra_direct_playoff_qualifications,
+        _ipl_extra_direct_playoff_or_final_milestones,
+        _ipl_extra_direct_strongest_current_squad,
+    ]
+
+    for route in direct_routes:
+        result = route(user_question)
+
+        if result is not None:
+            return result
+
+    return _previous_answer_question_with_fallback_before_extra_curated_routes(user_question)
+
+# IPL SQL Agent extra curated routes override END

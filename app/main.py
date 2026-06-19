@@ -57,7 +57,17 @@ HIDDEN_COLUMNS = {
     "matchup_score",
     "sort_score",
     "raw_score",
-}
+
+    "cricsheet_name",
+    "cricsheet name",
+    "is_overseas",
+    "is overseas",
+    "is_active",
+    "is active",
+    "full_name_striker",
+    "full name striker",
+    "full_name_bowler",
+    "full name bowler",}
 
 
 def setup_page():
@@ -288,6 +298,12 @@ def render_dataframe(df, name=None):
             display_df,
             use_container_width=True,
             hide_index=True,
+            column_config={
+                "#": st.column_config.NumberColumn(
+                    "#",
+                    width="small",
+                )
+            } if "#" in display_df.columns else None,
         )
 
         render_details(df)
@@ -391,7 +407,7 @@ def render_top_question_box():
             label_visibility="collapsed",
         )
 
-        col_submit, col_clear = st.columns([1, 4])
+        col_submit, col_clear = st.columns([1, 1])
 
         with col_submit:
             submitted = st.form_submit_button("Ask", use_container_width=True)
