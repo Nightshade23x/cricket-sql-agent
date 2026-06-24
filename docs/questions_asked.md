@@ -462,3 +462,17 @@ in match plans...recent chase benchmark is coming empty
 opponent batting first restrict is also empty,recent restrict benchmark as well
 top 3 depedency summary is also empty,
 under analyse sooryavanshi...bowler success and bowler dismissals was empty,same with quiet bowlers,actually all the analysis cols about matchips were empty including active quiet bowlers or difficult bowler types,for kohli etc its there but we need to ensure its present for every player asked
+
+compare csk and mi should have trophies won also,num of playoffs seasons appeared in,head to head between each other etc as well,num of finals played
+in make a scouting report for team...2020 is appearing as third row and 2010 as second row..fix this to ensure order is correct
+which players are key for csk is showing random players who dont even play for csk
+now lets add deep analysis...if i ask how can csk win next year,it analyses their matches this year,sees what type of player they need etc,and suggests that ok csk need to invest in a middle order batsman etc
+
+which players are key for csk is still not working,giving players like tim david etc whove never played for csk
+how can csk next year just gives one need..should give atl 5
+
+analyse suresh raina is giving aaron finch stats tho the stats seems to be of suresh raina? but the paragraphs talks about finch
+under player profile,in season trend we should add fifties and hundreds in the season also...under opponent performance add innings also,same with venue performance
+who has the most wickets in powerplay in 2026 failed. who has the most wickets in death overs also failed.who has the most wickets in pwerplay without season failed as well
+who has bowled the most dot balls must also be added...per season,per team,per venue etc...most dot balls in pp,death overs etc as well
+when i press the clear button it gives a big error(check image)

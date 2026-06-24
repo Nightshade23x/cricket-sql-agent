@@ -69,7 +69,6 @@ HIDDEN_COLUMNS = {
     "full_name_bowler",
     "full name bowler",}
 
-
 def setup_page():
     st.set_page_config(
         page_title=APP_TITLE,
@@ -526,50 +525,65 @@ def render_sidebar_examples():
                 )
 
 
+def _ipl_clear_question_box():
+    """Clear the question input safely through a Streamlit callback."""
+    st.session_state["question_input"] = ""
+    st.session_state["run_requested"] = False
+
+
 def render_top_question_box():
-    st.markdown('<div class="hero-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Ask your question</div>', unsafe_allow_html=True)
 
-    with st.form("question_form", clear_on_submit=False):
-        question = st.text_area(
-            label="Question",
-            key="question_input",
-            placeholder="Example: how can CSK beat GT at Chepauk",
-            height=96,
-            label_visibility="collapsed",
+    if "question_input" not in st.session_state:
+        st.session_state["question_input"] = ""
+
+    if "run_requested" not in st.session_state:
+        st.session_state["run_requested"] = False
+
+    question_text = st.text_area(
+        "Ask your IPL question",
+        key="question_input",
+        placeholder="Example: best bowlers against Kohli for GT",
+        label_visibility="collapsed",
+        height=140,
+    )
+
+    col_submit, col_clear = st.columns([1, 1])
+
+    with col_submit:
+        ask_clicked = st.button(
+            "Ask",
+            use_container_width=True,
+            type="primary",
         )
 
-        col_submit, col_clear = st.columns([1, 1])
+    with col_clear:
+        st.button(
+            "Clear",
+            use_container_width=True,
+            on_click=_ipl_clear_question_box,
+        )
 
-        with col_submit:
-            submitted = st.form_submit_button("Ask", use_container_width=True)
+    queued_from_example = bool(st.session_state.get("run_requested", False))
 
-        with col_clear:
-            clear_clicked = st.form_submit_button("Clear", use_container_width=True)
+    if ask_clicked or queued_from_example:
+        st.session_state["run_requested"] = True
+        return str(st.session_state.get("question_input", question_text)).strip()
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    if clear_clicked:
-        st.session_state.question_input = ""
-        st.session_state.latest_result = None
-        st.session_state.run_requested = False
-        st.rerun()
-
-    if submitted:
-        st.session_state.run_requested = True
-
-    return question
-
+    return ""
 
 def run_question_if_needed(question):
-    should_run = st.session_state.get("run_requested", False)
+    question = normalise_text(question)
+
+    should_run = bool(st.session_state.get("run_requested", False)) or bool(question)
 
     if not should_run:
         return
 
-    st.session_state.run_requested = False
+    st.session_state["run_requested"] = False
 
-    question = normalise_text(question)
+    if not question:
+        question = normalise_text(st.session_state.get("question_input", ""))
 
     if not question:
         st.warning("Type a question first.")
@@ -587,7 +601,6 @@ def run_question_if_needed(question):
                 "extra_tables": {},
             }
             st.session_state.latest_question = question
-
 
 def render_latest_result():
     latest_result = st.session_state.get("latest_result")
@@ -629,7 +642,7 @@ def main():
     render_sidebar_examples()
 
     if "question_input" not in st.session_state:
-        st.session_state.question_input = ""
+        st.session_state["question_input"] = ""
 
     if "run_requested" not in st.session_state:
         st.session_state.run_requested = False
