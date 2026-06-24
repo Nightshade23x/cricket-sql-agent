@@ -182,3 +182,5 @@ updated player profile tables
 added comparion of teams such as trophies won
 added best xi for teams
 added what type of player to target per team via squad analysis
+fixed action plan bug
+fixed match plan bug where players such as sai and vaibhav arent showing
