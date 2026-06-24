@@ -602,6 +602,122 @@ def run_question_if_needed(question):
             }
             st.session_state.latest_question = question
 
+# IPL SQL Agent route badge UI override START
+
+def _ipl_badge_text(result):
+    if not isinstance(result, dict):
+        return ""
+
+    route = result.get("route_used")
+    sources = result.get("data_sources")
+    normalised = result.get("normalised_question")
+
+    parts = []
+
+    if route:
+        parts.append(f"Route: {route}")
+
+    if sources:
+        parts.append(f"Data: {sources}")
+
+    if normalised:
+        parts.append(f"Corrected query: {normalised}")
+
+    return " • ".join(parts)
+
+
+def _ipl_is_empty_table(value):
+    return hasattr(value, "empty") and value.empty
+
+
+def render_answer(result):
+    if result is None:
+        return
+
+    if not isinstance(result, dict):
+        st.write(result)
+        return
+
+    paragraph = (
+        result.get("analysis_paragraph")
+        or result.get("paragraph")
+        or result.get("answer")
+        or ""
+    )
+
+    badge_text = _ipl_badge_text(result)
+
+    if paragraph:
+        st.markdown(
+            f"""
+            <div class="answer-card">
+                {paragraph}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if badge_text:
+        st.caption(badge_text)
+
+    fallback_note = result.get("fallback_note")
+
+    if fallback_note:
+        st.info(str(fallback_note))
+
+    main_result = result.get("result")
+    extra_tables = result.get("extra_tables") or {}
+
+    if isinstance(extra_tables, dict):
+        extra_tables = {
+            name: table
+            for name, table in extra_tables.items()
+            if table is not None and not _ipl_is_empty_table(table)
+        }
+
+    if isinstance(main_result, pd.DataFrame) and not main_result.empty:
+        # Avoid repeating one-row summary-only tables when richer tables exist.
+        lower_cols = {
+            str(column).lower().replace("_", " ")
+            for column in main_result.columns
+        }
+
+        summary_only = lower_cols.issubset({"section", "summary", "#"})
+
+        if not summary_only:
+            st.markdown('<div class="section-title">Main result</div>', unsafe_allow_html=True)
+            render_dataframe(main_result, "Main result")
+
+    if extra_tables:
+        tab_names = list(extra_tables.keys())
+        tabs = st.tabs(tab_names)
+
+        for tab, name in zip(tabs, tab_names):
+            with tab:
+                render_dataframe(extra_tables[name], name)
+
+    sql_query = result.get("sql_query")
+
+    if sql_query:
+        with st.expander("SQL used"):
+            st.code(str(sql_query), language="sql")
+
+    similar_questions = result.get("similar_questions") or []
+
+    if similar_questions:
+        st.markdown('<div class="section-title">Try a related question</div>', unsafe_allow_html=True)
+
+        for index, question in enumerate(similar_questions[:6]):
+            st.button(
+                question,
+                key=f"similar_question_{index}_{question}",
+                on_click=select_question,
+                args=(question,),
+                use_container_width=True,
+            )
+
+# IPL SQL Agent route badge UI override END
+
 def render_latest_result():
     latest_result = st.session_state.get("latest_result")
     latest_question = st.session_state.get("latest_question")
@@ -658,3 +774,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
