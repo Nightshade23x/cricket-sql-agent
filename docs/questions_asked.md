@@ -476,3 +476,7 @@ under player profile,in season trend we should add fifties and hundreds in the s
 who has the most wickets in powerplay in 2026 failed. who has the most wickets in death overs also failed.who has the most wickets in pwerplay without season failed as well
 who has bowled the most dot balls must also be added...per season,per team,per venue etc...most dot balls in pp,death overs etc as well
 when i press the clear button it gives a big error(check image)
+
+compare csk and mi,finals played for mi is wrong,its giving 2 finals which is wrong...head to head matches is good,except we need to add some tags to the games,so if one of thr games was a final it should say final,or league stage etc...also one of the cols is balls recorded which doesnt make sense...
+best current xi for a team needs to be arranged in batting order...model should be smart enough to make an xi that has balance...rn its giving mostly bowlers with a couple of batsman
+how can csk beat gt,firstly the text in tables is getting cut off...and the useful tables we had before such as opponent key batsman,key matchups etc has been removed,pls bring it back it was super useful

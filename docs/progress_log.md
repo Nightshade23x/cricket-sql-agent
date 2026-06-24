@@ -174,3 +174,11 @@ most fifties in playoffs
 team lost percent at a venue
 improved tactical matchups
 improved player profiles
+
+day 13
+added stability tests
+added support for dot balls
+updated player profile tables
+added comparion of teams such as trophies won
+added best xi for teams
+added what type of player to target per team via squad analysis
