@@ -11171,3 +11171,891 @@ def answer_question_with_fallback(user_question):
     return result
 
 # IPL SQL Agent empty-table cleanup and player matchup fallback END
+
+
+# IPL SQL Agent advanced analytics/report routes START
+
+def _ipl_adv_sql_quote(value):
+    return str(value).replace("'", "''")
+
+
+def _ipl_adv_sql_list(values):
+    items = [
+        "'" + _ipl_adv_sql_quote(value) + "'"
+        for value in values
+        if value and str(value).strip()
+    ]
+
+    if not items:
+        return "('')"
+
+    return "(" + ", ".join(items) + ")"
+
+
+def _ipl_adv_team_lookup(text_value):
+    text = str(text_value or "").lower().strip()
+
+    teams = [
+        ("CSK", "Chennai Super Kings", ["Chennai Super Kings"], ["csk", "chennai"]),
+        ("MI", "Mumbai Indians", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "Royal Challengers Bengaluru", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "royal challengers", "bangalore", "bengaluru"]),
+        ("GT", "Gujarat Titans", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "Kolkata Knight Riders", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "Rajasthan Royals", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "Sunrisers Hyderabad", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("DC", "Delhi Capitals", ["Delhi Daredevils", "Delhi Capitals"], ["dc", "delhi"]),
+        ("PBKS", "Punjab Kings", ["Kings XI Punjab", "Punjab Kings", "Punjab franchise"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "Lucknow Super Giants", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+    ]
+
+    for team_code, team_name, aliases, triggers in teams:
+        if text in triggers:
+            return team_code, team_name, aliases
+
+    for team_code, team_name, aliases, triggers in teams:
+        if any(trigger in text for trigger in triggers):
+            return team_code, team_name, aliases
+
+    return None, None, []
+
+
+def _ipl_adv_is_team_text(text_value):
+    team_code, team_name, aliases = _ipl_adv_team_lookup(text_value)
+    return bool(team_code)
+
+
+def _ipl_adv_player_names(player_label):
+    from app.db import run_query
+
+    label = str(player_label or "").strip()
+
+    if not label:
+        return []
+
+    lower_label = label.lower()
+
+    if "suryavanshi" in lower_label or "sooryavanshi" in lower_label or ("vaibhav" in lower_label and "surya" in lower_label):
+        return ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"]
+
+    label_sql = _ipl_adv_sql_quote(label)
+
+    names = [label]
+
+    squad_sql = f"""
+SELECT DISTINCT TOP 10
+    display_name,
+    cricsheet_name
+FROM current_squads
+WHERE LOWER(COALESCE(display_name, '')) LIKE LOWER('%{label_sql}%')
+   OR LOWER(COALESCE(cricsheet_name, '')) LIKE LOWER('%{label_sql}%')
+ORDER BY display_name, cricsheet_name;
+""".strip()
+
+    try:
+        df = run_query(squad_sql)
+
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                for column in ["display_name", "cricsheet_name"]:
+                    value = row.get(column)
+
+                    if value is not None:
+                        value_text = str(value).strip()
+
+                        if value_text and value_text not in names:
+                            names.append(value_text)
+
+    except Exception:
+        pass
+
+    delivery_sql = f"""
+SELECT DISTINCT TOP 10
+    striker AS player_name
+FROM deliveries
+WHERE LOWER(COALESCE(striker, '')) LIKE LOWER('%{label_sql}%')
+UNION
+SELECT DISTINCT TOP 10
+    bowler AS player_name
+FROM deliveries
+WHERE LOWER(COALESCE(bowler, '')) LIKE LOWER('%{label_sql}%');
+""".strip()
+
+    try:
+        df = run_query(delivery_sql)
+
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                value = row.get("player_name")
+
+                if value is not None:
+                    value_text = str(value).strip()
+
+                    if value_text and value_text not in names:
+                        names.append(value_text)
+
+    except Exception:
+        pass
+
+    return names
+
+
+def _ipl_adv_player_filter(column_name, player_label):
+    names = _ipl_adv_player_names(player_label)
+    clauses = []
+
+    for name in names:
+        name_sql = _ipl_adv_sql_quote(name)
+        clauses.append(f"{column_name} = '{name_sql}'")
+        clauses.append(f"{column_name} LIKE '%{name_sql}%'")
+
+    if not clauses:
+        return "1=0"
+
+    return "(" + " OR ".join(clauses) + ")"
+
+
+def _ipl_adv_phase_case(ball_column="d.ball"):
+    return f"""
+CASE
+    WHEN FLOOR({ball_column}) BETWEEN 0 AND 5 THEN 'Powerplay'
+    WHEN FLOOR({ball_column}) BETWEEN 6 AND 15 THEN 'Middle overs'
+    ELSE 'Death overs'
+END
+""".strip()
+
+
+def _ipl_adv_add_sample_notes(result):
+    if not isinstance(result, dict):
+        return result
+
+    tables = []
+
+    if hasattr(result.get("result"), "columns"):
+        tables.append(result["result"])
+
+    extra_tables = result.get("extra_tables")
+
+    if isinstance(extra_tables, dict):
+        tables.extend([table for table in extra_tables.values() if hasattr(table, "columns")])
+
+    added_note = False
+
+    for table in tables:
+        lower_map = {
+            str(column).lower(): column
+            for column in table.columns
+        }
+
+        balls_col = None
+
+        for candidate in ["balls", "phase_balls", "length_balls", "legal_balls"]:
+            if candidate in lower_map:
+                balls_col = lower_map[candidate]
+                break
+
+        if not balls_col:
+            continue
+
+        if "sample_note" in table.columns:
+            continue
+
+        try:
+            table["sample_note"] = table[balls_col].apply(
+                lambda value: "Small sample" if float(value) < 12 else "Usable sample"
+            )
+            added_note = True
+        except Exception:
+            continue
+
+    if added_note:
+        paragraph = result.get("analysis_paragraph") or result.get("paragraph") or ""
+        note = " Small-sample labels are added where the table is based on limited balls."
+
+        if note.strip() not in paragraph:
+            paragraph = (paragraph + note).strip()
+
+        result["analysis_paragraph"] = paragraph
+        result["paragraph"] = paragraph
+
+    return result
+
+
+def _ipl_adv_parse_compare(question):
+    import re
+
+    text = str(question or "").strip()
+
+    match = re.search(
+        r"\bcompare\s+(.+?)\s+(?:and|vs|versus)\s+(.+?)\s*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        return match.group(1).strip(" .?"), match.group(2).strip(" .?")
+
+    match = re.search(
+        r"\bwhich team has better\s+.+?\s+(.+?)\s+(?:or|and|vs|versus)\s+(.+?)\s*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        return match.group(1).strip(" .?"), match.group(2).strip(" .?")
+
+    return None, None
+
+
+def _ipl_adv_direct_player_comparison(question):
+    import pandas as pd
+    from app.db import run_query
+
+    left, right = _ipl_adv_parse_compare(question)
+
+    if not left or not right:
+        return None
+
+    if _ipl_adv_is_team_text(left) or _ipl_adv_is_team_text(right):
+        return None
+
+    left_filter_bat = _ipl_adv_player_filter("d.striker", left)
+    right_filter_bat = _ipl_adv_player_filter("d.striker", right)
+    left_filter_bowl = _ipl_adv_player_filter("d.bowler", left)
+    right_filter_bowl = _ipl_adv_player_filter("d.bowler", right)
+
+    sql = f"""
+WITH player_labels AS (
+    SELECT 'A' AS side, '{_ipl_adv_sql_quote(left)}' AS input_name
+    UNION ALL
+    SELECT 'B' AS side, '{_ipl_adv_sql_quote(right)}' AS input_name
+),
+batting_innings AS (
+    SELECT
+        'A' AS side,
+        d.match_id,
+        d.innings,
+        d.striker AS player,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls
+    FROM deliveries d
+    WHERE {left_filter_bat}
+      AND d.innings IN (1, 2)
+    GROUP BY d.match_id, d.innings, d.striker
+
+    UNION ALL
+
+    SELECT
+        'B' AS side,
+        d.match_id,
+        d.innings,
+        d.striker AS player,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls
+    FROM deliveries d
+    WHERE {right_filter_bat}
+      AND d.innings IN (1, 2)
+    GROUP BY d.match_id, d.innings, d.striker
+),
+batting_summary AS (
+    SELECT
+        side,
+        COUNT(DISTINCT match_id) AS batting_matches,
+        COUNT(*) AS batting_innings,
+        SUM(innings_runs) AS runs,
+        SUM(balls) AS balls,
+        MAX(innings_runs) AS highest_score,
+        SUM(CASE WHEN innings_runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS fifties,
+        SUM(CASE WHEN innings_runs >= 100 THEN 1 ELSE 0 END) AS hundreds
+    FROM batting_innings
+    WHERE balls > 0 OR innings_runs > 0
+    GROUP BY side
+),
+bowling_summary AS (
+    SELECT
+        'A' AS side,
+        COUNT(DISTINCT d.match_id) AS bowling_matches,
+        COUNT(DISTINCT CONCAT(CAST(d.match_id AS varchar(50)), '-', CAST(d.innings AS varchar(10)))) AS bowling_innings,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        COUNT(
+            CASE
+                WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+                THEN 1
+            END
+        ) AS wickets
+    FROM deliveries d
+    WHERE {left_filter_bowl}
+      AND d.innings IN (1, 2)
+
+    UNION ALL
+
+    SELECT
+        'B' AS side,
+        COUNT(DISTINCT d.match_id) AS bowling_matches,
+        COUNT(DISTINCT CONCAT(CAST(d.match_id AS varchar(50)), '-', CAST(d.innings AS varchar(10)))) AS bowling_innings,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        COUNT(
+            CASE
+                WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+                THEN 1
+            END
+        ) AS wickets
+    FROM deliveries d
+    WHERE {right_filter_bowl}
+      AND d.innings IN (1, 2)
+)
+SELECT
+    pl.input_name AS player,
+    COALESCE(bs.batting_matches, 0) AS batting_matches,
+    COALESCE(bs.batting_innings, 0) AS batting_innings,
+    COALESCE(bs.runs, 0) AS runs,
+    COALESCE(bs.highest_score, 0) AS highest_score,
+    COALESCE(bs.fifties, 0) AS fifties,
+    COALESCE(bs.hundreds, 0) AS hundreds,
+    ROUND(COALESCE(bs.runs, 0) * 100.0 / NULLIF(bs.balls, 0), 2) AS batting_strike_rate,
+    COALESCE(bow.bowling_matches, 0) AS bowling_matches,
+    COALESCE(bow.bowling_innings, 0) AS bowling_innings,
+    CAST(COALESCE(bow.legal_balls, 0) / 6 AS varchar(20)) + '.' + CAST(COALESCE(bow.legal_balls, 0) % 6 AS varchar(1)) AS overs_bowled,
+    COALESCE(bow.wickets, 0) AS wickets,
+    ROUND(COALESCE(bow.runs_conceded, 0) * 6.0 / NULLIF(bow.legal_balls, 0), 2) AS economy
+FROM player_labels pl
+LEFT JOIN batting_summary bs
+    ON pl.side = bs.side
+LEFT JOIN bowling_summary bow
+    ON pl.side = bow.side
+ORDER BY pl.side;
+""".strip()
+
+    try:
+        comparison_df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The player comparison query failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    if comparison_df is None:
+        comparison_df = pd.DataFrame()
+
+    paragraph = (
+        f"This compares {left} and {right} using local IPL batting and bowling records. "
+        "Use batting columns for batters and bowling columns for bowlers/all-rounders."
+    )
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": comparison_df,
+        "extra_tables": {"Player Comparison": comparison_df},
+        "sql_query": sql,
+        "similar_questions": [
+            f"analyse {left}",
+            f"analyse {right}",
+            f"compare {right} and {left}",
+        ],
+    }
+
+
+def _ipl_adv_direct_team_comparison(question):
+    import pandas as pd
+    from app.db import run_query
+
+    left, right = _ipl_adv_parse_compare(question)
+
+    if not left or not right:
+        return None
+
+    left_code, left_name, left_aliases = _ipl_adv_team_lookup(left)
+    right_code, right_name, right_aliases = _ipl_adv_team_lookup(right)
+
+    if not left_code or not right_code:
+        return None
+
+    left_aliases_sql = _ipl_adv_sql_list(left_aliases)
+    right_aliases_sql = _ipl_adv_sql_list(right_aliases)
+
+    left_code_sql = _ipl_adv_sql_quote(left_code)
+    right_code_sql = _ipl_adv_sql_quote(right_code)
+
+    sql = f"""
+WITH team_list AS (
+    SELECT '{left_code_sql}' AS team_code, '{_ipl_adv_sql_quote(left_name)}' AS team_name
+    UNION ALL
+    SELECT '{right_code_sql}' AS team_code, '{_ipl_adv_sql_quote(right_name)}' AS team_name
+),
+role_split AS (
+    SELECT
+        team_code,
+        COUNT(*) AS squad_players,
+        SUM(CASE WHEN role LIKE '%Batter%' OR role LIKE '%WK%' THEN 1 ELSE 0 END) AS batting_options,
+        SUM(CASE WHEN role LIKE '%Bowler%' THEN 1 ELSE 0 END) AS bowling_options,
+        SUM(CASE WHEN role LIKE '%All%' THEN 1 ELSE 0 END) AS all_rounders
+    FROM current_squads
+    WHERE team_code IN ('{left_code_sql}', '{right_code_sql}')
+    GROUP BY team_code
+),
+batting AS (
+    SELECT
+        CASE
+            WHEN d.batting_team IN {left_aliases_sql} THEN '{left_code_sql}'
+            WHEN d.batting_team IN {right_aliases_sql} THEN '{right_code_sql}'
+        END AS team_code,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls
+    FROM deliveries d
+    WHERE d.batting_team IN {left_aliases_sql}
+       OR d.batting_team IN {right_aliases_sql}
+    GROUP BY
+        CASE
+            WHEN d.batting_team IN {left_aliases_sql} THEN '{left_code_sql}'
+            WHEN d.batting_team IN {right_aliases_sql} THEN '{right_code_sql}'
+        END
+),
+bowling AS (
+    SELECT
+        CASE
+            WHEN d.bowling_team IN {left_aliases_sql} THEN '{left_code_sql}'
+            WHEN d.bowling_team IN {right_aliases_sql} THEN '{right_code_sql}'
+        END AS team_code,
+        COUNT(
+            CASE
+                WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+                THEN 1
+            END
+        ) AS wickets,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded
+    FROM deliveries d
+    WHERE d.bowling_team IN {left_aliases_sql}
+       OR d.bowling_team IN {right_aliases_sql}
+    GROUP BY
+        CASE
+            WHEN d.bowling_team IN {left_aliases_sql} THEN '{left_code_sql}'
+            WHEN d.bowling_team IN {right_aliases_sql} THEN '{right_code_sql}'
+        END
+)
+SELECT
+    tl.team_code,
+    tl.team_name,
+    COALESCE(rs.squad_players, 0) AS squad_players,
+    COALESCE(rs.batting_options, 0) AS batting_options,
+    COALESCE(rs.bowling_options, 0) AS bowling_options,
+    COALESCE(rs.all_rounders, 0) AS all_rounders,
+    ROUND(COALESCE(bat.runs, 0) * 100.0 / NULLIF(bat.balls, 0), 2) AS historical_batting_sr,
+    COALESCE(bowl.wickets, 0) AS historical_wickets,
+    ROUND(COALESCE(bowl.runs_conceded, 0) * 6.0 / NULLIF(bowl.legal_balls, 0), 2) AS historical_economy
+FROM team_list tl
+LEFT JOIN role_split rs
+    ON tl.team_code = rs.team_code
+LEFT JOIN batting bat
+    ON tl.team_code = bat.team_code
+LEFT JOIN bowling bowl
+    ON tl.team_code = bowl.team_code
+ORDER BY tl.team_code;
+""".strip()
+
+    try:
+        comparison_df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The team comparison query failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    if comparison_df is None:
+        comparison_df = pd.DataFrame()
+
+    paragraph = (
+        f"This compares {left_name} and {right_name} using current squad composition plus historical IPL batting and bowling indicators."
+    )
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": comparison_df,
+        "extra_tables": {"Team Comparison": comparison_df},
+        "sql_query": sql,
+        "similar_questions": [
+            f"how can {left_code} beat {right_code}",
+            f"analyse {left_code} squad",
+            f"analyse {right_code} squad",
+        ],
+    }
+
+
+def _ipl_adv_direct_current_squad_specialists(question):
+    import pandas as pd
+    from app.db import run_query
+
+    q = str(question or "").lower()
+
+    if "current" not in q and "squad" not in q:
+        return None
+
+    team_code, team_name, aliases = _ipl_adv_team_lookup(q)
+
+    if not team_code:
+        return None
+
+    team_code_sql = _ipl_adv_sql_quote(team_code)
+
+    is_bowler_route = "bowler" in q or "bowling" in q
+    is_finisher_route = "finisher" in q or "death batter" in q or "death batting" in q
+
+    if not (is_bowler_route or is_finisher_route):
+        return None
+
+    if "powerplay" in q:
+        phase_label = "Powerplay"
+        phase_filter = "FLOOR(d.ball) BETWEEN 0 AND 5"
+    elif "middle" in q:
+        phase_label = "Middle overs"
+        phase_filter = "FLOOR(d.ball) BETWEEN 6 AND 15"
+    else:
+        phase_label = "Death overs"
+        phase_filter = "FLOOR(d.ball) BETWEEN 16 AND 19"
+
+    if is_bowler_route:
+        sql = f"""
+WITH current_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role
+    FROM current_squads
+    WHERE team_code = '{team_code_sql}'
+      AND COALESCE(is_active, 1) = 1
+      AND (
+            role LIKE '%Bowler%'
+         OR role LIKE '%All%'
+      )
+),
+bowling AS (
+    SELECT
+        cb.display_name AS player,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        COUNT(
+            CASE
+                WHEN d.wicket_type IS NOT NULL
+                 AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'obstructing the field')
+                THEN 1
+            END
+        ) AS wickets
+    FROM current_bowlers cb
+    JOIN deliveries d
+        ON d.bowler = cb.cricsheet_name
+        OR d.bowler = cb.display_name
+        OR d.bowler LIKE '%' + cb.display_name
+        OR cb.cricsheet_name LIKE '%' + d.bowler
+    WHERE {phase_filter}
+      AND d.innings IN (1, 2)
+    GROUP BY cb.display_name
+)
+SELECT TOP 10
+    player,
+    matches,
+    CAST(balls / 6 AS varchar(20)) + '.' + CAST(balls % 6 AS varchar(1)) AS overs,
+    wickets,
+    ROUND(runs_conceded * 6.0 / NULLIF(balls, 0), 2) AS economy,
+    CASE
+        WHEN balls < 24 THEN 'Small sample'
+        WHEN wickets >= 10 THEN 'Wicket threat'
+        WHEN ROUND(runs_conceded * 6.0 / NULLIF(balls, 0), 2) <= 8 THEN 'Control option'
+        ELSE 'Usable option'
+    END AS role_reading
+FROM bowling
+WHERE balls > 0
+ORDER BY
+    wickets DESC,
+    economy ASC,
+    balls DESC;
+""".strip()
+
+        title = f"Best {phase_label} bowlers in current {team_code} squad"
+
+    else:
+        sql = f"""
+WITH current_batters AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role
+    FROM current_squads
+    WHERE team_code = '{team_code_sql}'
+      AND COALESCE(is_active, 1) = 1
+      AND (
+            role LIKE '%Batter%'
+         OR role LIKE '%WK%'
+         OR role LIKE '%All%'
+      )
+),
+batting AS (
+    SELECT
+        cb.display_name AS player,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(
+            CASE
+                WHEN COALESCE(d.wides, 0) = 0
+                 AND COALESCE(d.noballs, 0) = 0
+                THEN 1
+            END
+        ) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(
+            CASE
+                WHEN d.wicket_type IS NOT NULL
+                 AND d.player_dismissed = d.striker
+                THEN 1
+            END
+        ) AS dismissals
+    FROM current_batters cb
+    JOIN deliveries d
+        ON d.striker = cb.cricsheet_name
+        OR d.striker = cb.display_name
+        OR d.striker LIKE '%' + cb.display_name
+        OR cb.cricsheet_name LIKE '%' + d.striker
+    WHERE {phase_filter}
+      AND d.innings IN (1, 2)
+    GROUP BY cb.display_name
+)
+SELECT TOP 10
+    player,
+    matches,
+    balls,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+    CASE
+        WHEN balls < 20 THEN 'Small sample'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 160 THEN 'High-impact option'
+        WHEN ROUND(runs * 100.0 / NULLIF(balls, 0), 2) >= 135 THEN 'Good option'
+        ELSE 'Usable option'
+    END AS role_reading
+FROM batting
+WHERE balls > 0
+ORDER BY
+    strike_rate DESC,
+    runs DESC,
+    balls DESC;
+""".strip()
+
+        title = f"Best {phase_label} finishers in current {team_code} squad"
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The current squad specialist query failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    if df is None:
+        df = pd.DataFrame()
+
+    paragraph = f"{title}. This route only uses players listed in the current squad table."
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": df,
+        "extra_tables": {title: df},
+        "sql_query": sql,
+        "similar_questions": [
+            f"analyse {team_code} squad",
+            f"best death bowlers in current {team_code} squad",
+            f"best finishers in current {team_code} squad",
+        ],
+    }
+
+
+def _ipl_adv_direct_report_mode(question):
+    import pandas as pd
+
+    q = str(question or "").lower().strip()
+
+    if not (
+        "scouting report" in q
+        or "full report" in q
+        or "match report" in q
+        or q.startswith("make a report")
+    ):
+        return None
+
+    try:
+        if " vs " in q or " beat " in q:
+            cleaned = q.replace("make a", "").replace("full", "").replace("scouting", "").replace("match report", "").replace("report", "").strip()
+
+            if " vs " in cleaned:
+                parts = cleaned.split(" vs ", 1)
+                left = parts[0].strip()
+                right = parts[1].strip()
+                synthetic_question = f"how can {left} beat {right}"
+
+            else:
+                synthetic_question = cleaned
+
+            base = _previous_answer_question_with_fallback_before_advanced_routes(synthetic_question)
+
+            if isinstance(base, dict):
+                paragraph = base.get("analysis_paragraph") or base.get("paragraph") or ""
+
+                report_paragraph = (
+                    "Scouting report: "
+                    + paragraph
+                    + " Read this as a structured match report: start with venue/toss context, then batting matchups, bowling matchups, and sample-size notes in the tables."
+                )
+
+                base["analysis_paragraph"] = report_paragraph
+                base["paragraph"] = report_paragraph
+
+                return base
+
+        # Team report.
+        team_code, team_name, aliases = _ipl_adv_team_lookup(q)
+
+        if team_code:
+            base = _previous_answer_question_with_fallback_before_advanced_routes(f"analyse {team_code} squad")
+
+            if isinstance(base, dict):
+                paragraph = base.get("analysis_paragraph") or base.get("paragraph") or ""
+
+                report_paragraph = (
+                    f"Scouting report on {team_name}: "
+                    + paragraph
+                    + " The key reading is the balance between current squad roles, recent performance, and phase-specific tactical options."
+                )
+
+                base["analysis_paragraph"] = report_paragraph
+                base["paragraph"] = report_paragraph
+
+                return base
+
+        # Player report.
+        import re
+
+        match = re.search(
+            r"(?:on|about)\s+(.+?)\s*$",
+            str(question or ""),
+            flags=re.IGNORECASE,
+        )
+
+        player = match.group(1).strip(" .?") if match else str(question).split()[-1]
+
+        base = _previous_answer_question_with_fallback_before_advanced_routes(f"analyse {player}")
+
+        if isinstance(base, dict):
+            paragraph = base.get("analysis_paragraph") or base.get("paragraph") or ""
+
+            report_paragraph = (
+                f"Scouting report on {player}: "
+                + paragraph
+                + " Use the matchup tables to identify difficult bowling types, quiet bowlers, and dismissal threats."
+            )
+
+            base["analysis_paragraph"] = report_paragraph
+            base["paragraph"] = report_paragraph
+
+            return base
+
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The report route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": "",
+            "similar_questions": [],
+        }
+
+    return None
+
+
+try:
+    _previous_answer_question_with_fallback_before_advanced_routes = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_advanced_routes = None
+
+
+def answer_question_with_fallback(user_question):
+    routes = [
+        _ipl_adv_direct_current_squad_specialists,
+        _ipl_adv_direct_team_comparison,
+        _ipl_adv_direct_player_comparison,
+        _ipl_adv_direct_report_mode,
+    ]
+
+    for route in routes:
+        result = route(user_question)
+
+        if result is not None:
+            return _ipl_adv_add_sample_notes(result)
+
+    result = _previous_answer_question_with_fallback_before_advanced_routes(user_question)
+
+    return _ipl_adv_add_sample_notes(result)
+
+# IPL SQL Agent advanced analytics/report routes END
+
