@@ -10,6 +10,16 @@ from app.llm_agent import answer_question_with_fallback
 
 
 TESTS = [
+
+    {
+        "question": "tell me about Chepauk stats",
+        "expected_columns": ["venue_profile", "matches", "avg_first_innings_score"],
+    },
+    {
+        "question": "tell me about Eden Gardens stats",
+        "expected_columns": ["venue_profile", "matches", "avg_first_innings_score"],
+    },
+
     {
         "question": "analyse Suresh Raina",
         "expected_columns": ["resolved_player"],
@@ -40,7 +50,7 @@ TESTS = [
     },
     {
         "question": "how can CSK beat GT at Chepauk",
-        "expected_columns": ["section", "recommendation"],
+        "expected_columns": ["section", "action"],
     },
     {
         "question": "who has the most wickets in powerplay",

@@ -480,3 +480,7 @@ when i press the clear button it gives a big error(check image)
 compare csk and mi,finals played for mi is wrong,its giving 2 finals which is wrong...head to head matches is good,except we need to add some tags to the games,so if one of thr games was a final it should say final,or league stage etc...also one of the cols is balls recorded which doesnt make sense...
 best current xi for a team needs to be arranged in batting order...model should be smart enough to make an xi that has balance...rn its giving mostly bowlers with a couple of batsman
 how can csk beat gt,firstly the text in tables is getting cut off...and the useful tables we had before such as opponent key batsman,key matchups etc has been removed,pls bring it back it was super useful
+
+in match plans,we need to also bring back if toss won then bat or bowl according to venue and opposition...also if batting first then this is the plan,if bowling first this is the plan etc...again for gt in key batters there is no sai sudharsan?...also under main result i want to see key matchups
+
+tell me about chepauk stats are not working,same with eden gardens...so venue profiles are not working
