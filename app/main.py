@@ -280,7 +280,7 @@ def render_details(df):
         title = " - ".join(pieces) if pieces else f"Detail {index + 1}"
 
         with st.expander(title):
-            st.markdown(str(row.get(detail_col)))
+            st.markdown(_ipl_frontend_clean_text(row.get(detail_col)))
 
 
 def render_dataframe(df, name=None):
@@ -312,6 +312,134 @@ def render_dataframe(df, name=None):
         st.write(display_df)
 
 
+
+# IPL SQL Agent display polish START
+
+def _ipl_frontend_clean_text(value):
+    import re
+
+    if value is None:
+        return value
+
+    text = str(value)
+
+    def repl(match):
+        try:
+            number = float(match.group(0))
+            return f"{number:.2f}".rstrip("0").rstrip(".")
+        except Exception:
+            return match.group(0)
+
+    text = re.sub(r"(?<![0-9])\d+\.\d{4,}(?![0-9])", repl, text)
+    text = text.replace("shot-events", "shot events")
+
+    return text
+
+
+def _ipl_frontend_column_key(column):
+    return str(column).strip().lower().replace("_", " ")
+
+
+def _ipl_frontend_should_drop_column(column, series):
+    key = _ipl_frontend_column_key(column)
+
+    always_hide = {
+        "cricsheet name",
+        "is overseas",
+        "is active",
+        "full name striker",
+        "full name bowler",
+    }
+
+    if key in always_hide:
+        return True
+
+    hide_if_empty = {
+        "batting style",
+        "bowling style",
+        "bowling arm",
+    }
+
+    if key not in hide_if_empty:
+        return False
+
+    try:
+        values = [str(x).strip().lower() for x in series.dropna().tolist()]
+        useful = [
+            x for x in values
+            if x not in {"", "unknown", "nan", "none", "null"}
+        ]
+        return len(useful) == 0
+    except Exception:
+        return False
+
+
+def _ipl_frontend_is_summary_only_dataframe(value):
+    if not isinstance(value, pd.DataFrame) or value.empty:
+        return False
+
+    cols = {
+        str(c).strip().lower().replace("_", " ")
+        for c in value.columns
+    }
+
+    return cols.issubset({"section", "summary", "#"})
+
+
+def clean_dataframe(df):
+    if df is None:
+        return None
+
+    if not isinstance(df, pd.DataFrame):
+        return df
+
+    if df.empty:
+        return df
+
+    display_df = df.copy()
+
+    drop_cols = []
+
+    for col in display_df.columns:
+        if str(col).lower() in HIDDEN_COLUMNS:
+            drop_cols.append(col)
+            continue
+
+        if _ipl_frontend_should_drop_column(col, display_df[col]):
+            drop_cols.append(col)
+
+    if drop_cols:
+        display_df = display_df.drop(columns=drop_cols)
+
+    if "#" not in display_df.columns:
+        display_df.insert(0, "#", range(1, len(display_df) + 1))
+
+    display_df = display_df.rename(
+        columns={
+            column: str(column).replace("_", " ").title()
+            for column in display_df.columns
+        }
+    )
+
+    display_df = display_df.drop(
+        columns=[
+            c for c in display_df.columns
+            if c in {
+                "Cricsheet Name",
+                "Is Overseas",
+                "Is Active",
+                "Full Name Striker",
+                "Full Name Bowler",
+            }
+        ],
+        errors="ignore",
+    )
+
+    return display_df
+
+# IPL SQL Agent display polish END
+
+
 def render_answer(result):
     if not isinstance(result, dict):
         st.write(result)
@@ -331,7 +459,7 @@ def render_answer(result):
         st.markdown(
             f"""
             <div class="result-card answer-text">
-                {str(paragraph)}
+                {_ipl_frontend_clean_text(paragraph)}
             </div>
             """,
             unsafe_allow_html=True,
@@ -339,7 +467,11 @@ def render_answer(result):
 
     main_result = result.get("result")
 
-    if isinstance(main_result, pd.DataFrame) and not main_result.empty:
+    if (
+        isinstance(main_result, pd.DataFrame)
+        and not main_result.empty
+        and not _ipl_frontend_is_summary_only_dataframe(main_result)
+    ):
         st.markdown('<div class="section-title">Main result</div>', unsafe_allow_html=True)
         render_dataframe(main_result, "Main result")
 

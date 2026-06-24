@@ -445,3 +445,20 @@ the tables themselves are perfect...same with analyse rcb squad...a proper parag
 what is csk win loss percentage at chepauk failed
 
 best bowlers agaisnt kohli for gt,is not using updated squads..its giving noor ahmad who plays for csk now
+
+analyse dc squad works,but under squad batting style is empty,so is bowling style..bowling arm is unknown for every bowler...
+most fifties in ipl playoffs works but is it counting finals also?
+who has the strongest current squad works but we need to add an explanation also as to why rcb is the strongest etc...like the parameters used etc
+for best bowlers against kohli for gt works but gives unneccesary stuff,check image...also under details the strike rate has too many decimal points...but its using current squads now which is perfect
+
+in who has the mosy fifties in ipl playoffs,add an innings col as well...same with most hundreds in ipl playoffs
+also does most fifties mean 50 -99 score? if yes then add a note under most fifties also that it means that...and if the user means fifty plus scores then ask that instead of this
+who has the most fifty plus scores failed,so we add that...so this should include any score above 50,regardless if they ended up with a 100 etc,but if fifties already means this then no need to add this...if we do need to add this then we add it for team wise,venue wise,against team,playoffs,
+under who are the top 10 wickets takers in ipl...we should add a matches col as well and overs bowled,same with most runs in ipl,innings col..ensure innings col is present in scenarios also such as top run scorers for csk etc...add innings col and matches col
+
+patches work,except cols need to be rearranged...under top 10 wicket takers,wickets col needs to come before runs conceded...also no need for runs conceded...also innings and matches calculations seem off..u cant have more innings than matches...like narine has 200 matches but 202 innings which isnt possible...for bowlers,innings means when they bowled only,and for batsman it means when they batted only
+
+in match plans...recent chase benchmark is coming empty
+opponent batting first restrict is also empty,recent restrict benchmark as well
+top 3 depedency summary is also empty,
+under analyse sooryavanshi...bowler success and bowler dismissals was empty,same with quiet bowlers,actually all the analysis cols about matchips were empty including active quiet bowlers or difficult bowler types,for kohli etc its there but we need to ensure its present for every player asked
