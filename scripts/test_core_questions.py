@@ -12,6 +12,62 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "who are top 10 run scorers in 2026",
+        "expected_columns": ["batter", "team", "runs", "batting_average", "strike_rate"],
+    },
+    {
+        "question": "top 10 wicket takers in 2026",
+        "expected_columns": ["bowler", "team", "wickets", "economy"],
+    },
+
+
+    {
+        "question": "who are top 10 run scoers in 2026",
+        "expected_columns": ["batter", "runs", "batting_average", "strike_rate"],
+    },
+    {
+        "question": "top 10 wicket takers in 2026",
+        "expected_columns": ["bowler", "wickets", "economy"],
+    },
+    {
+        "question": "top 10 wicket takers for csk in 2026",
+        "expected_columns": ["bowler", "wickets", "economy"],
+    },
+    {
+        "question": "top 10 run scorers at Wankhede",
+        "expected_columns": ["batter", "runs", "batting_average", "strike_rate"],
+    },
+    {
+        "question": "top 10 wicket takers at Wankhede",
+        "expected_columns": ["bowler", "wickets", "economy"],
+    },
+
+
+    {
+        "question": "who has won the most trophies",
+        "expected_columns": ["team", "trophies", "years_won"],
+    },
+    {
+        "question": "which team has the best win percentage",
+        "expected_columns": ["team", "matches", "wins", "win_percentage"],
+    },
+    {
+        "question": "who are top 10 run scorers for csk in 2026",
+        "expected_columns": ["batter", "runs", "strike_rate"],
+    },
+
+
+    {
+        "question": "how many fifties does Sooryavanshi have",
+        "expected_columns": ["player", "fifties", "hundreds"],
+    },
+    {
+        "question": "analyze Bumrah",
+        "expected_columns": ["player", "wickets", "economy"],
+    },
+
+
+    {
         "question": "who has the fastest 100 in IPL history",
         "expected_columns": ["batter", "balls_to_hundred", "innings_runs"],
     },

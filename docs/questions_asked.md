@@ -489,3 +489,12 @@ how can kkr bowl to gaikwad in middle overs gave a perfect result...lets improve
 who has the fastest 50 in ipl history is bugged...its giving pathan as num 1 with balls to fifty at 15,it lists jaiswal etc with 13 balls but order is off...same with fastest 50 for mi,order is off...seems to be sorted by season and not balls to fifty
 
 fastest 100 is also sorting by season rather than balls
+
+how many fifties does sooryavanshi have gave me list of most fifties overall...also in this list of most fifties,remove the seasons col it isnt needed
+analyze bumrah is analyzing his batting...we need to show both for every player but if its a bowler then bowling first then batting etc...if its an allrounder like narine then any order is fine
+
+in who has won the most trophies,ans is correct but under years won,the years need to be arranged in assending order
+which team has the best win percentage failed
+who are top 10 run scorers for csk in 2026 failed
+
+who are top 10 run scoers in 2026 failed...add that and wickets also for all seasons also so top 10 wicket takers in 2026...also top 10 wicket takers for csk in 2026...so team wise also...add venue wise also
