@@ -184,3 +184,7 @@ added best xi for teams
 added what type of player to target per team via squad analysis
 fixed action plan bug
 fixed match plan bug where players such as sai and vaibhav arent showing
+
+day 14
+added cache tables to improve performance
+added support for better matchups data
