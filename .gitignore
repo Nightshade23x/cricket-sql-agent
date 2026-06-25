@@ -10,3 +10,5 @@ backups/
 *backup*.py
 # Local patch/backups
 patch_*.py
+# Local patch/backups/generated SQL
+scripts/*.sql

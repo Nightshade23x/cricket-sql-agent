@@ -12,6 +12,30 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "who has the fastest 100 in IPL history",
+        "expected_columns": ["batter", "balls_to_hundred", "innings_runs"],
+    },
+    {
+        "question": "which kkr bowler should bowl to gaikwad in middle overs",
+        "expected_columns": ["section", "action"],
+    },
+
+
+    {
+        "question": "who has the fastest 50 in IPL history",
+        "expected_columns": ["batter", "balls_to_fifty", "innings_runs"],
+    },
+    {
+        "question": "who has the fastest 50 for MI",
+        "expected_columns": ["batter", "balls_to_fifty", "batting_team"],
+    },
+    {
+        "question": "how can KKR bowl to Gaikwad in middle overs",
+        "expected_columns": ["section", "action"],
+    },
+
+
+    {
         "question": "tell me about Chepauk stats",
         "expected_columns": ["venue_profile", "matches", "avg_first_innings_score"],
     },

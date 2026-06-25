@@ -484,3 +484,8 @@ how can csk beat gt,firstly the text in tables is getting cut off...and the usef
 in match plans,we need to also bring back if toss won then bat or bowl according to venue and opposition...also if batting first then this is the plan,if bowling first this is the plan etc...again for gt in key batters there is no sai sudharsan?...also under main result i want to see key matchups
 
 tell me about chepauk stats are not working,same with eden gardens...so venue profiles are not working
+
+how can kkr bowl to gaikwad in middle overs gave a perfect result...lets improve it by adding bowlers in kkr that can be used...if no kkr bowler in middle overs has too much data against gaikwad,we again use proxy,so if hes struggled with leg spinners,find a leg spinner in kkr squad(ensure its the current squad) and suggest that
+who has the fastest 50 in ipl history is bugged...its giving pathan as num 1 with balls to fifty at 15,it lists jaiswal etc with 13 balls but order is off...same with fastest 50 for mi,order is off...seems to be sorted by season and not balls to fifty
+
+fastest 100 is also sorting by season rather than balls

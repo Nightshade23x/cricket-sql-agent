@@ -18059,3 +18059,1493 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent opponent batter resolver v3 SQL Server aggregate fix END
 
+
+# IPL SQL Agent bowling proxy + fastest 50 fix START
+
+def _bpf_q(v):
+    return str(v).replace("'", "''")
+
+
+def _bpf_list(vals):
+    vals = [v for v in vals if v and str(v).strip()]
+    return "(" + ", ".join("'" + _bpf_q(v) + "'" for v in vals) + ")" if vals else "('')"
+
+
+def _bpf_team(t):
+    t = str(t or "").lower().strip()
+    teams = [
+        ("CSK", "Chennai Super Kings", ["Chennai Super Kings"], ["csk", "chennai"]),
+        ("MI", "Mumbai Indians", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "Royal Challengers Bengaluru", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru"]),
+        ("GT", "Gujarat Titans", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "Kolkata Knight Riders", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "Rajasthan Royals", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "Sunrisers Hyderabad", ["Sunrisers Hyderabad"], ["srh", "sunrisers"]),
+        ("DC", "Delhi Capitals", ["Delhi Daredevils", "Delhi Capitals"], ["dc", "delhi"]),
+        ("PBKS", "Punjab Kings", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab"]),
+        ("LSG", "Lucknow Super Giants", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+    ]
+    for code, name, aliases, keys in teams:
+        if t in keys or any(k in t for k in keys):
+            return code, name, aliases
+    return None, None, []
+
+
+def _bpf_batter_aliases(label):
+    raw = str(label or "").strip()
+    low = raw.lower()
+    out = [raw]
+    known = {
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "dhoni": ["MS Dhoni"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sudharsan": ["B Sai Sudharsan", "Sai Sudharsan"],
+        "gill": ["Shubman Gill"],
+    }
+    for k, vals in known.items():
+        if k in low:
+            for v in vals:
+                if v not in out:
+                    out.append(v)
+    return out
+
+
+def _bpf_phase(q, alias="d"):
+    q = str(q or "").lower()
+    b = f"{alias}.ball"
+    if "powerplay" in q or "pwerplay" in q or " pp" in q:
+        return "Powerplay", f"FLOOR({b}) BETWEEN 0 AND 5"
+    if "death" in q:
+        return "Death overs", f"FLOOR({b}) BETWEEN 16 AND 19"
+    return "Middle overs", f"FLOOR({b}) BETWEEN 6 AND 15"
+
+
+def _bpf_style_bucket():
+    return """
+CASE
+    WHEN LOWER(COALESCE(cb.bowling_style,'')) LIKE '%leg%' THEN 'Leg spin'
+    WHEN LOWER(COALESCE(cb.bowling_style,'')) LIKE '%off%' THEN 'Off spin'
+    WHEN LOWER(COALESCE(cb.bowling_style,'')) LIKE '%orthodox%' OR LOWER(COALESCE(cb.bowling_style,'')) LIKE '%slow left%' THEN 'Left-arm orthodox'
+    WHEN LOWER(COALESCE(cb.bowling_style,'')) LIKE '%spin%' OR LOWER(COALESCE(cb.bowling_style,'')) LIKE '%slow%' THEN 'Spin'
+    WHEN LOWER(COALESCE(cb.bowling_arm,'')) LIKE '%left%' AND (LOWER(COALESCE(cb.bowling_style,'')) LIKE '%fast%' OR LOWER(COALESCE(cb.bowling_style,'')) LIKE '%medium%') THEN 'Left-arm pace'
+    WHEN LOWER(COALESCE(cb.bowling_style,'')) LIKE '%fast%' OR LOWER(COALESCE(cb.bowling_style,'')) LIKE '%medium%' THEN 'Pace'
+    ELSE 'Unknown'
+END
+""".strip()
+
+
+def _bpf_parse_bowling_plan(q):
+    import re
+    s = str(q or "")
+    m = re.search(r"\bhow\s+can\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$", s, flags=re.I)
+    if not m:
+        m = re.search(r"\bhow\s+should\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$", s, flags=re.I)
+    if not m:
+        return None
+    team = _bpf_team(m.group(1).strip(" .?"))
+    batter = re.sub(r"\s+in\s+(powerplay|pwerplay|pp|middle overs|middle|death overs|death).*$", "", m.group(2), flags=re.I).strip(" .?")
+    return (team, batter) if team[0] and batter else None
+
+
+def _bpf_bowling_plan(q):
+    import pandas as pd
+    from app.db import run_query
+    parsed = _bpf_parse_bowling_plan(q)
+    if not parsed:
+        return None
+    (team_code, team_name, team_aliases), batter = parsed
+    phase, phase_where = _bpf_phase(q)
+    batter_list = _bpf_list(_bpf_batter_aliases(batter))
+    bucket = _bpf_style_bucket()
+
+    squad_sql = f"""
+SELECT DISTINCT display_name AS bowler, cricsheet_name, role, bowling_style, bowling_arm
+FROM current_squads
+WHERE team_code='{_bpf_q(team_code)}'
+  AND COALESCE(is_active,1)=1
+  AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+ORDER BY display_name;
+""".strip()
+
+    direct_sql = f"""
+WITH current_bowlers AS (
+    SELECT DISTINCT display_name, cricsheet_name, role, bowling_style, bowling_arm
+    FROM current_squads
+    WHERE team_code='{_bpf_q(team_code)}'
+      AND COALESCE(is_active,1)=1
+      AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+)
+SELECT
+    cb.display_name AS bowler,
+    cb.role,
+    cb.bowling_style,
+    cb.bowling_arm,
+    {bucket} AS style_bucket,
+    COUNT(CASE WHEN COALESCE(d.wides,0)=0 AND COALESCE(d.noballs,0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat,0)) AS runs,
+    COUNT(CASE WHEN d.wicket_type IS NOT NULL AND d.player_dismissed=d.striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat,0))*100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides,0)=0 AND COALESCE(d.noballs,0)=0 THEN 1 END),0),2) AS batter_sr
+FROM current_bowlers cb
+LEFT JOIN deliveries d
+    ON (d.bowler=cb.cricsheet_name OR d.bowler=cb.display_name)
+   AND d.striker IN {batter_list}
+   AND d.innings IN (1,2)
+   AND {phase_where}
+GROUP BY cb.display_name, cb.role, cb.bowling_style, cb.bowling_arm
+ORDER BY dismissals DESC, batter_sr ASC, balls DESC, bowler ASC;
+""".strip()
+
+    weakness_sql = f"""
+WITH all_current_bowlers AS (
+    SELECT DISTINCT display_name, cricsheet_name, role, bowling_style, bowling_arm
+    FROM current_squads
+    WHERE COALESCE(is_active,1)=1
+      AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+)
+SELECT
+    {bucket} AS style_bucket,
+    COUNT(CASE WHEN COALESCE(d.wides,0)=0 AND COALESCE(d.noballs,0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat,0)) AS runs,
+    COUNT(CASE WHEN d.wicket_type IS NOT NULL AND d.player_dismissed=d.striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat,0))*100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides,0)=0 AND COALESCE(d.noballs,0)=0 THEN 1 END),0),2) AS batter_sr,
+    CASE WHEN COUNT(CASE WHEN COALESCE(d.wides,0)=0 AND COALESCE(d.noballs,0)=0 THEN 1 END) < 12 THEN 'Small sample' ELSE 'Usable sample' END AS sample_note
+FROM all_current_bowlers cb
+JOIN deliveries d
+    ON (d.bowler=cb.cricsheet_name OR d.bowler=cb.display_name)
+   AND d.striker IN {batter_list}
+   AND d.innings IN (1,2)
+   AND {phase_where}
+GROUP BY {bucket}
+ORDER BY dismissals DESC, batter_sr ASC, balls DESC, style_bucket ASC;
+""".strip()
+
+    try:
+        squad_df = run_query(squad_sql)
+        direct_df = run_query(direct_sql)
+        weakness_df = run_query(weakness_sql)
+    except Exception as e:
+        return {"question": q, "analysis_paragraph": f"Bowling plan route failed: {e}", "result": pd.DataFrame(), "extra_tables": {}, "sql_query": squad_sql + "\n\n" + direct_sql + "\n\n" + weakness_sql}
+
+    squad_df = squad_df if squad_df is not None else pd.DataFrame()
+    direct_df = direct_df if direct_df is not None else pd.DataFrame()
+    weakness_df = weakness_df if weakness_df is not None else pd.DataFrame()
+
+    top_style = None if weakness_df.empty else str(weakness_df.iloc[0].get("style_bucket") or "").strip()
+    proxy_df = squad_df.copy()
+    if not proxy_df.empty and top_style:
+        style_low = top_style.lower()
+        def match_style(row):
+            t = f"{row.get('bowling_style','')} {row.get('bowling_arm','')}".lower()
+            if "leg" in style_low:
+                return "leg" in t
+            if "off" in style_low:
+                return "off" in t
+            if "orthodox" in style_low:
+                return "orthodox" in t or "slow left" in t
+            if "spin" in style_low:
+                return any(x in t for x in ["spin", "slow", "leg", "off", "orthodox"])
+            if "pace" in style_low:
+                return any(x in t for x in ["fast", "medium", "pace"])
+            return False
+        f = proxy_df[proxy_df.apply(match_style, axis=1)]
+        if not f.empty:
+            proxy_df = f.copy()
+    if not proxy_df.empty:
+        proxy_df["proxy_reason"] = f"Current {team_code} option matching {batter}'s weakness type: {top_style or 'best available phase option'}."
+
+    usable_direct = direct_df[direct_df["balls"].fillna(0).astype(float) >= 12] if not direct_df.empty and "balls" in direct_df.columns else pd.DataFrame()
+    plan = pd.DataFrame([
+        {"section": "Primary plan", "action": (f"Use direct {team_code} matchups with 12+ balls." if not usable_direct.empty else f"Use proxy because direct {team_code} data vs {batter} in {phase} is thin."), "why": f"Proxy type: {top_style or 'best current squad option'}."},
+        {"section": "Bowler selection", "action": f"Pick from Current {team_code} Proxy Options.", "why": "Ensures current squad only."},
+        {"section": "Middle-over method", "action": "Bowl to the field, cut singles, and make the batter hit against the matchup.", "why": "Middle overs are about control plus wicket pressure."},
+    ])
+
+    return {
+        "question": q,
+        "analysis_paragraph": f"Bowling plan for {team_name} to {batter} in {phase}. If direct data is thin, it finds the bowling type the batter has struggled with, then suggests current {team_code} bowlers of that type.",
+        "paragraph": f"Bowling plan for {team_name} to {batter} in {phase}. If direct data is thin, it finds the bowling type the batter has struggled with, then suggests current {team_code} bowlers of that type.",
+        "result": plan,
+        "extra_tables": {
+            "Action Plan": plan,
+            f"Direct {team_code} Options vs Batter": direct_df,
+            "Batter Weakness By Bowling Type": weakness_df,
+            f"Current {team_code} Proxy Options": proxy_df,
+            f"Current {team_code} Bowling Squad": squad_df,
+        },
+        "sql_query": squad_sql + "\n\n" + direct_sql + "\n\n" + weakness_sql,
+        "similar_questions": [f"how can {team_code} bowl to {batter} in powerplay", f"how can {team_code} bowl to {batter} in death overs"],
+        "route_used": "Bowling plan with current-squad proxy",
+        "data_sources": "current_squads, deliveries",
+    }
+
+
+def _bpf_extract_season(q):
+    import re
+    m = re.search(r"\b(20\d{2}(?:/\d{2})?)\b", str(q or ""))
+    return m.group(1) if m else None
+
+
+def _bpf_venue_filter(q):
+    import re
+    m = re.search(r"\bat\s+([A-Za-z0-9 .'-]+?)(?:\s+in\s+\d{4}|$)", str(q or ""), flags=re.I)
+    if not m:
+        return "1=1", None
+    v = m.group(1).strip(" .?").lower()
+    if "wankhede" in v:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in v or "chidambaram" in v:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in v:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    return f"LOWER(m.venue) LIKE '%{_bpf_q(v)}%'", v.title()
+
+
+def _bpf_team_filter(q, col):
+    import re
+    m = re.search(r"\bfor\s+([A-Za-z0-9 .]+?)(?:\s+in\s+\d{4}|\s+at\s+|$)", str(q or ""), flags=re.I)
+    if not m:
+        return "1=1", None
+    team = _bpf_team(m.group(1).strip(" .?"))
+    return (f"{col} IN {_bpf_list(team[2])}", team[1]) if team[0] else ("1=1", None)
+
+
+def _bpf_fastest_fifty(q):
+    import pandas as pd
+    from app.db import run_query
+    text = str(q or "").lower()
+    if not ("fastest" in text and ("50" in text or "fifty" in text)):
+        return None
+    season = _bpf_extract_season(q)
+    season_filter = "1=1" if not season else f"d.season='{_bpf_q(season)}'"
+    venue_filter, venue_label = _bpf_venue_filter(q)
+    team_filter, team_name = _bpf_team_filter(q, "d.batting_team")
+    filters = " AND ".join([season_filter, venue_filter, team_filter, "d.innings IN (1,2)"])
+
+    sql = f"""
+WITH legal_events AS (
+    SELECT d.match_id, d.season, CAST(m.start_date AS date) AS match_date, m.venue,
+           d.innings, d.batting_team, d.bowling_team AS opposition, d.striker AS batter,
+           d.ball, COALESCE(d.runs_off_bat,0) AS runs_off_bat,
+           CASE WHEN COALESCE(d.wides,0)=0 AND COALESCE(d.noballs,0)=0 THEN 1 ELSE 0 END AS legal_ball
+    FROM deliveries d JOIN matches m ON d.match_id=m.match_id
+    WHERE {filters}
+),
+running AS (
+    SELECT *,
+           SUM(runs_off_bat) OVER (PARTITION BY match_id, innings, batter ORDER BY ball ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_runs,
+           SUM(legal_ball) OVER (PARTITION BY match_id, innings, batter ORDER BY ball ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_balls
+    FROM legal_events
+),
+innings_totals AS (
+    SELECT match_id, innings, batter, SUM(runs_off_bat) AS innings_runs, SUM(legal_ball) AS innings_balls
+    FROM legal_events GROUP BY match_id, innings, batter
+),
+fifty_points AS (
+    SELECT match_id, season, match_date, venue, innings, batting_team, opposition, batter, MIN(cumulative_balls) AS balls_to_fifty
+    FROM running WHERE cumulative_runs >= 50
+    GROUP BY match_id, season, match_date, venue, innings, batting_team, opposition, batter
+)
+SELECT TOP 25 fp.batter, fp.batting_team, fp.opposition, fp.season, fp.match_date, fp.venue, fp.innings,
+       fp.balls_to_fifty, it.innings_runs, it.innings_balls
+FROM fifty_points fp
+JOIN innings_totals it ON fp.match_id=it.match_id AND fp.innings=it.innings AND fp.batter=it.batter
+ORDER BY fp.balls_to_fifty ASC, it.innings_runs DESC, fp.match_date ASC, fp.batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as e:
+        return {"question": q, "analysis_paragraph": f"The fastest-fifty query failed: {e}", "result": pd.DataFrame(), "extra_tables": {}, "sql_query": sql}
+    df = df if df is not None else pd.DataFrame()
+    title = "Fastest fifties"
+    if team_name:
+        title += f" for {team_name}"
+    if venue_label:
+        title += f" at {venue_label}"
+    if season:
+        title += f" in {season}"
+    return {
+        "question": q,
+        "analysis_paragraph": f"{title}. Sorted by balls_to_fifty ascending first, then innings runs.",
+        "paragraph": f"{title}. Sorted by balls_to_fifty ascending first, then innings runs.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": ["who has the fastest 50 in IPL history", "who has the fastest 50 for MI"],
+        "route_used": "Fastest fifty corrected",
+        "data_sources": "deliveries, matches",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_bpf = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_bpf = None
+
+
+def answer_question_with_fallback(user_question):
+    for route in [_bpf_bowling_plan, _bpf_fastest_fifty]:
+        result = route(user_question)
+        if result is not None:
+            return result
+    return _previous_answer_question_with_fallback_before_bpf(user_question)
+
+# IPL SQL Agent bowling proxy + fastest 50 fix END
+
+
+# IPL SQL Agent performance cached fastest fifty route START
+
+def _perf_q(value):
+    return str(value).replace("'", "''")
+
+
+def _perf_team_lookup(text_value):
+    text = str(text_value or "").lower().strip()
+    teams = [
+        ("CSK", "Chennai Super Kings", ["Chennai Super Kings"], ["csk", "chennai"]),
+        ("MI", "Mumbai Indians", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "Royal Challengers Bengaluru", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru"]),
+        ("GT", "Gujarat Titans", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "Kolkata Knight Riders", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "Rajasthan Royals", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "Sunrisers Hyderabad", ["Sunrisers Hyderabad"], ["srh", "sunrisers"]),
+        ("DC", "Delhi Capitals", ["Delhi Daredevils", "Delhi Capitals"], ["dc", "delhi"]),
+        ("PBKS", "Punjab Kings", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab"]),
+        ("LSG", "Lucknow Super Giants", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+    ]
+    for code, name, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, name, aliases
+    return None, None, []
+
+
+def _perf_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    if not values:
+        return "('')"
+    return "(" + ", ".join("'" + _perf_q(v) + "'" for v in values) + ")"
+
+
+def _perf_extract_season(question):
+    import re
+    match = re.search(r"\b(20\d{2}(?:/\d{2})?)\b", str(question or ""))
+    return match.group(1) if match else None
+
+
+def _perf_venue_filter(question):
+    import re
+    match = re.search(r"\bat\s+([A-Za-z0-9 .'-]+?)(?:\s+in\s+\d{4}|$)", str(question or ""), flags=re.I)
+    if not match:
+        return "1=1", None
+    venue = match.group(1).strip(" .?").lower()
+    if "wankhede" in venue:
+        return "venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in venue or "chidambaram" in venue:
+        return "(venue LIKE '%Chepauk%' OR venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in venue:
+        return "venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in venue:
+        return "venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in venue or "motera" in venue:
+        return "(venue LIKE '%Narendra Modi%' OR venue LIKE '%Motera%' OR venue LIKE '%Sardar Patel%')", "Narendra Modi Stadium"
+    return f"LOWER(venue) LIKE '%{_perf_q(venue)}%'", venue.title()
+
+
+def _perf_team_filter(question):
+    import re
+    match = re.search(r"\bfor\s+([A-Za-z0-9 .]+?)(?:\s+in\s+\d{4}|\s+at\s+|$)", str(question or ""), flags=re.I)
+    if not match:
+        return "1=1", None
+    team = _perf_team_lookup(match.group(1).strip(" .?"))
+    if not team[0]:
+        return "1=1", None
+    return f"batting_team IN {_perf_sql_list(team[2])}", team[1]
+
+
+def _perf_cached_fastest_fifty(question):
+    import pandas as pd
+    from app.db import run_query
+
+    text = str(question or "").lower()
+    if not ("fastest" in text and ("50" in text or "fifty" in text)):
+        return None
+
+    try:
+        exists_df = run_query("SELECT CASE WHEN OBJECT_ID('dbo.batter_innings_milestones', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists;")
+        if exists_df is None or exists_df.empty or int(exists_df.iloc[0]["table_exists"]) != 1:
+            return None
+    except Exception:
+        return None
+
+    season = _perf_extract_season(question)
+    season_filter = "1=1" if not season else f"season = '{_perf_q(season)}'"
+    venue_filter, venue_label = _perf_venue_filter(question)
+    team_filter, team_name = _perf_team_filter(question)
+
+    where_sql = " AND ".join([
+        "balls_to_fifty IS NOT NULL",
+        season_filter,
+        venue_filter,
+        team_filter,
+    ])
+
+    title = "Fastest fifties in IPL"
+    if team_name:
+        title += f" for {team_name}"
+    if venue_label:
+        title += f" at {venue_label}"
+    if season:
+        title += f" in {season}"
+
+    sql = f"""
+SELECT TOP 25
+    batter,
+    batting_team,
+    opposition,
+    season,
+    match_date,
+    venue,
+    innings,
+    balls_to_fifty,
+    innings_runs,
+    innings_balls
+FROM dbo.batter_innings_milestones
+WHERE {where_sql}
+ORDER BY
+    balls_to_fifty ASC,
+    innings_runs DESC,
+    match_date ASC,
+    batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The cached fastest-fifty query failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    if df is None:
+        df = pd.DataFrame()
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}. This uses the precomputed batter_innings_milestones cache, so it should be much faster than calculating every running score live.",
+        "paragraph": f"{title}. This uses the precomputed batter_innings_milestones cache, so it should be much faster than calculating every running score live.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who has the fastest 50 in IPL history",
+            "who has the fastest 50 for MI",
+            "who has the fastest fifty at Wankhede",
+        ],
+        "route_used": "Cached fastest fifty",
+        "data_sources": "batter_innings_milestones cache",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_perf_cached_fastest_fifty = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_perf_cached_fastest_fifty = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _perf_cached_fastest_fifty(user_question)
+    if result is not None:
+        return result
+    return _previous_answer_question_with_fallback_before_perf_cached_fastest_fifty(user_question)
+
+# IPL SQL Agent performance cached fastest fifty route END
+
+
+# IPL SQL Agent bowling question and fastest 100 fix START
+
+def _bqf_q(value):
+    return str(value).replace("'", "''")
+
+
+def _bqf_sql_list(values):
+    values = [value for value in values if value and str(value).strip()]
+    if not values:
+        return "('')"
+    return "(" + ", ".join("'" + _bqf_q(value) + "'" for value in values) + ")"
+
+
+def _bqf_team_lookup(text_value):
+    text = str(text_value or "").lower().strip()
+    teams = [
+        ("CSK", "Chennai Super Kings", ["Chennai Super Kings"], ["csk", "chennai"]),
+        ("MI", "Mumbai Indians", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "Royal Challengers Bengaluru", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "Gujarat Titans", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "Kolkata Knight Riders", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "Rajasthan Royals", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "Sunrisers Hyderabad", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("DC", "Delhi Capitals", ["Delhi Daredevils", "Delhi Capitals"], ["dc", "delhi"]),
+        ("PBKS", "Punjab Kings", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab"]),
+        ("LSG", "Lucknow Super Giants", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+    ]
+    for code, name, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, name, aliases
+    return None, None, []
+
+
+def _bqf_parse_bowler_question(question):
+    import re
+
+    text = str(question or "").strip()
+
+    patterns = [
+        r"\bwhich\s+(.+?)\s+bowler\s+should\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+        r"\bwhich\s+bowler\s+from\s+(.+?)\s+should\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+        r"\bhow\s+can\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+        r"\bhow\s+should\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        team_raw = match.group(1).strip(" .?")
+        batter_raw = match.group(2).strip(" .?")
+
+        batter_raw = re.sub(
+            r"\s+in\s+(powerplay|pwerplay|pp|middle overs|middle|death overs|death).*$",
+            "",
+            batter_raw,
+            flags=re.IGNORECASE,
+        ).strip(" .?")
+
+        team = _bqf_team_lookup(team_raw)
+
+        if team[0] and batter_raw:
+            return team, batter_raw
+
+    return None
+
+
+def _bqf_phase(question, alias="d"):
+    text = str(question or "").lower()
+    ball = f"{alias}.ball"
+
+    if "powerplay" in text or "pwerplay" in text or " pp" in text:
+        return "Powerplay", f"FLOOR({ball}) BETWEEN 0 AND 5"
+
+    if "death" in text:
+        return "Death overs", f"FLOOR({ball}) BETWEEN 16 AND 19"
+
+    return "Middle overs", f"FLOOR({ball}) BETWEEN 6 AND 15"
+
+
+def _bqf_batter_aliases(label):
+    raw = str(label or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "dhoni": ["MS Dhoni"],
+        "raina": ["SK Raina", "Suresh Raina"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sudharsan": ["B Sai Sudharsan", "Sai Sudharsan"],
+        "gill": ["Shubman Gill"],
+    }
+
+    for key, values in known.items():
+        if key in low:
+            for value in values:
+                if value not in aliases:
+                    aliases.append(value)
+
+    return aliases
+
+
+def _bqf_style_bucket_expr():
+    return """
+CASE
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%leg%' THEN 'Leg spin'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%off%' THEN 'Off spin'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%orthodox%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%slow left%' THEN 'Left-arm orthodox'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%spin%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%slow%' THEN 'Spin'
+    WHEN LOWER(COALESCE(cb.bowling_arm, '')) LIKE '%left%' AND (LOWER(COALESCE(cb.bowling_style, '')) LIKE '%fast%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%medium%') THEN 'Left-arm pace'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%fast%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%medium%' THEN 'Pace'
+    ELSE 'Unknown'
+END
+""".strip()
+
+
+def _bqf_choose_bowler(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _bqf_parse_bowler_question(question)
+    if not parsed:
+        return None
+
+    (team_code, team_name, team_aliases), batter_label = parsed
+    batter_aliases = _bqf_batter_aliases(batter_label)
+    batter_sql = _bqf_sql_list(batter_aliases)
+    phase_label, phase_filter = _bqf_phase(question)
+    style_bucket = _bqf_style_bucket_expr()
+
+    squad_sql = f"""
+SELECT DISTINCT
+    display_name AS bowler,
+    cricsheet_name,
+    role,
+    bowling_style,
+    bowling_arm
+FROM current_squads
+WHERE team_code = '{_bqf_q(team_code)}'
+  AND COALESCE(is_active, 1) = 1
+  AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+ORDER BY display_name;
+""".strip()
+
+    direct_sql = f"""
+WITH current_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role,
+        bowling_style,
+        bowling_arm
+    FROM current_squads
+    WHERE team_code = '{_bqf_q(team_code)}'
+      AND COALESCE(is_active, 1) = 1
+      AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+)
+SELECT
+    cb.display_name AS bowler,
+    cb.role,
+    cb.bowling_style,
+    cb.bowling_arm,
+    {style_bucket} AS style_bucket,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN d.wicket_type IS NOT NULL AND d.player_dismissed = d.striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS batter_sr,
+    CASE
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) >= 12 THEN 'Usable direct sample'
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0 THEN 'Small direct sample'
+        ELSE 'No direct sample'
+    END AS sample_note
+FROM current_bowlers cb
+LEFT JOIN deliveries d
+    ON (d.bowler = cb.cricsheet_name OR d.bowler = cb.display_name)
+   AND d.striker IN {batter_sql}
+   AND d.innings IN (1, 2)
+   AND {phase_filter}
+GROUP BY cb.display_name, cb.role, cb.bowling_style, cb.bowling_arm
+ORDER BY
+    CASE WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) >= 12 THEN 0 ELSE 1 END,
+    dismissals DESC,
+    batter_sr ASC,
+    balls DESC,
+    bowler ASC;
+""".strip()
+
+    weakness_sql = f"""
+WITH all_current_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role,
+        bowling_style,
+        bowling_arm
+    FROM current_squads
+    WHERE COALESCE(is_active, 1) = 1
+      AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+)
+SELECT
+    {style_bucket} AS style_bucket,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN d.wicket_type IS NOT NULL AND d.player_dismissed = d.striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS batter_sr,
+    CASE
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) < 12 THEN 'Small sample'
+        ELSE 'Usable sample'
+    END AS sample_note
+FROM all_current_bowlers cb
+JOIN deliveries d
+    ON (d.bowler = cb.cricsheet_name OR d.bowler = cb.display_name)
+   AND d.striker IN {batter_sql}
+   AND d.innings IN (1, 2)
+   AND {phase_filter}
+GROUP BY {style_bucket}
+HAVING COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0
+ORDER BY dismissals DESC, batter_sr ASC, balls DESC, style_bucket ASC;
+""".strip()
+
+    try:
+        squad_df = run_query(squad_sql)
+        direct_df = run_query(direct_sql)
+        weakness_df = run_query(weakness_sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The current-squad bowler choice route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": squad_sql + "\n\n" + direct_sql + "\n\n" + weakness_sql,
+            "similar_questions": [],
+        }
+
+    squad_df = squad_df if squad_df is not None else pd.DataFrame()
+    direct_df = direct_df if direct_df is not None else pd.DataFrame()
+    weakness_df = weakness_df if weakness_df is not None else pd.DataFrame()
+
+    top_style = None
+    if not weakness_df.empty:
+        top_style = str(weakness_df.iloc[0].get("style_bucket") or "").strip()
+
+    proxy_df = squad_df.copy()
+    if not proxy_df.empty and top_style:
+        style_low = top_style.lower()
+
+        def style_match(row):
+            text = f"{row.get('bowling_style', '')} {row.get('bowling_arm', '')}".lower()
+            if "leg" in style_low:
+                return "leg" in text
+            if "off" in style_low:
+                return "off" in text
+            if "orthodox" in style_low:
+                return "orthodox" in text or "slow left" in text
+            if "spin" in style_low:
+                return any(x in text for x in ["spin", "slow", "leg", "off", "orthodox"])
+            if "left-arm pace" in style_low:
+                return "left" in text and any(x in text for x in ["fast", "medium", "pace"])
+            if "pace" in style_low:
+                return any(x in text for x in ["fast", "medium", "pace"])
+            return False
+
+        filtered = proxy_df[proxy_df.apply(style_match, axis=1)]
+        if not filtered.empty:
+            proxy_df = filtered.copy()
+
+    if not proxy_df.empty:
+        proxy_df["proxy_reason"] = f"Current {team_code} option matching {batter_label}'s weakness type: {top_style or 'best available option'}."
+
+    usable_direct = pd.DataFrame()
+    if not direct_df.empty and "balls" in direct_df.columns:
+        usable_direct = direct_df[direct_df["balls"].fillna(0).astype(float) >= 12]
+
+    recommended = None
+    basis = ""
+
+    if not usable_direct.empty:
+        recommended = str(usable_direct.iloc[0]["bowler"])
+        basis = "direct usable matchup data"
+    elif not proxy_df.empty:
+        recommended = str(proxy_df.iloc[0]["bowler"])
+        basis = f"proxy style match: {top_style or 'current squad option'}"
+
+    plan_df = pd.DataFrame([
+        {"section": "Recommended bowler", "action": recommended or "No clear current-squad option found", "why": basis or "Insufficient data"},
+        {"section": "Data rule", "action": "Use direct matchup only if there are 12+ balls; otherwise use style proxy.", "why": "Avoid over-trusting tiny samples."},
+        {"section": "Middle-over method", "action": "Bowl to field, block singles, and make Gaikwad hit against the matched style.", "why": "Middle overs are about pressure and matchup control."},
+    ])
+
+    paragraph = (
+        f"Recommended current {team_code} option to bowl to {batter_label} in {phase_label}: "
+        f"{recommended or 'no clear option'}. Selection basis: {basis or 'insufficient current-squad data'}."
+    )
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": plan_df,
+        "extra_tables": {
+            "Action Plan": plan_df,
+            f"Direct {team_code} Options vs Batter": direct_df,
+            "Batter Weakness By Bowling Type": weakness_df,
+            f"Current {team_code} Proxy Options": proxy_df,
+            f"Current {team_code} Bowling Squad": squad_df,
+        },
+        "sql_query": squad_sql + "\n\n" + direct_sql + "\n\n" + weakness_sql,
+        "similar_questions": [
+            f"how can {team_code} bowl to {batter_label} in powerplay",
+            f"how can {team_code} bowl to {batter_label} in death overs",
+        ],
+        "route_used": "Current-squad bowler recommendation",
+        "data_sources": "current_squads, deliveries",
+    }
+
+
+def _bqf_extract_season(question):
+    import re
+    match = re.search(r"\b(20\d{2}(?:/\d{2})?)\b", str(question or ""))
+    return match.group(1) if match else None
+
+
+def _bqf_venue_filter(question):
+    import re
+    match = re.search(r"\bat\s+([A-Za-z0-9 .'-]+?)(?:\s+in\s+\d{4}|$)", str(question or ""), flags=re.IGNORECASE)
+    if not match:
+        return "1=1", None
+
+    venue = match.group(1).strip(" .?").lower()
+
+    if "wankhede" in venue:
+        return "venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in venue or "chidambaram" in venue:
+        return "(venue LIKE '%Chepauk%' OR venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in venue:
+        return "venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in venue:
+        return "venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+
+    safe = _bqf_q(venue)
+    return f"LOWER(venue) LIKE '%{safe}%'", venue.title()
+
+
+def _bqf_team_filter(question):
+    import re
+    match = re.search(r"\bfor\s+([A-Za-z0-9 .]+?)(?:\s+in\s+\d{4}|\s+at\s+|$)", str(question or ""), flags=re.IGNORECASE)
+    if not match:
+        return "1=1", None
+
+    team = _bqf_team_lookup(match.group(1).strip(" .?"))
+
+    if not team[0]:
+        return "1=1", None
+
+    return f"batting_team IN {_bqf_sql_list(team[2])}", team[1]
+
+
+def _bqf_fastest_100(question):
+    import pandas as pd
+    from app.db import run_query
+
+    text = str(question or "").lower()
+    if not ("fastest" in text and ("100" in text or "hundred" in text or "century" in text)):
+        return None
+
+    try:
+        exists_df = run_query("""
+SELECT
+    CASE WHEN OBJECT_ID('dbo.batter_innings_milestones', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists,
+    CASE WHEN COL_LENGTH('dbo.batter_innings_milestones', 'balls_to_hundred') IS NULL THEN 0 ELSE 1 END AS has_hundred_col;
+""".strip())
+
+        if exists_df is None or exists_df.empty or int(exists_df.iloc[0]["table_exists"]) != 1 or int(exists_df.iloc[0]["has_hundred_col"]) != 1:
+            return {
+                "question": question,
+                "analysis_paragraph": "Fastest 100 needs the updated milestone cache. Run scripts\\rebuild_batter_milestones_with_100.sql in SSMS.",
+                "result": pd.DataFrame(),
+                "extra_tables": {},
+                "sql_query": "",
+                "similar_questions": [],
+            }
+    except Exception:
+        return None
+
+    season = _bqf_extract_season(question)
+    season_filter = "1=1" if not season else f"season = '{_bqf_q(season)}'"
+    venue_filter, venue_label = _bqf_venue_filter(question)
+    team_filter, team_name = _bqf_team_filter(question)
+
+    where_sql = " AND ".join([
+        "balls_to_hundred IS NOT NULL",
+        season_filter,
+        venue_filter,
+        team_filter,
+    ])
+
+    title = "Fastest hundreds in IPL"
+    if team_name:
+        title += f" for {team_name}"
+    if venue_label:
+        title += f" at {venue_label}"
+    if season:
+        title += f" in {season}"
+
+    sql = f"""
+SELECT TOP 25
+    batter,
+    batting_team,
+    opposition,
+    season,
+    match_date,
+    venue,
+    innings,
+    balls_to_hundred,
+    innings_runs,
+    innings_balls
+FROM dbo.batter_innings_milestones
+WHERE {where_sql}
+ORDER BY
+    balls_to_hundred ASC,
+    innings_runs DESC,
+    match_date ASC,
+    batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The fastest-100 query failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = df if df is not None else pd.DataFrame()
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}. Sorted by balls_to_hundred ascending first, then innings runs.",
+        "paragraph": f"{title}. Sorted by balls_to_hundred ascending first, then innings runs.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who has the fastest 100 in IPL history",
+            "who has the fastest 100 for RCB",
+            "who has the fastest hundred at Wankhede",
+        ],
+        "route_used": "Fastest hundred corrected",
+        "data_sources": "batter_innings_milestones cache",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_bqf = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_bqf = None
+
+
+def answer_question_with_fallback(user_question):
+    for route in [_bqf_choose_bowler, _bqf_fastest_100]:
+        result = route(user_question)
+        if result is not None:
+            return result
+
+    return _previous_answer_question_with_fallback_before_bqf(user_question)
+
+# IPL SQL Agent bowling question and fastest 100 fix END
+
+
+# IPL SQL Agent fix bowling recommender and cached milestones START
+
+def _fixbf_q(value):
+    return str(value).replace("'", "''")
+
+
+def _fixbf_sql_list(values):
+    values = [value for value in values if value and str(value).strip()]
+    if not values:
+        return "('')"
+    return "(" + ", ".join("'" + _fixbf_q(value) + "'" for value in values) + ")"
+
+
+def _fixbf_team_lookup(text_value):
+    text = str(text_value or "").lower().strip()
+    teams = [
+        ("CSK", "Chennai Super Kings", ["Chennai Super Kings"], ["csk", "chennai"]),
+        ("MI", "Mumbai Indians", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "Royal Challengers Bengaluru", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "Gujarat Titans", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "Kolkata Knight Riders", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "Rajasthan Royals", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "Sunrisers Hyderabad", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("DC", "Delhi Capitals", ["Delhi Daredevils", "Delhi Capitals"], ["dc", "delhi"]),
+        ("PBKS", "Punjab Kings", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab"]),
+        ("LSG", "Lucknow Super Giants", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+    ]
+    for code, name, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, name, aliases
+    return None, None, []
+
+
+def _fixbf_parse_bowling_question(question):
+    import re
+    text = str(question or "").strip()
+    patterns = [
+        r"\bwhich\s+(.+?)\s+bowler\s+should\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+        r"\bwhich\s+bowler\s+from\s+(.+?)\s+should\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+        r"\bhow\s+can\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+        r"\bhow\s+should\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+.+)?$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        team_raw = match.group(1).strip(" .?")
+        batter_raw = match.group(2).strip(" .?")
+        batter_raw = re.sub(
+            r"\s+in\s+(powerplay|pwerplay|pp|middle overs|middle|death overs|death).*$",
+            "",
+            batter_raw,
+            flags=re.IGNORECASE,
+        ).strip(" .?")
+        team = _fixbf_team_lookup(team_raw)
+        if team[0] and batter_raw:
+            return team, batter_raw
+    return None
+
+
+def _fixbf_phase(question, alias="d"):
+    text = str(question or "").lower()
+    ball = f"{alias}.ball"
+    if "powerplay" in text or "pwerplay" in text or " pp" in text:
+        return "Powerplay", f"FLOOR({ball}) BETWEEN 0 AND 5"
+    if "death" in text:
+        return "Death overs", f"FLOOR({ball}) BETWEEN 16 AND 19"
+    return "Middle overs", f"FLOOR({ball}) BETWEEN 6 AND 15"
+
+
+def _fixbf_batter_aliases(label):
+    raw = str(label or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+    known = {
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "dhoni": ["MS Dhoni"],
+        "raina": ["SK Raina", "Suresh Raina"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sudharsan": ["B Sai Sudharsan", "Sai Sudharsan"],
+        "gill": ["Shubman Gill"],
+    }
+    for key, values in known.items():
+        if key in low:
+            for value in values:
+                if value not in aliases:
+                    aliases.append(value)
+    return aliases
+
+
+def _fixbf_type_expr():
+    return """
+CASE
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%leg%' THEN 'Leg spin'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%off%' THEN 'Off spin'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%orthodox%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%slow left%' THEN 'Left-arm orthodox'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%spin%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%slow%' THEN 'Spin'
+    WHEN LOWER(COALESCE(cb.bowling_arm, '')) LIKE '%left%' AND (LOWER(COALESCE(cb.bowling_style, '')) LIKE '%fast%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%medium%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%pace%') THEN 'Left-arm pace'
+    WHEN LOWER(COALESCE(cb.bowling_style, '')) LIKE '%fast%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%medium%' OR LOWER(COALESCE(cb.bowling_style, '')) LIKE '%pace%' THEN 'Pace'
+    ELSE NULL
+END
+""".strip()
+
+
+def _fixbf_style_match(row, bowling_type):
+    text = f"{row.get('bowling_style', '')} {row.get('bowling_arm', '')}".lower()
+    bowling_type = str(bowling_type or "").lower()
+    if not bowling_type:
+        return False
+    if "leg" in bowling_type:
+        return "leg" in text
+    if "off" in bowling_type:
+        return "off" in text
+    if "orthodox" in bowling_type:
+        return "orthodox" in text or "slow left" in text
+    if "spin" in bowling_type:
+        return any(x in text for x in ["spin", "slow", "leg", "off", "orthodox"])
+    if "left-arm pace" in bowling_type:
+        return "left" in text and any(x in text for x in ["fast", "medium", "pace"])
+    if "pace" in bowling_type:
+        return any(x in text for x in ["fast", "medium", "pace"])
+    return False
+
+
+def _fixbf_bowling_recommendation(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _fixbf_parse_bowling_question(question)
+    if not parsed:
+        return None
+
+    (team_code, team_name, team_aliases), batter_label = parsed
+    batter_sql = _fixbf_sql_list(_fixbf_batter_aliases(batter_label))
+    phase_label, phase_filter = _fixbf_phase(question)
+    bowling_type_expr = _fixbf_type_expr()
+
+    squad_sql = f"""
+SELECT DISTINCT
+    display_name AS bowler,
+    cricsheet_name,
+    role,
+    bowling_style,
+    bowling_arm
+FROM current_squads
+WHERE team_code = '{_fixbf_q(team_code)}'
+  AND COALESCE(is_active, 1) = 1
+  AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+ORDER BY display_name;
+""".strip()
+
+    direct_sql = f"""
+WITH current_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role,
+        bowling_style,
+        bowling_arm
+    FROM current_squads
+    WHERE team_code = '{_fixbf_q(team_code)}'
+      AND COALESCE(is_active, 1) = 1
+      AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+)
+SELECT
+    cb.display_name AS bowler,
+    cb.role,
+    cb.bowling_style,
+    cb.bowling_arm,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN d.wicket_type IS NOT NULL AND d.player_dismissed = d.striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS batter_sr,
+    CASE
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) >= 12 THEN 'Usable direct sample'
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0 THEN 'Small direct sample'
+        ELSE 'No direct sample'
+    END AS sample_note
+FROM current_bowlers cb
+LEFT JOIN deliveries d
+    ON (d.bowler = cb.cricsheet_name OR d.bowler = cb.display_name)
+   AND d.striker IN {batter_sql}
+   AND d.innings IN (1, 2)
+   AND {phase_filter}
+GROUP BY cb.display_name, cb.role, cb.bowling_style, cb.bowling_arm
+ORDER BY
+    CASE WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) >= 12 THEN 0 ELSE 1 END,
+    dismissals DESC,
+    batter_sr ASC,
+    balls DESC,
+    bowler ASC;
+""".strip()
+
+    weakness_sql = f"""
+WITH all_current_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role,
+        bowling_style,
+        bowling_arm
+    FROM current_squads
+    WHERE COALESCE(is_active, 1) = 1
+      AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+),
+typed_balls AS (
+    SELECT
+        {bowling_type_expr} AS bowling_type,
+        d.runs_off_bat,
+        d.wides,
+        d.noballs,
+        d.wicket_type,
+        d.player_dismissed,
+        d.striker
+    FROM all_current_bowlers cb
+    JOIN deliveries d
+        ON (d.bowler = cb.cricsheet_name OR d.bowler = cb.display_name)
+       AND d.striker IN {batter_sql}
+       AND d.innings IN (1, 2)
+       AND {phase_filter}
+)
+SELECT
+    bowling_type,
+    COUNT(CASE WHEN COALESCE(wides, 0)=0 AND COALESCE(noballs, 0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN wicket_type IS NOT NULL AND player_dismissed = striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(wides, 0)=0 AND COALESCE(noballs, 0)=0 THEN 1 END), 0), 2) AS batter_sr,
+    CASE
+        WHEN COUNT(CASE WHEN COALESCE(wides, 0)=0 AND COALESCE(noballs, 0)=0 THEN 1 END) < 12 THEN 'Small sample'
+        ELSE 'Usable sample'
+    END AS sample_note
+FROM typed_balls
+WHERE bowling_type IS NOT NULL
+GROUP BY bowling_type
+HAVING COUNT(CASE WHEN COALESCE(wides, 0)=0 AND COALESCE(noballs, 0)=0 THEN 1 END) > 0
+ORDER BY dismissals DESC, batter_sr ASC, balls DESC, bowling_type ASC;
+""".strip()
+
+    try:
+        squad_df = run_query(squad_sql)
+        direct_df = run_query(direct_sql)
+        weakness_df = run_query(weakness_sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The current-squad bowler choice route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": squad_sql + "\n\n" + direct_sql + "\n\n" + weakness_sql,
+            "similar_questions": [],
+        }
+
+    squad_df = squad_df if squad_df is not None else pd.DataFrame()
+    direct_df = direct_df if direct_df is not None else pd.DataFrame()
+    weakness_df = weakness_df if weakness_df is not None else pd.DataFrame()
+
+    top_type = None
+    if not weakness_df.empty:
+        top_type = str(weakness_df.iloc[0].get("bowling_type") or "").strip()
+
+    usable_direct = pd.DataFrame()
+    if not direct_df.empty and "balls" in direct_df.columns:
+        usable_direct = direct_df[direct_df["balls"].fillna(0).astype(float) >= 12]
+
+    proxy_df = squad_df.copy()
+    if top_type and not proxy_df.empty:
+        filtered = proxy_df[proxy_df.apply(lambda row: _fixbf_style_match(row, top_type), axis=1)]
+        if not filtered.empty:
+            proxy_df = filtered.copy()
+
+    if not proxy_df.empty:
+        proxy_df["proxy_reason"] = (
+            f"Current {team_code} option"
+            + (f" matching {batter_label}'s weakness type: {top_type}." if top_type else " selected from current squad because no reliable bowling-type data exists.")
+        )
+
+    recommended = None
+    basis = None
+
+    if not usable_direct.empty:
+        recommended = str(usable_direct.iloc[0]["bowler"])
+        basis = "direct usable matchup data"
+    elif not proxy_df.empty:
+        recommended = str(proxy_df.iloc[0]["bowler"])
+        basis = f"style proxy: {top_type}" if top_type else "current squad fallback; no known bowling-type split"
+
+    plan_df = pd.DataFrame([
+        {
+            "section": "Recommended bowler",
+            "action": recommended or "No clear current-squad option found",
+            "why": basis or "Insufficient current-squad data",
+        },
+        {
+            "section": "Data rule",
+            "action": "Use direct matchup only if there are 12+ balls; otherwise use a known style proxy.",
+            "why": "Avoid over-trusting tiny samples; do not treat Unknown as a bowling type.",
+        },
+        {
+            "section": "Middle-over method",
+            "action": "Bowl to the field, cut singles, and force the batter to hit against the matchup.",
+            "why": "Middle overs are about pressure and matchup control.",
+        },
+    ])
+
+    extra = {
+        "Action Plan": plan_df,
+        f"Direct {team_code} Options vs Batter": direct_df,
+        f"Current {team_code} Proxy Options": proxy_df,
+        f"Current {team_code} Bowling Squad": squad_df,
+    }
+
+    if not weakness_df.empty:
+        extra["Batter Weakness By Bowling Type"] = weakness_df
+
+    paragraph = (
+        f"Recommended current {team_code} option to bowl to {batter_label} in {phase_label}: "
+        f"{recommended or 'no clear option'}. Selection basis: {basis or 'insufficient data'}."
+    )
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": plan_df,
+        "extra_tables": extra,
+        "sql_query": squad_sql + "\n\n" + direct_sql + "\n\n" + weakness_sql,
+        "similar_questions": [
+            f"which {team_code} bowler should bowl to {batter_label} in powerplay",
+            f"which {team_code} bowler should bowl to {batter_label} in death overs",
+        ],
+        "route_used": "Current-squad bowler recommendation v2",
+        "data_sources": "current_squads, deliveries",
+    }
+
+
+def _fixbf_extract_season(question):
+    import re
+    match = re.search(r"\b(20\d{2}(?:/\d{2})?)\b", str(question or ""))
+    return match.group(1) if match else None
+
+
+def _fixbf_venue_filter(question):
+    import re
+    match = re.search(r"\bat\s+([A-Za-z0-9 .'-]+?)(?:\s+in\s+\d{4}|$)", str(question or ""), flags=re.IGNORECASE)
+    if not match:
+        return "1=1", None
+    venue = match.group(1).strip(" .?").lower()
+    if "wankhede" in venue:
+        return "venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in venue or "chidambaram" in venue:
+        return "(venue LIKE '%Chepauk%' OR venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in venue:
+        return "venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in venue:
+        return "venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    safe = _fixbf_q(venue)
+    return f"LOWER(venue) LIKE '%{safe}%'", venue.title()
+
+
+def _fixbf_team_filter(question):
+    import re
+    match = re.search(r"\bfor\s+([A-Za-z0-9 .]+?)(?:\s+in\s+\d{4}|\s+at\s+|$)", str(question or ""), flags=re.IGNORECASE)
+    if not match:
+        return "1=1", None
+    team = _fixbf_team_lookup(match.group(1).strip(" .?"))
+    if not team[0]:
+        return "1=1", None
+    return f"batting_team IN {_fixbf_sql_list(team[2])}", team[1]
+
+
+def _fixbf_fastest_milestone(question):
+    import pandas as pd
+    from app.db import run_query
+
+    text = str(question or "").lower()
+
+    if "fastest" not in text:
+        return None
+
+    if "100" in text or "hundred" in text or "century" in text:
+        milestone = "hundred"
+        balls_col = "balls_to_hundred"
+        label = "hundreds"
+        required_col = "balls_to_hundred"
+    elif "50" in text or "fifty" in text:
+        milestone = "fifty"
+        balls_col = "balls_to_fifty"
+        label = "fifties"
+        required_col = "balls_to_fifty"
+    else:
+        return None
+
+    try:
+        exists_df = run_query(f"""
+SELECT
+    CASE WHEN OBJECT_ID('dbo.batter_innings_milestones', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists,
+    CASE WHEN COL_LENGTH('dbo.batter_innings_milestones', '{required_col}') IS NULL THEN 0 ELSE 1 END AS has_col;
+""".strip())
+
+        if exists_df is None or exists_df.empty or int(exists_df.iloc[0]["table_exists"]) != 1 or int(exists_df.iloc[0]["has_col"]) != 1:
+            return {
+                "question": question,
+                "analysis_paragraph": "Milestone cache needs rebuilding. Run scripts\\rebuild_batter_milestones_with_100.sql in SSMS.",
+                "result": pd.DataFrame(),
+                "extra_tables": {},
+                "sql_query": "",
+                "similar_questions": [],
+            }
+    except Exception:
+        return None
+
+    season = _fixbf_extract_season(question)
+    season_filter = "1=1" if not season else f"season = '{_fixbf_q(season)}'"
+    venue_filter, venue_label = _fixbf_venue_filter(question)
+    team_filter, team_name = _fixbf_team_filter(question)
+
+    where_sql = " AND ".join([
+        f"{balls_col} IS NOT NULL",
+        season_filter,
+        venue_filter,
+        team_filter,
+    ])
+
+    title = f"Fastest {label} in IPL"
+    if team_name:
+        title += f" for {team_name}"
+    if venue_label:
+        title += f" at {venue_label}"
+    if season:
+        title += f" in {season}"
+
+    sql = f"""
+SELECT TOP 25
+    batter,
+    batting_team,
+    opposition,
+    season,
+    match_date,
+    venue,
+    innings,
+    {balls_col},
+    innings_runs,
+    innings_balls
+FROM dbo.batter_innings_milestones
+WHERE {where_sql}
+ORDER BY
+    {balls_col} ASC,
+    innings_runs DESC,
+    match_date ASC,
+    batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The fastest-{milestone} query failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = df if df is not None else pd.DataFrame()
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}. Sorted by {balls_col} ascending first, then innings runs.",
+        "paragraph": f"{title}. Sorted by {balls_col} ascending first, then innings runs.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who has the fastest 50 in IPL history",
+            "who has the fastest 100 in IPL history",
+        ],
+        "route_used": f"Fastest {milestone} corrected",
+        "data_sources": "batter_innings_milestones cache",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_fixbf = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_fixbf = None
+
+
+def answer_question_with_fallback(user_question):
+    for route in [_fixbf_bowling_recommendation, _fixbf_fastest_milestone]:
+        result = route(user_question)
+        if result is not None:
+            return result
+    return _previous_answer_question_with_fallback_before_fixbf(user_question)
+
+# IPL SQL Agent fix bowling recommender and cached milestones END
+
