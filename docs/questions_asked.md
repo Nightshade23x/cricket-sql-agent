@@ -498,3 +498,17 @@ which team has the best win percentage failed
 who are top 10 run scorers for csk in 2026 failed
 
 who are top 10 run scoers in 2026 failed...add that and wickets also for all seasons also so top 10 wicket takers in 2026...also top 10 wicket takers for csk in 2026...so team wise also...add venue wise also
+
+for teams of players,use short name,long name is taking too much space,unless for delhi capitals and deccan chargers use full name
+now in the front end lets remove things like: J Bumrah is shown as a bowling-first profile, so bowling appears first and batting is still included. Resolved as JJ Bumrah.
+also for example on analyse bumrah,a similar ques shouldnt be how many fifties does bumrah have...also it just shows one similar ques,atl 4 should be shown
+we need to remove unnessary text from the frontend overall,even in match plans: Action plan: how Gujarat Titans can beat Rajasthan Royals at Narendra Modi Stadium. Key Matchups now uses current squads only. Phase diagnostics explain what each phase means and what action to take. Opponent key batters now use a Python-built current-squad alias resolver for RR, so players like Vaibhav Suryavanshi/V Suryavanshi and Sai Sudharsan/B Sai Sudharsan are matched before ranking....venue profile seems ok
+so does analyse squad
+so does tactical matchups so we just fix in match plans
+when i asked best bowlers against kohli for dc...it didnt give an ans
+then when i wrote the full name of delhi capitals...it gave me overall bowlers who have a good record against kohli not only dc players...so we need to fix this...first if we use dc agent should say,use full name as dc could mean deccan chargers or delhi capitals...then it should give only current dc players
+
+under player teams...rcb is doubling,also delhi daredevils can be given as dd,not full name..rps is also doubling
+under analyse players,add 2 tabs,one for season trend for batting,one for bowling
+how many fifties does kohli have against csk gave his overall record,add route for against team,venue wise etc,same with hundreds
+who has taken the most wickets agains csk gave csk overall best bowlers,add route for this also

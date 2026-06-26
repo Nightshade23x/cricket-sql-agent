@@ -12,6 +12,36 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "how many fifties does Kohli have against CSK",
+        "expected_columns": ["player", "fifties", "hundreds"],
+    },
+    {
+        "question": "how many hundreds does Kohli have against CSK",
+        "expected_columns": ["player", "fifties", "hundreds"],
+    },
+    {
+        "question": "who has taken the most wickets against csk",
+        "expected_columns": ["bowler", "team", "wickets", "economy"],
+    },
+
+
+    {
+        "question": "analyse Bumrah",
+        "expected_columns": ["resolved_player", "player", "wickets", "economy"],
+    },
+
+
+    {
+        "question": "best bowlers against Kohli for dc",
+        "expected_columns": ["issue", "action"],
+    },
+    {
+        "question": "best bowlers against Kohli for Delhi Capitals",
+        "expected_columns": ["bowler", "team", "balls", "dismissals", "batter_sr"],
+    },
+
+
+    {
         "question": "who are top 10 run scorers in 2026",
         "expected_columns": ["batter", "team", "runs", "batting_average", "strike_rate"],
     },

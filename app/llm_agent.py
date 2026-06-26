@@ -21433,3 +21433,1459 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent bowling leaderboard innings compatibility fix END
 
+
+# IPL SQL Agent UI cleanup team names and profile suggestions START
+
+def _uiclean_is_profile_question(question):
+    import re
+    text = str(question or "").strip()
+    match = re.search(r"^(?:analyse|analyze|profile|tell me about)\s+(.+?)\s*$", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    label = match.group(1).strip(" .?")
+    low = label.lower()
+    if any(x in low for x in ["stadium", "venue", "chepauk", "eden", "wankhede", "chinnaswamy", "narendra"]):
+        return None
+    team_words = {"csk", "mi", "rcb", "gt", "kkr", "rr", "srh", "dc", "pbks", "kxip", "lsg", "chennai", "mumbai", "bangalore", "bengaluru", "gujarat", "kolkata", "rajasthan", "hyderabad", "delhi", "punjab", "lucknow"}
+    if low in team_words:
+        return None
+    return label
+
+
+def _uiclean_known_display_name(label):
+    low = str(label or "").lower()
+    known = {
+        "kohli": "V Kohli", "virat": "V Kohli",
+        "raina": "SK Raina", "suresh": "SK Raina",
+        "bumrah": "JJ Bumrah", "jasprit": "JJ Bumrah",
+        "narine": "SP Narine", "sunil": "SP Narine",
+        "rohit": "RG Sharma", "dhoni": "MS Dhoni",
+        "gaikwad": "RD Gaikwad", "ruturaj": "RD Gaikwad",
+        "sooryavanshi": "V Suryavanshi", "suryavanshi": "V Suryavanshi", "vaibhav": "V Suryavanshi",
+        "sudharsan": "B Sai Sudharsan", "gill": "Shubman Gill",
+        "rashid": "Rashid Khan", "jadeja": "RA Jadeja",
+        "warner": "DA Warner", "rahul": "KL Rahul", "de villiers": "AB de Villiers",
+    }
+    for key, value in known.items():
+        if key in low:
+            return value
+    return str(label or "").strip()
+
+
+def _uiclean_table_scalar(table, column_name):
+    try:
+        if table is not None and hasattr(table, "columns") and column_name in table.columns and not table.empty:
+            value = table.iloc[0][column_name]
+            if value is not None and str(value).strip() and str(value).lower() != "nan":
+                return str(value).strip()
+    except Exception:
+        pass
+    return None
+
+
+def _uiclean_resolved_player(result, label):
+    if not isinstance(result, dict):
+        return _uiclean_known_display_name(label)
+    table = result.get("result")
+    for column in ["resolved_player", "player", "batter", "bowler"]:
+        value = _uiclean_table_scalar(table, column)
+        if value:
+            return value
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for table in extra.values():
+            for column in ["resolved_player", "player", "batter", "bowler"]:
+                value = _uiclean_table_scalar(table, column)
+                if value:
+                    return value
+    return _uiclean_known_display_name(label)
+
+
+def _uiclean_profile_type(result):
+    if not isinstance(result, dict):
+        return "mixed"
+
+    def first_numeric(table, name):
+        try:
+            if table is not None and hasattr(table, "columns") and name in table.columns and not table.empty:
+                value = table.iloc[0][name]
+                if value is None or str(value).lower() == "nan":
+                    return 0.0
+                return float(value)
+        except Exception:
+            pass
+        return 0.0
+
+    result_table = result.get("result")
+    wickets = first_numeric(result_table, "wickets")
+    runs = first_numeric(result_table, "runs")
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in extra.items():
+            lname = str(name).lower()
+            if "bowling" in lname:
+                wickets = max(wickets, first_numeric(table, "wickets"))
+            if "batting" in lname:
+                runs = max(runs, first_numeric(table, "runs"))
+
+    if wickets >= 25 and wickets * 8 > runs:
+        return "bowler"
+    if runs >= 1000 and runs > wickets * 8:
+        return "batter"
+    return "mixed"
+
+
+def _uiclean_profile_questions(player, profile_type):
+    player = str(player or "").strip() or "this player"
+    if profile_type == "bowler":
+        return [
+            f"analyse Rashid Khan",
+            f"compare {player} and Rashid Khan",
+            "who are the top 10 wicket takers in IPL",
+            "who has bowled the most dot balls in death overs",
+        ]
+    if profile_type == "batter":
+        return [
+            f"how many fifties does {player} have",
+            f"compare {player} and V Kohli",
+            "who has the most fifties in IPL",
+            "who are top 10 run scorers in 2026",
+        ]
+    return [
+        f"compare {player} and SP Narine",
+        f"how many fifties does {player} have",
+        "who are the top 10 wicket takers in IPL",
+        "who are top 10 run scorers in 2026",
+    ]
+
+
+def _uiclean_clean_profile(result, label):
+    if not isinstance(result, dict):
+        return result
+    player = _uiclean_resolved_player(result, label)
+    profile_type = _uiclean_profile_type(result)
+    if profile_type == "bowler":
+        paragraph = f"Player profile for {player}. Bowling and batting summaries are included below."
+    else:
+        paragraph = f"Player profile for {player}. Batting and bowling summaries are included below."
+    result["analysis_paragraph"] = paragraph
+    result["paragraph"] = paragraph
+    result["similar_questions"] = _uiclean_profile_questions(player, profile_type)[:4]
+    return result
+
+
+def _uiclean_team_name_value(value):
+    if value is None:
+        return value
+    pieces = [piece.strip() for piece in str(value).split(",")]
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Capitals": "Delhi Capitals",
+        "Delhi Daredevils": "Delhi Daredevils",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+    return ", ".join(mapping.get(piece, piece) for piece in pieces)
+
+
+def _uiclean_apply_short_team_names(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+    try:
+        table = table.copy()
+        for column in ["team", "batting_team", "bowling_team", "winner", "toss_winner"]:
+            if column in table.columns:
+                table[column] = table[column].apply(_uiclean_team_name_value)
+        return table
+    except Exception:
+        return table
+
+
+def _uiclean_apply_table_cleanup(result):
+    if not isinstance(result, dict):
+        return result
+    result["result"] = _uiclean_apply_short_team_names(result.get("result"))
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _uiclean_apply_short_team_names(table)
+        result["extra_tables"] = extra
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_uiclean = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_uiclean = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_uiclean(user_question)
+    result = _uiclean_apply_table_cleanup(result)
+    label = _uiclean_is_profile_question(user_question)
+    if label:
+        result = _uiclean_clean_profile(result, label)
+    return result
+
+# IPL SQL Agent UI cleanup team names and profile suggestions END
+
+
+# IPL SQL Agent DC ambiguity, current-squad matchup, and concise text fix START
+
+def _dcclean_q(value):
+    return str(value).replace("'", "''")
+
+
+def _dcclean_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    if not values:
+        return "('')"
+    return "(" + ", ".join("'" + _dcclean_q(v) + "'" for v in values) + ")"
+
+
+def _dcclean_batter_aliases(label):
+    raw = str(label or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "dhoni": ["MS Dhoni"],
+        "raina": ["SK Raina", "Suresh Raina"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sudharsan": ["B Sai Sudharsan", "Sai Sudharsan"],
+        "gill": ["Shubman Gill"],
+    }
+
+    for key, values in known.items():
+        if key in low:
+            for value in values:
+                if value not in aliases:
+                    aliases.append(value)
+
+    return aliases
+
+
+def _dcclean_parse_best_bowlers_against(question):
+    import re
+
+    text = str(question or "").strip()
+
+    patterns = [
+        r"\bbest\s+bowlers\s+against\s+(.+?)\s+for\s+(.+?)\s*$",
+        r"\bbest\s+bowler\s+against\s+(.+?)\s+for\s+(.+?)\s*$",
+        r"\bwhich\s+bowlers\s+are\s+best\s+against\s+(.+?)\s+for\s+(.+?)\s*$",
+        r"\bwhich\s+(.+?)\s+bowlers\s+are\s+best\s+against\s+(.+?)\s*$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        if pattern.startswith(r"\bwhich\s+(.+?)"):
+            team_raw = match.group(1).strip(" .?")
+            batter_raw = match.group(2).strip(" .?")
+        else:
+            batter_raw = match.group(1).strip(" .?")
+            team_raw = match.group(2).strip(" .?")
+
+        return batter_raw, team_raw
+
+    return None
+
+
+def _dcclean_team_from_matchup_text(team_raw):
+    low = str(team_raw or "").lower().strip()
+
+    if low == "dc":
+        return "AMBIGUOUS_DC", None, None
+
+    if "delhi capitals" in low:
+        return "DC", "Delhi Capitals", ["Delhi Capitals"]
+
+    if "delhi daredevils" in low:
+        return "DD", "Delhi Daredevils", ["Delhi Daredevils"]
+
+    if "deccan chargers" in low:
+        return "DEC", "Deccan Chargers", ["Deccan Chargers"]
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if low in triggers or any(trigger in low for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, None
+
+
+def _dcclean_dc_ambiguity_response(question):
+    import pandas as pd
+
+    data = pd.DataFrame([
+        {
+            "issue": "DC is ambiguous",
+            "action": "Please write Delhi Capitals or Deccan Chargers in full.",
+            "example": "best bowlers against Kohli for Delhi Capitals",
+        }
+    ])
+
+    paragraph = "DC is ambiguous because it can mean Delhi Capitals or Deccan Chargers. Please use the full team name."
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": data,
+        "extra_tables": {"Clarification": data},
+        "sql_query": "",
+        "similar_questions": [
+            "best bowlers against Kohli for Delhi Capitals",
+            "best bowlers against Kohli for Deccan Chargers",
+            "best bowlers against Rohit for Delhi Capitals",
+            "best bowlers against Gaikwad for Delhi Capitals",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _dcclean_best_bowlers_against_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _dcclean_parse_best_bowlers_against(question)
+
+    if not parsed:
+        return None
+
+    batter_raw, team_raw = parsed
+    team_code, display_team, team_aliases = _dcclean_team_from_matchup_text(team_raw)
+
+    if team_code == "AMBIGUOUS_DC":
+        return _dcclean_dc_ambiguity_response(question)
+
+    if not team_code:
+        return None
+
+    batter_aliases = _dcclean_batter_aliases(batter_raw)
+    batter_sql = _dcclean_sql_list(batter_aliases)
+
+    current_team_codes = {"DC", "CSK", "MI", "RCB", "GT", "KKR", "RR", "SRH", "PBKS", "LSG"}
+
+    if team_code in current_team_codes:
+        sql = f"""
+WITH current_bowlers AS (
+    SELECT DISTINCT
+        display_name,
+        cricsheet_name,
+        role,
+        bowling_style,
+        bowling_arm
+    FROM current_squads
+    WHERE team_code = '{_dcclean_q(team_code)}'
+      AND COALESCE(is_active, 1) = 1
+      AND (role LIKE '%Bowler%' OR role LIKE '%All%')
+)
+SELECT
+    cb.display_name AS bowler,
+    '{_dcclean_q(display_team)}' AS team,
+    cb.role,
+    cb.bowling_style,
+    cb.bowling_arm,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN d.wicket_type IS NOT NULL AND d.player_dismissed = d.striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS batter_sr,
+    CASE
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) >= 12 THEN 'Usable direct sample'
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0 THEN 'Small direct sample'
+        ELSE 'No direct sample'
+    END AS sample_note
+FROM current_bowlers cb
+LEFT JOIN deliveries d
+    ON (d.bowler = cb.cricsheet_name OR d.bowler = cb.display_name)
+   AND d.striker IN {batter_sql}
+   AND d.innings IN (1, 2)
+GROUP BY cb.display_name, cb.role, cb.bowling_style, cb.bowling_arm
+ORDER BY
+    CASE WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0 THEN 0 ELSE 1 END,
+    dismissals DESC,
+    batter_sr ASC,
+    balls DESC,
+    bowler ASC;
+""".strip()
+    else:
+        sql = f"""
+SELECT
+    d.bowler,
+    d.bowling_team AS team,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN d.wicket_type IS NOT NULL AND d.player_dismissed = d.striker THEN 1 END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS batter_sr
+FROM deliveries d
+WHERE d.bowling_team IN {_dcclean_sql_list(team_aliases)}
+  AND d.striker IN {batter_sql}
+  AND d.innings IN (1, 2)
+GROUP BY d.bowler, d.bowling_team
+HAVING COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0
+ORDER BY dismissals DESC, batter_sr ASC, balls DESC, bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The best-bowlers-against route failed: {error}",
+            "paragraph": f"The best-bowlers-against route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    df = df if df is not None else pd.DataFrame()
+
+    if team_code in current_team_codes:
+        paragraph = f"Best current {display_team} bowling options against {batter_raw}."
+    else:
+        paragraph = f"Best historical {display_team} bowlers against {batter_raw}."
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": df,
+        "extra_tables": {f"{display_team} bowlers vs {batter_raw}": df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            f"best bowlers against {batter_raw} for Delhi Capitals",
+            f"best bowlers against {batter_raw} for CSK",
+            f"best bowlers against Rohit for Delhi Capitals",
+            f"best bowlers against Gaikwad for Delhi Capitals",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _dcclean_is_match_plan_result(question, result):
+    text = str(question or "").lower()
+
+    if "match plan" in text:
+        return True
+
+    if "how can" in text and " beat " in text:
+        return True
+
+    if isinstance(result, dict):
+        extra = result.get("extra_tables")
+        if isinstance(extra, dict):
+            keys = {str(k).lower() for k in extra.keys()}
+            if ("key matchups" in keys or "opponent key batters" in keys) and any("phase diagnostic" in k for k in keys):
+                return True
+
+    return False
+
+
+def _dcclean_concise_match_plan_text(question, result):
+    if not isinstance(result, dict):
+        return result
+
+    if not _dcclean_is_match_plan_result(question, result):
+        return result
+
+    paragraph = "Match plan generated. See the action plan and supporting tabs below."
+
+    result["analysis_paragraph"] = paragraph
+    result["paragraph"] = paragraph
+
+    return result
+
+
+def _dcclean_hide_route_metadata(result):
+    if isinstance(result, dict):
+        result["route_used"] = ""
+        result["data_sources"] = ""
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_dcclean = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_dcclean = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _dcclean_best_bowlers_against_route(user_question)
+
+    if result is None:
+        result = _previous_answer_question_with_fallback_before_dcclean(user_question)
+
+    result = _dcclean_concise_match_plan_text(user_question, result)
+    result = _dcclean_hide_route_metadata(result)
+
+    return result
+
+# IPL SQL Agent DC ambiguity, current-squad matchup, and concise text fix END
+
+
+# IPL SQL Agent team cleanup + profile season trend tabs START
+
+def _ptab_q(value):
+    return str(value).replace("'", "''")
+
+
+def _ptab_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    if not values:
+        return "('')"
+    return "(" + ", ".join("'" + _ptab_q(v) + "'" for v in values) + ")"
+
+
+def _ptab_short_team_value(value):
+    if value is None:
+        return value
+
+    pieces = [piece.strip() for piece in str(value).split(",") if piece and str(piece).strip()]
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "DD",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    cleaned = []
+    seen = set()
+
+    for piece in pieces:
+        short = mapping.get(piece, piece)
+        key = short.lower()
+        if key not in seen:
+            cleaned.append(short)
+            seen.add(key)
+
+    return ", ".join(cleaned)
+
+
+def _ptab_clean_table_team_columns(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+        for column in ["team", "teams", "batting_team", "bowling_team", "opposition", "winner", "toss_winner"]:
+            if column in table.columns:
+                table[column] = table[column].apply(_ptab_short_team_value)
+        return table
+    except Exception:
+        return table
+
+
+def _ptab_clean_result_team_columns(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _ptab_clean_table_team_columns(result.get("result"))
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _ptab_clean_table_team_columns(table)
+        result["extra_tables"] = extra
+
+    return result
+
+
+def _ptab_team_lookup(label):
+    text = str(label or "").lower().strip()
+    terms = {
+        "csk", "chennai", "mi", "mumbai", "rcb", "bangalore", "bengaluru", "gt", "gujarat",
+        "kkr", "kolkata", "rr", "rajasthan", "srh", "sunrisers", "dc", "delhi capitals",
+        "dd", "delhi daredevils", "deccan chargers", "pbks", "kxip", "punjab", "lsg", "lucknow",
+        "rps", "rising pune", "gl", "gujarat lions", "ktk", "kochi", "pwi", "pune warriors"
+    }
+    return any(term == text or term in text for term in terms)
+
+
+def _ptab_profile_label(question):
+    import re
+    text = str(question or "").strip()
+    match = re.search(r"^(?:analyse|analyze|profile|tell me about)\s+(.+?)\s*$", text, flags=re.IGNORECASE)
+
+    if not match:
+        return None
+
+    label = match.group(1).strip(" .?")
+    low = label.lower()
+
+    if _ptab_team_lookup(label):
+        return None
+
+    if any(x in low for x in ["stadium", "venue", "chepauk", "eden", "wankhede", "chinnaswamy", "narendra"]):
+        return None
+
+    return label
+
+
+def _ptab_player_aliases(label):
+    raw = str(label or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "bumrah": ["JJ Bumrah", "Jasprit Bumrah"],
+        "jasprit": ["JJ Bumrah", "Jasprit Bumrah"],
+        "raina": ["SK Raina", "Suresh Raina"],
+        "suresh": ["SK Raina", "Suresh Raina"],
+        "narine": ["SP Narine", "Sunil Narine"],
+        "sunil": ["SP Narine", "Sunil Narine"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "dhoni": ["MS Dhoni"],
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sudharsan": ["B Sai Sudharsan", "Sai Sudharsan"],
+        "gill": ["Shubman Gill"],
+        "rashid": ["Rashid Khan"],
+        "jadeja": ["RA Jadeja", "Ravindra Jadeja"],
+        "rahul": ["KL Rahul"],
+        "warner": ["DA Warner", "David Warner"],
+        "de villiers": ["AB de Villiers"],
+    }
+
+    for key, values in known.items():
+        if key in low:
+            for value in values:
+                if value not in aliases:
+                    aliases.append(value)
+
+    return aliases
+
+
+def _ptab_resolve_player(label):
+    from app.db import run_query
+
+    aliases = _ptab_player_aliases(label)
+
+    sql = f"""
+SELECT TOP 1 player_name
+FROM (
+    SELECT striker AS player_name, COUNT(*) AS appearances
+    FROM deliveries
+    WHERE striker IN {_ptab_sql_list(aliases)}
+    GROUP BY striker
+
+    UNION ALL
+
+    SELECT bowler AS player_name, COUNT(*) AS appearances
+    FROM deliveries
+    WHERE bowler IN {_ptab_sql_list(aliases)}
+    GROUP BY bowler
+
+    UNION ALL
+
+    SELECT cricsheet_name AS player_name, 1000 AS appearances
+    FROM current_squads
+    WHERE display_name IN {_ptab_sql_list(aliases)}
+       OR cricsheet_name IN {_ptab_sql_list(aliases)}
+) x
+WHERE player_name IS NOT NULL
+GROUP BY player_name
+ORDER BY SUM(appearances) DESC, player_name ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+            return resolved, aliases
+    except Exception:
+        pass
+
+    return aliases[0], aliases
+
+
+def _ptab_add_profile_season_trends(question, result):
+    import pandas as pd
+    from app.db import run_query
+
+    if not isinstance(result, dict):
+        return result
+
+    label = _ptab_profile_label(question)
+    if not label:
+        return result
+
+    resolved, aliases = _ptab_resolve_player(label)
+
+    batting_sql = f"""
+WITH innings_scores AS (
+    SELECT
+        d.season,
+        d.match_id,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+        MAX(CASE
+            WHEN d.player_dismissed = d.striker
+             AND d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('retired hurt', 'retired out', 'retired not out')
+            THEN 1 ELSE 0
+        END) AS out_flag
+    FROM deliveries d
+    WHERE d.striker IN {_ptab_sql_list(aliases)}
+      AND d.innings IN (1, 2)
+    GROUP BY d.season, d.match_id, d.innings
+)
+SELECT
+    season,
+    COUNT(DISTINCT match_id) AS matches,
+    COUNT(*) AS innings,
+    SUM(innings_runs) AS runs,
+    SUM(out_flag) AS dismissals,
+    ROUND(SUM(innings_runs) * 1.0 / NULLIF(SUM(out_flag), 0), 2) AS batting_average,
+    SUM(CASE WHEN innings_runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS fifties,
+    SUM(CASE WHEN innings_runs >= 100 THEN 1 ELSE 0 END) AS hundreds,
+    ROUND(SUM(innings_runs) * 100.0 / NULLIF(SUM(balls), 0), 2) AS strike_rate
+FROM innings_scores
+GROUP BY season
+ORDER BY
+    CASE
+        WHEN CHARINDEX('/', CAST(season AS varchar(20))) > 0
+        THEN TRY_CONVERT(INT, LEFT(CAST(season AS varchar(20)), 4))
+        ELSE TRY_CONVERT(INT, CAST(season AS varchar(20)))
+    END,
+    season;
+""".strip()
+
+    bowling_sql = f"""
+SELECT
+    d.season,
+    COUNT(DISTINCT d.match_id) AS matches,
+    COUNT(DISTINCT CONCAT(CAST(d.match_id AS varchar(50)), '-', CAST(d.innings AS varchar(10)))) AS innings,
+    CAST(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) / 6 AS varchar(20))
+        + '.' +
+        CAST(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) % 6 AS varchar(1)) AS overs_bowled,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+        THEN 1
+    END) AS wickets,
+    SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) * 6.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS economy,
+    ROUND(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) * 1.0 / NULLIF(COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+        THEN 1
+    END), 0), 2) AS bowling_strike_rate,
+    COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0)=0 AND COALESCE(d.extras, 0)=0 THEN 1 END) AS dot_balls
+FROM deliveries d
+WHERE d.bowler IN {_ptab_sql_list(aliases)}
+  AND d.innings IN (1, 2)
+GROUP BY d.season
+ORDER BY
+    CASE
+        WHEN CHARINDEX('/', CAST(d.season AS varchar(20))) > 0
+        THEN TRY_CONVERT(INT, LEFT(CAST(d.season AS varchar(20)), 4))
+        ELSE TRY_CONVERT(INT, CAST(d.season AS varchar(20)))
+    END,
+    d.season;
+""".strip()
+
+    try:
+        batting_df = run_query(batting_sql)
+        bowling_df = run_query(bowling_sql)
+    except Exception:
+        return result
+
+    batting_df = batting_df if batting_df is not None else pd.DataFrame()
+    bowling_df = bowling_df if bowling_df is not None else pd.DataFrame()
+
+    extra = result.get("extra_tables")
+    if not isinstance(extra, dict):
+        extra = {}
+
+    if not batting_df.empty:
+        extra["Batting Season Trend"] = batting_df
+
+    if not bowling_df.empty:
+        extra["Bowling Season Trend"] = bowling_df
+
+    result["extra_tables"] = extra
+    result["sql_query"] = (result.get("sql_query") or "") + "\n\n" + batting_sql + "\n\n" + bowling_sql
+
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_profile_tabs_team_cleanup = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_profile_tabs_team_cleanup = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_profile_tabs_team_cleanup(user_question)
+    result = _ptab_add_profile_season_trends(user_question, result)
+    result = _ptab_clean_result_team_columns(result)
+    return result
+
+# IPL SQL Agent team cleanup + profile season trend tabs END
+
+
+# IPL SQL Agent filtered player milestones and wickets against team START
+
+def _fwfix_q(value):
+    return str(value).replace("'", "''")
+
+
+def _fwfix_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    if not values:
+        return "('')"
+    return "(" + ", ".join("'" + _fwfix_q(v) + "'" for v in values) + ")"
+
+
+def _fwfix_team_lookup(text_value):
+    text = str(text_value or "").lower().strip()
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals"], ["delhi capitals"]),
+        ("DD", "DD", ["Delhi Daredevils"], ["dd", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan", "deccan chargers"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+        ("RPS", "RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", "GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", "KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", "PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _fwfix_team_short_value(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "DD",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    parts = [p.strip() for p in str(value).split(",") if p and str(p).strip()]
+    cleaned = []
+    seen = set()
+
+    for part in parts:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            cleaned.append(short)
+            seen.add(key)
+
+    return ", ".join(cleaned)
+
+
+def _fwfix_cleanup_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+        for column in ["team", "teams", "batting_team", "bowling_team", "opposition"]:
+            if column in table.columns:
+                table[column] = table[column].apply(_fwfix_team_short_value)
+        return table
+    except Exception:
+        return table
+
+
+def _fwfix_cleanup_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _fwfix_cleanup_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _fwfix_cleanup_table(table)
+        result["extra_tables"] = extra
+
+    return result
+
+
+def _fwfix_player_aliases(label):
+    raw = str(label or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "bumrah": ["JJ Bumrah", "Jasprit Bumrah"],
+        "jasprit": ["JJ Bumrah", "Jasprit Bumrah"],
+        "raina": ["SK Raina", "Suresh Raina"],
+        "suresh": ["SK Raina", "Suresh Raina"],
+        "narine": ["SP Narine", "Sunil Narine"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "dhoni": ["MS Dhoni"],
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sudharsan": ["B Sai Sudharsan", "Sai Sudharsan"],
+        "gill": ["Shubman Gill"],
+        "rashid": ["Rashid Khan"],
+        "jadeja": ["RA Jadeja", "Ravindra Jadeja"],
+        "rahul": ["KL Rahul"],
+        "warner": ["DA Warner", "David Warner"],
+        "de villiers": ["AB de Villiers"],
+    }
+
+    for key, values in known.items():
+        if key in low:
+            for value in values:
+                if value not in aliases:
+                    aliases.append(value)
+
+    return aliases
+
+
+def _fwfix_resolve_player(label):
+    from app.db import run_query
+
+    aliases = _fwfix_player_aliases(label)
+
+    sql = f"""
+SELECT TOP 1 player_name
+FROM (
+    SELECT striker AS player_name, COUNT(*) AS appearances
+    FROM deliveries
+    WHERE striker IN {_fwfix_sql_list(aliases)}
+    GROUP BY striker
+
+    UNION ALL
+
+    SELECT bowler AS player_name, COUNT(*) AS appearances
+    FROM deliveries
+    WHERE bowler IN {_fwfix_sql_list(aliases)}
+    GROUP BY bowler
+
+    UNION ALL
+
+    SELECT cricsheet_name AS player_name, 1000 AS appearances
+    FROM current_squads
+    WHERE display_name IN {_fwfix_sql_list(aliases)}
+       OR cricsheet_name IN {_fwfix_sql_list(aliases)}
+) x
+WHERE player_name IS NOT NULL
+GROUP BY player_name
+ORDER BY SUM(appearances) DESC, player_name ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+            return resolved, aliases
+    except Exception:
+        pass
+
+    return aliases[0], aliases
+
+
+def _fwfix_extract_season(question):
+    import re
+
+    match = re.search(r"\b(20\d{2}(?:/\d{2})?)\b", str(question or ""))
+
+    return match.group(1) if match else None
+
+
+def _fwfix_venue_filter(question):
+    import re
+
+    text = str(question or "")
+    match = re.search(
+        r"\bat\s+([A-Za-z0-9 .'-]+?)(?:\s+against\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return "1=1", None
+
+    raw = match.group(1).strip(" .?")
+    low = raw.lower()
+
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in low or "motera" in low or "ahmedabad" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+
+    safe = _fwfix_q(low)
+    return f"(LOWER(m.venue) LIKE '%{safe}%' OR LOWER(m.city) LIKE '%{safe}%')", raw.title()
+
+
+def _fwfix_parse_player_milestone_question(question):
+    import re
+
+    text = str(question or "").strip()
+    low = text.lower()
+
+    if "fifties" in low or "50s" in low or "fifty" in low:
+        metric = "fifties"
+    elif "hundreds" in low or "100s" in low or "centuries" in low:
+        metric = "hundreds"
+    else:
+        return None
+
+    match = re.search(
+        r"\bhow\s+many\s+(?:fifties|50s|fifty scores|hundreds|100s|centuries)\s+(?:does|has)\s+(.+?)(?:\s+have|\s+scored|\s+against|\s+at|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    player_label = match.group(1).strip(" .?")
+
+    against_team = None
+    team_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if team_match:
+        team_code, team_display, team_aliases = _fwfix_team_lookup(team_match.group(1).strip(" .?"))
+        if team_code:
+            against_team = (team_code, team_display, team_aliases)
+
+    season = _fwfix_extract_season(text)
+    venue_filter, venue_label = _fwfix_venue_filter(text)
+
+    return metric, player_label, against_team, season, venue_filter, venue_label
+
+
+def _fwfix_player_filtered_milestones(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _fwfix_parse_player_milestone_question(question)
+
+    if not parsed:
+        return None
+
+    metric, player_label, against_team, season, venue_filter, venue_label = parsed
+    resolved, aliases = _fwfix_resolve_player(player_label)
+
+    filters = [
+        f"d.striker IN {_fwfix_sql_list(aliases)}",
+        "d.innings IN (1, 2)",
+        venue_filter,
+    ]
+
+    if against_team:
+        filters.append(f"d.bowling_team IN {_fwfix_sql_list(against_team[2])}")
+
+    if season:
+        filters.append(f"CAST(d.season AS varchar(20)) = '{_fwfix_q(season)}'")
+
+    where_sql = " AND ".join(filters)
+
+    title_bits = [f"{metric.title()} for {resolved}"]
+    if against_team:
+        title_bits.append(f"against {against_team[1]}")
+    if venue_label:
+        title_bits.append(f"at {venue_label}")
+    if season:
+        title_bits.append(f"in {season}")
+    title = " ".join(title_bits)
+
+    sql = f"""
+WITH innings_scores AS (
+    SELECT
+        d.striker AS player,
+        d.season,
+        d.match_id,
+        CAST(m.start_date AS date) AS match_date,
+        d.batting_team,
+        d.bowling_team AS opposition,
+        m.venue,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.striker, d.season, d.match_id, CAST(m.start_date AS date), d.batting_team, d.bowling_team, m.venue, d.innings
+    HAVING SUM(COALESCE(d.runs_off_bat, 0)) > 0
+        OR COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0
+),
+summary AS (
+    SELECT
+        '{_fwfix_q(resolved)}' AS player,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(innings_runs) AS runs,
+        SUM(CASE WHEN innings_runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS fifties,
+        SUM(CASE WHEN innings_runs >= 100 THEN 1 ELSE 0 END) AS hundreds,
+        SUM(CASE WHEN innings_runs >= 50 THEN 1 ELSE 0 END) AS fifty_plus_scores,
+        MAX(innings_runs) AS highest_score
+    FROM innings_scores
+)
+SELECT *
+FROM summary;
+""".strip()
+
+    detail_where = "innings_runs >= 100" if metric == "hundreds" else "innings_runs >= 50"
+
+    detail_sql = f"""
+WITH innings_scores AS (
+    SELECT
+        d.striker AS player,
+        d.season,
+        d.match_id,
+        CAST(m.start_date AS date) AS match_date,
+        d.batting_team,
+        d.bowling_team AS opposition,
+        m.venue,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.striker, d.season, d.match_id, CAST(m.start_date AS date), d.batting_team, d.bowling_team, m.venue, d.innings
+)
+SELECT
+    season,
+    match_date,
+    batting_team,
+    opposition,
+    venue,
+    innings,
+    innings_runs,
+    balls,
+    CASE
+        WHEN innings_runs BETWEEN 50 AND 99 THEN 'Fifty'
+        WHEN innings_runs >= 100 THEN 'Hundred'
+        ELSE ''
+    END AS score_type
+FROM innings_scores
+WHERE {detail_where}
+ORDER BY innings_runs DESC, match_date ASC;
+""".strip()
+
+    try:
+        summary_df = run_query(sql)
+        detail_df = run_query(detail_sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The filtered milestone route failed: {error}",
+            "paragraph": f"The filtered milestone route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql + "\n\n" + detail_sql,
+            "similar_questions": [],
+        }
+
+    summary_df = summary_df if summary_df is not None else pd.DataFrame()
+    detail_df = detail_df if detail_df is not None else pd.DataFrame()
+
+    count_value = int(summary_df.iloc[0].get(metric) or 0) if not summary_df.empty and metric in summary_df.columns else 0
+    paragraph = f"{title}: {count_value}."
+
+    if metric == "fifties":
+        paragraph += " Fifties means 50–99; hundreds are counted separately."
+
+    return _fwfix_cleanup_result({
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": summary_df,
+        "extra_tables": {
+            "Summary": summary_df,
+            "Scoring Innings": detail_df,
+        },
+        "sql_query": sql + "\n\n" + detail_sql,
+        "similar_questions": [
+            f"how many hundreds does {resolved} have",
+            f"how many fifties does {resolved} have against CSK",
+            f"how many hundreds does {resolved} have against MI",
+            f"how many fifties does {resolved} have at Wankhede",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    })
+
+
+def _fwfix_parse_wickets_against_team(question):
+    import re
+
+    text = str(question or "").strip()
+
+    if not re.search(r"\b(most|top|highest|taken)\b", text, flags=re.IGNORECASE):
+        return None
+
+    if not re.search(r"\bwickets?\b", text, flags=re.IGNORECASE):
+        return None
+
+    team_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not team_match:
+        return None
+
+    team_code, team_display, team_aliases = _fwfix_team_lookup(team_match.group(1).strip(" .?"))
+
+    if not team_code:
+        return None
+
+    season = _fwfix_extract_season(text)
+    venue_filter, venue_label = _fwfix_venue_filter(text)
+
+    return team_code, team_display, team_aliases, season, venue_filter, venue_label
+
+
+def _fwfix_wickets_against_team(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _fwfix_parse_wickets_against_team(question)
+
+    if not parsed:
+        return None
+
+    team_code, team_display, team_aliases, season, venue_filter, venue_label = parsed
+
+    filters = [
+        f"d.batting_team IN {_fwfix_sql_list(team_aliases)}",
+        "d.innings IN (1, 2)",
+        venue_filter,
+    ]
+
+    if season:
+        filters.append(f"CAST(d.season AS varchar(20)) = '{_fwfix_q(season)}'")
+
+    where_sql = " AND ".join(filters)
+
+    title_bits = [f"Most wickets against {team_display}"]
+    if venue_label:
+        title_bits.append(f"at {venue_label}")
+    if season:
+        title_bits.append(f"in {season}")
+    title = " ".join(title_bits)
+
+    sql = f"""
+WITH bowler_innings AS (
+    SELECT
+        d.bowler,
+        d.bowling_team AS team,
+        d.match_id,
+        d.innings,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS legal_balls,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0)=0 AND COALESCE(d.extras, 0)=0 THEN 1 END) AS dot_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.bowler, d.bowling_team, d.match_id, d.innings
+),
+bowler_totals AS (
+    SELECT
+        bowler,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM bowler_innings bi2
+            WHERE bi2.bowler = bi.bowler
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(legal_balls) AS legal_balls,
+        SUM(wickets) AS wickets,
+        SUM(runs_conceded) AS runs_conceded,
+        SUM(dot_balls) AS dot_balls
+    FROM bowler_innings bi
+    GROUP BY bowler
+)
+SELECT TOP 25
+    bowler,
+    team,
+    matches,
+    innings,
+    CAST(legal_balls / 6 AS varchar(20)) + '.' + CAST(legal_balls % 6 AS varchar(1)) AS overs_bowled,
+    wickets,
+    runs_conceded,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy,
+    ROUND(legal_balls * 1.0 / NULLIF(wickets, 0), 2) AS bowling_strike_rate,
+    dot_balls
+FROM bowler_totals
+WHERE wickets > 0
+ORDER BY wickets DESC, economy ASC, bowling_strike_rate ASC, bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The wickets-against-team route failed: {error}",
+            "paragraph": f"The wickets-against-team route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = df if df is not None else pd.DataFrame()
+
+    return _fwfix_cleanup_result({
+        "question": question,
+        "analysis_paragraph": f"{title}. This ranks opposition bowlers who took wickets while bowling against {team_display}.",
+        "paragraph": f"{title}. This ranks opposition bowlers who took wickets while bowling against {team_display}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who has taken the most wickets against MI",
+            "who has taken the most wickets against CSK in 2026",
+            "who has taken the most wickets against RCB at Wankhede",
+            f"top 10 wicket takers against {team_display}",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    })
+
+
+try:
+    _previous_answer_question_with_fallback_before_filtered_milestones_wickets = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_filtered_milestones_wickets = None
+
+
+def answer_question_with_fallback(user_question):
+    for route in [
+        _fwfix_player_filtered_milestones,
+        _fwfix_wickets_against_team,
+    ]:
+        result = route(user_question)
+        if result is not None:
+            return result
+
+    result = _previous_answer_question_with_fallback_before_filtered_milestones_wickets(user_question)
+    return _fwfix_cleanup_result(result)
+
+# IPL SQL Agent filtered player milestones and wickets against team END
+
