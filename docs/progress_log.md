@@ -188,3 +188,8 @@ fixed match plan bug where players such as sai and vaibhav arent showing
 day 14
 added cache tables to improve performance
 added support for better matchups data
+
+day 15
+added season trend under player profiles
+cleaned frontend by removing unneccesary text
+resolved team names
