@@ -12,6 +12,34 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "best strike rate in ipl min 500 balls faced",
+        "expected_columns": ["batter", "team", "balls", "strike_rate"],
+    },
+    {
+        "question": "who has the best average at chepauk min 5 matches played",
+        "expected_columns": ["batter", "team", "matches", "batting_average"],
+    },
+    {
+        "question": "best economy rate in ipl min 700 balls bowled",
+        "expected_columns": ["bowler", "team", "legal_balls", "economy"],
+    },
+    {
+        "question": "best strike rate for csk min 300 balls",
+        "expected_columns": ["batter", "team", "balls", "strike_rate"],
+    },
+    {
+        "question": "best economy rate at chepauk min 300 balls bowled",
+        "expected_columns": ["bowler", "team", "legal_balls", "economy"],
+    },
+
+
+    {
+        "question": "best bowlers against Dhoni at Chepauk",
+        "expected_columns": ["bowler", "team", "balls", "dismissals", "batter_sr"],
+    },
+
+
+    {
         "question": "top 10 run scorers in wankhede",
         "expected_columns": ["batter", "team", "runs", "batting_average", "strike_rate"],
     },

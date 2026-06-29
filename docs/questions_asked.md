@@ -514,3 +514,8 @@ how many fifties does kohli have against csk gave his overall record,add route f
 who has taken the most wickets agains csk gave csk overall best bowlers,add route for this also
 
 top 10 run scorers in wankhede gave me overall run leaders,when i switched the ques to who has the most runs at wankhede it worked,so lets add support for if the ques is asked in a diff way but means the same,the agent should be smart enough to get that.
+
+best bowlers against dhoni at chepauk failed,gave me chepauk stats
+
+add support for best strike rate in ipl(min 500 balls faced) so any amount of balls i say...same for average,same for teams,venues etc so who has the best average at chepauk(min 5 matches played)
+also for bowlers,who has the best economy rate(min 700 balls bowled etv)

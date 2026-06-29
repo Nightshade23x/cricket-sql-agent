@@ -22964,3 +22964,1865 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent venue wording normalizer END
 
+
+# IPL SQL Agent bowler-vs-batter venue route + venue team grouping START
+
+def _bvv_q(x):
+    return str(x).replace("'", "''")
+
+
+def _bvv_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _bvv_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _bvv_player_aliases(label):
+    raw = str(label or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+    known = {
+        "dhoni": ["MS Dhoni"],
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "raina": ["SK Raina", "Suresh Raina"],
+        "warner": ["DA Warner", "David Warner"],
+        "rahul": ["KL Rahul"],
+        "de villiers": ["AB de Villiers"],
+        "abd": ["AB de Villiers"],
+        "gill": ["Shubman Gill"],
+        "sudharsan": ["B Sai Sudharsan", "Sai Sudharsan"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+    }
+    for key, vals in known.items():
+        if key in low:
+            for val in vals:
+                if val not in aliases:
+                    aliases.append(val)
+    return aliases
+
+
+def _bvv_resolve_player(label):
+    try:
+        from app.db import run_query
+        aliases = _bvv_player_aliases(label)
+        sql = f"""
+SELECT TOP 1 player_name
+FROM (
+    SELECT striker AS player_name, COUNT(*) AS n FROM deliveries WHERE striker IN {_bvv_sql_list(aliases)} GROUP BY striker
+    UNION ALL
+    SELECT bowler AS player_name, COUNT(*) AS n FROM deliveries WHERE bowler IN {_bvv_sql_list(aliases)} GROUP BY bowler
+) x
+GROUP BY player_name
+ORDER BY SUM(n) DESC, player_name;
+""".strip()
+        df = run_query(sql)
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+            return resolved, aliases
+    except Exception:
+        pass
+    aliases = _bvv_player_aliases(label)
+    return aliases[0], aliases
+
+
+def _bvv_venue_filter(raw):
+    low = str(raw or "").lower().strip(" .?")
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in low or "motera" in low or "ahmedabad" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+    if "dubai" in low:
+        return "(m.venue LIKE '%Dubai%' OR m.city LIKE '%Dubai%')", "Dubai"
+    if "sharjah" in low:
+        return "(m.venue LIKE '%Sharjah%' OR m.city LIKE '%Sharjah%')", "Sharjah"
+    if "abu dhabi" in low or "zayed" in low:
+        return "(m.venue LIKE '%Abu Dhabi%' OR m.venue LIKE '%Zayed%' OR m.city LIKE '%Abu Dhabi%')", "Abu Dhabi"
+    if "brabourne" in low:
+        return "m.venue LIKE '%Brabourne%'", "Brabourne"
+    if "kotla" in low or "arun jaitley" in low:
+        return "(m.venue LIKE '%Kotla%' OR m.venue LIKE '%Arun Jaitley%')", "Arun Jaitley Stadium"
+    if "mohali" in low or "bindra" in low:
+        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Bindra%' OR m.city LIKE '%Mohali%')", "Mohali"
+    if "rajiv gandhi" in low or "uppal" in low:
+        return "(m.venue LIKE '%Rajiv Gandhi%' OR m.venue LIKE '%Uppal%')", "Rajiv Gandhi Stadium"
+    if len(low) >= 4:
+        safe = _bvv_q(low)
+        return f"(LOWER(m.venue) LIKE '%{safe}%' OR LOWER(m.city) LIKE '%{safe}%')", str(raw).strip(" .?").title()
+    return None, None
+
+
+def _bvv_parse(question):
+    import re
+    text = str(question or "").strip()
+    match = re.search(
+        r"\b(?:best|top|effective|good|which)\b.*?\bbowlers?\b.*?\b(?:against|vs|versus)\s+(.+?)\s+\b(?:at|in|inside|on)\s+([A-Za-z0-9 .'-]+?)\s*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    player = match.group(1).strip(" .?")
+    venue_raw = match.group(2).strip(" .?")
+    venue_filter, venue_label = _bvv_venue_filter(venue_raw)
+    if not venue_filter:
+        return None
+    return player, venue_filter, venue_label
+
+
+def _bvv_short_team(v):
+    if v is None:
+        return v
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+    out, seen = [], set()
+    for part in [p.strip() for p in str(v).split(",") if p and str(p).strip()]:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            out.append(short)
+            seen.add(key)
+    return ", ".join(out)
+
+
+def _bvv_clean_table(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+    try:
+        df = df.copy()
+        for col in ["team", "Team", "teams", "Teams", "batting_team", "bowling_team", "opposition", "winner", "toss_winner"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_bvv_short_team)
+        return df
+    except Exception:
+        return df
+
+
+def _bvv_group_venue_team_record(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+    try:
+        cols = {str(c).lower().strip().replace(" ", "_"): c for c in df.columns}
+        team_col = cols.get("team")
+        matches_col = cols.get("matches")
+        wins_col = cols.get("wins")
+        losses_col = cols.get("losses")
+        win_pct_col = cols.get("win_pct") or cols.get("win_percentage")
+        if not all([team_col, matches_col, wins_col, losses_col]):
+            return _bvv_clean_table(df)
+        df = df.copy()
+        df[team_col] = df[team_col].apply(_bvv_short_team)
+        grouped = df.groupby(team_col, as_index=False).agg({matches_col: "sum", wins_col: "sum", losses_col: "sum"})
+        if win_pct_col:
+            grouped[win_pct_col] = (grouped[wins_col] * 100.0 / grouped[matches_col].replace(0, float("nan"))).round(2)
+        grouped = grouped.sort_values([matches_col, wins_col], ascending=[False, False]).reset_index(drop=True)
+        ordered = [c for c in df.columns if c in grouped.columns]
+        return grouped[ordered]
+    except Exception:
+        return _bvv_clean_table(df)
+
+
+def _bvv_cleanup_result(result):
+    if not isinstance(result, dict):
+        return result
+    result["result"] = _bvv_clean_table(result.get("result"))
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            lname = str(name).lower()
+            if "team record" in lname and "venue" in lname:
+                extra[name] = _bvv_group_venue_team_record(table)
+            else:
+                extra[name] = _bvv_clean_table(table)
+        result["extra_tables"] = extra
+    return result
+
+
+def _bvv_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _bvv_parse(question)
+    if not parsed:
+        return None
+
+    player_label, venue_filter, venue_label = parsed
+    resolved, aliases = _bvv_resolve_player(player_label)
+    venue_filter_2 = venue_filter.replace("m.", "m2.")
+
+    sql = f"""
+SELECT TOP 25
+    d.bowler,
+    STUFF((
+        SELECT DISTINCT ', ' + d2.bowling_team
+        FROM deliveries d2
+        JOIN matches m2 ON d2.match_id = m2.match_id
+        WHERE d2.bowler = d.bowler
+          AND d2.striker IN {_bvv_sql_list(aliases)}
+          AND d2.innings IN (1, 2)
+          AND {venue_filter_2}
+        FOR XML PATH(''), TYPE
+    ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.player_dismissed = d.striker
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS batter_sr,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 1.0 / NULLIF(COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.player_dismissed = d.striker
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+        THEN 1
+    END), 0), 2) AS batter_average,
+    COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0)=0 AND COALESCE(d.extras, 0)=0 THEN 1 END) AS dot_balls,
+    SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) IN (4, 6) THEN 1 ELSE 0 END) AS boundaries,
+    CASE
+        WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) >= 12 THEN 'Usable sample'
+        ELSE 'Small sample'
+    END AS sample_note
+FROM deliveries d
+JOIN matches m ON d.match_id = m.match_id
+WHERE d.striker IN {_bvv_sql_list(aliases)}
+  AND d.innings IN (1, 2)
+  AND {venue_filter}
+GROUP BY d.bowler
+HAVING COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0
+ORDER BY
+    CASE WHEN COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) >= 12 THEN 0 ELSE 1 END,
+    dismissals DESC,
+    batter_sr ASC,
+    balls DESC,
+    bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The bowler-vs-batter-at-venue route failed: {error}",
+            "paragraph": f"The bowler-vs-batter-at-venue route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _bvv_clean_table(df if df is not None else pd.DataFrame())
+    paragraph = f"Best bowlers against {resolved} at {venue_label}."
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": df,
+        "extra_tables": {f"Bowlers vs {resolved} at {venue_label}": df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            f"best bowlers against Kohli at {venue_label}",
+            f"best bowlers against Rohit at {venue_label}",
+            f"best bowlers against {resolved} at Wankhede",
+            f"who has dismissed {resolved} most at {venue_label}",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_bvv = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_bvv = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _bvv_route(user_question)
+    if result is not None:
+        return result
+    result = _previous_answer_question_with_fallback_before_bvv(user_question)
+    return _bvv_cleanup_result(result)
+
+# IPL SQL Agent bowler-vs-batter venue route + venue team grouping END
+
+
+# IPL SQL Agent venue profile Delhi Capitals grouping final fix START
+
+def _dcgroup_team_for_venue_record(value):
+    if value is None:
+        return value
+
+    text = str(value).strip()
+
+    mapping = {
+        "Delhi Daredevils": "Delhi Capitals",
+        "DD": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "RCB": "RCB",
+
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "RPS": "RPS",
+
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "PBKS": "PBKS",
+        "KXIP": "PBKS",
+    }
+
+    return mapping.get(text, text)
+
+
+def _dcgroup_venue_team_record_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        cols = {str(c).lower().strip().replace(" ", "_"): c for c in table.columns}
+
+        team_col = cols.get("team")
+        matches_col = cols.get("matches")
+        wins_col = cols.get("wins")
+        losses_col = cols.get("losses")
+        win_pct_col = cols.get("win_pct") or cols.get("win_percentage")
+
+        if not all([team_col, matches_col, wins_col, losses_col]):
+            return table
+
+        table[team_col] = table[team_col].apply(_dcgroup_team_for_venue_record)
+
+        grouped = (
+            table
+            .groupby(team_col, as_index=False)
+            .agg({
+                matches_col: "sum",
+                wins_col: "sum",
+                losses_col: "sum",
+            })
+        )
+
+        if win_pct_col:
+            grouped[win_pct_col] = (
+                grouped[wins_col] * 100.0 / grouped[matches_col].replace(0, float("nan"))
+            ).round(2)
+
+        grouped = grouped.sort_values([matches_col, wins_col], ascending=[False, False]).reset_index(drop=True)
+
+        ordered_cols = [c for c in table.columns if c in grouped.columns]
+        return grouped[ordered_cols]
+
+    except Exception:
+        return table
+
+
+def _dcgroup_apply_venue_record_fix(result):
+    if not isinstance(result, dict):
+        return result
+
+    extra = result.get("extra_tables")
+
+    if not isinstance(extra, dict):
+        return result
+
+    for name, table in list(extra.items()):
+        lname = str(name).lower()
+
+        if "team record" in lname and "venue" in lname:
+            extra[name] = _dcgroup_venue_team_record_table(table)
+
+    result["extra_tables"] = extra
+
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_dcgroup = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_dcgroup = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_dcgroup(user_question)
+    return _dcgroup_apply_venue_record_fix(result)
+
+# IPL SQL Agent venue profile Delhi Capitals grouping final fix END
+
+
+# IPL SQL Agent batting rate and bowling economy filters START
+
+def _rate_q(value):
+    return str(value).replace("'", "''")
+
+
+def _rate_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    if not values:
+        return "('')"
+    return "(" + ", ".join("'" + _rate_q(v) + "'" for v in values) + ")"
+
+
+def _rate_team_lookup(text_value):
+    text = str(text_value or "").lower().strip()
+
+    if text in {"ipl", "history", "overall", "all seasons"}:
+        return None, None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+        ("RPS", "RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", "GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", "KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", "PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _rate_short_team_value(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    parts = [p.strip() for p in str(value).split(",") if p and str(p).strip()]
+    output = []
+    seen = set()
+
+    for part in parts:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            output.append(short)
+            seen.add(key)
+
+    return ", ".join(output)
+
+
+def _rate_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+        for column in ["team", "teams", "batting_team", "bowling_team", "opposition", "winner", "toss_winner"]:
+            if column in table.columns:
+                table[column] = table[column].apply(_rate_short_team_value)
+        return table
+    except Exception:
+        return table
+
+
+def _rate_clean_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _rate_clean_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _rate_clean_table(table)
+        result["extra_tables"] = extra
+
+    return result
+
+
+def _rate_extract_limit(question):
+    import re
+
+    match = re.search(r"\btop\s+(\d+)\b", str(question or ""), flags=re.IGNORECASE)
+
+    if match:
+        value = int(match.group(1))
+        if 1 <= value <= 50:
+            return value
+
+    return 10
+
+
+def _rate_extract_season(question):
+    import re
+
+    match = re.search(r"\b(20\d{2}(?:/\d{2})?)\b", str(question or ""))
+
+    return match.group(1) if match else None
+
+
+def _rate_extract_thresholds(question, metric):
+    import re
+
+    text = str(question or "").lower()
+
+    thresholds = {
+        "balls": None,
+        "matches": None,
+        "innings": None,
+        "dismissals": None,
+        "wickets": None,
+    }
+
+    patterns = [
+        r"(?:min|minimum|at least)\s*[:=]?\s*(\d+)\s*(balls?|deliveries|balls faced|balls bowled)",
+        r"(?:min|minimum|at least)\s*[:=]?\s*(\d+)\s*(matches?|matches played)",
+        r"(?:min|minimum|at least)\s*[:=]?\s*(\d+)\s*(innings?)",
+        r"(?:min|minimum|at least)\s*[:=]?\s*(\d+)\s*(dismissals?|outs?)",
+        r"(?:min|minimum|at least)\s*[:=]?\s*(\d+)\s*(wickets?)",
+    ]
+
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            value = int(match.group(1))
+            unit = match.group(2).lower()
+
+            if "ball" in unit or "deliver" in unit:
+                thresholds["balls"] = value
+            elif "match" in unit:
+                thresholds["matches"] = value
+            elif "inning" in unit:
+                thresholds["innings"] = value
+            elif "dismiss" in unit or "out" in unit:
+                thresholds["dismissals"] = value
+            elif "wicket" in unit:
+                thresholds["wickets"] = value
+
+    # Defaults only apply when user gives no explicit minimum.
+    if all(v is None for v in thresholds.values()):
+        if metric == "strike_rate":
+            thresholds["balls"] = 300
+        elif metric == "batting_average":
+            thresholds["dismissals"] = 10
+        elif metric == "economy":
+            thresholds["balls"] = 300
+
+    return thresholds
+
+
+def _rate_venue_filter(question):
+    import re
+
+    text = str(question or "")
+
+    match = re.search(
+        r"\b(?:at|in|inside|on|venue|ground)\s+([A-Za-z0-9 .'-]+?)(?:\s*\(|\s+for\s+|\s+against\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return "1=1", None
+
+    raw = match.group(1).strip(" .?")
+    low = raw.lower()
+
+    if low in {"ipl", "history", "all seasons", "overall"}:
+        return "1=1", None
+
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in low or "motera" in low or "ahmedabad" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+    if "dubai" in low:
+        return "(m.venue LIKE '%Dubai%' OR m.city LIKE '%Dubai%')", "Dubai"
+    if "sharjah" in low:
+        return "(m.venue LIKE '%Sharjah%' OR m.city LIKE '%Sharjah%')", "Sharjah"
+    if "abu dhabi" in low or "zayed" in low:
+        return "(m.venue LIKE '%Abu Dhabi%' OR m.venue LIKE '%Zayed%' OR m.city LIKE '%Abu Dhabi%')", "Abu Dhabi"
+    if "brabourne" in low:
+        return "m.venue LIKE '%Brabourne%'", "Brabourne"
+    if "kotla" in low or "arun jaitley" in low:
+        return "(m.venue LIKE '%Kotla%' OR m.venue LIKE '%Arun Jaitley%')", "Arun Jaitley Stadium"
+    if "mohali" in low or "bindra" in low:
+        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Bindra%' OR m.city LIKE '%Mohali%')", "Mohali"
+    if "dharamsala" in low or "dharamshala" in low:
+        return "(m.venue LIKE '%Dharamsala%' OR m.venue LIKE '%Dharamshala%' OR m.city LIKE '%Dharam%')", "Dharamshala"
+    if "rajiv gandhi" in low or "uppal" in low:
+        return "(m.venue LIKE '%Rajiv Gandhi%' OR m.venue LIKE '%Uppal%')", "Rajiv Gandhi Stadium"
+
+    if len(low) >= 4:
+        safe = _rate_q(low)
+        return f"(LOWER(m.venue) LIKE '%{safe}%' OR LOWER(m.city) LIKE '%{safe}%')", raw.title()
+
+    return "1=1", None
+
+
+def _rate_team_filters(question, kind):
+    import re
+
+    text = str(question or "")
+
+    team_filter_sql = []
+    label_parts = []
+
+    # for/from/by TEAM = player's own team
+    own_match = re.search(
+        r"\b(?:for|from|by)\s+([A-Za-z0-9 .]+?)(?:\s*\(|\s+at\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s+against\s+|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if own_match:
+        raw = own_match.group(1).strip(" .?")
+        code, display, aliases = _rate_team_lookup(raw)
+
+        if code == "AMBIGUOUS_DC":
+            return "AMBIGUOUS_DC", [], []
+
+        if aliases:
+            if kind == "batting":
+                team_filter_sql.append(f"d.batting_team IN {_rate_sql_list(aliases)}")
+            else:
+                team_filter_sql.append(f"d.bowling_team IN {_rate_sql_list(aliases)}")
+            label_parts.append(f"for {display}")
+
+    # against TEAM = opposition
+    against_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s*\(|\s+at\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if against_match:
+        raw = against_match.group(1).strip(" .?")
+        code, display, aliases = _rate_team_lookup(raw)
+
+        if code == "AMBIGUOUS_DC":
+            return "AMBIGUOUS_DC", [], []
+
+        if aliases:
+            if kind == "batting":
+                team_filter_sql.append(f"d.bowling_team IN {_rate_sql_list(aliases)}")
+            else:
+                team_filter_sql.append(f"d.batting_team IN {_rate_sql_list(aliases)}")
+            label_parts.append(f"against {display}")
+
+    # Token fallback for "CSK best strike rate..." only when no explicit for/against found.
+    if not team_filter_sql:
+        for token in ["csk", "mi", "rcb", "gt", "kkr", "rr", "srh", "pbks", "kxip", "lsg"]:
+            if re.search(rf"\b{token}\b", text, flags=re.IGNORECASE):
+                code, display, aliases = _rate_team_lookup(token)
+                if aliases:
+                    if kind == "batting":
+                        team_filter_sql.append(f"d.batting_team IN {_rate_sql_list(aliases)}")
+                    else:
+                        team_filter_sql.append(f"d.bowling_team IN {_rate_sql_list(aliases)}")
+                    label_parts.append(f"for {display}")
+                    break
+
+    return None, team_filter_sql, label_parts
+
+
+def _rate_dc_ambiguity(question):
+    import pandas as pd
+
+    data = pd.DataFrame([
+        {
+            "issue": "DC is ambiguous",
+            "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+            "example": "best strike rate for Delhi Capitals min 500 balls",
+        }
+    ])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": data,
+        "extra_tables": {"Clarification": data},
+        "sql_query": "",
+        "similar_questions": [
+            "best strike rate for Delhi Capitals min 500 balls",
+            "best average for Delhi Capitals min 5 matches",
+            "best economy rate for Delhi Capitals min 700 balls",
+            "best strike rate against Deccan Chargers min 200 balls",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _rate_is_batting_rate_question(question):
+    text = str(question or "").lower()
+
+    if "economy" in text:
+        return None
+
+    if "strike rate" in text or re.search(r"\bsr\b", text):
+        if any(x in text for x in ["best", "highest", "top"]):
+            return "strike_rate"
+
+    if "average" in text and "bowling average" not in text:
+        if any(x in text for x in ["best", "highest", "top"]):
+            return "batting_average"
+
+    return None
+
+
+def _rate_is_bowling_economy_question(question):
+    text = str(question or "").lower()
+
+    if "economy" in text and any(x in text for x in ["best", "lowest", "top"]):
+        return True
+
+    return False
+
+
+def _rate_min_label(thresholds, kind):
+    parts = []
+
+    if thresholds.get("balls") is not None:
+        parts.append(f"min {thresholds['balls']} balls {'faced' if kind == 'batting' else 'bowled'}")
+
+    if thresholds.get("matches") is not None:
+        parts.append(f"min {thresholds['matches']} matches")
+
+    if thresholds.get("innings") is not None:
+        parts.append(f"min {thresholds['innings']} innings")
+
+    if thresholds.get("dismissals") is not None:
+        parts.append(f"min {thresholds['dismissals']} dismissals")
+
+    if thresholds.get("wickets") is not None:
+        parts.append(f"min {thresholds['wickets']} wickets")
+
+    return ", ".join(parts)
+
+
+def _rate_threshold_where(thresholds, kind):
+    clauses = []
+
+    if thresholds.get("balls") is not None:
+        col = "balls" if kind == "batting" else "legal_balls"
+        clauses.append(f"{col} >= {int(thresholds['balls'])}")
+
+    if thresholds.get("matches") is not None:
+        clauses.append(f"matches >= {int(thresholds['matches'])}")
+
+    if thresholds.get("innings") is not None:
+        clauses.append(f"innings >= {int(thresholds['innings'])}")
+
+    if thresholds.get("dismissals") is not None and kind == "batting":
+        clauses.append(f"dismissals >= {int(thresholds['dismissals'])}")
+
+    if thresholds.get("wickets") is not None and kind == "bowling":
+        clauses.append(f"wickets >= {int(thresholds['wickets'])}")
+
+    if kind == "batting":
+        clauses.append("balls > 0")
+    else:
+        clauses.append("legal_balls > 0")
+
+    return " AND ".join(clauses)
+
+
+def _rate_batting_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    metric = _rate_is_batting_rate_question(question)
+
+    if not metric:
+        return None
+
+    limit = _rate_extract_limit(question)
+    season = _rate_extract_season(question)
+    thresholds = _rate_extract_thresholds(question, metric)
+    venue_filter, venue_label = _rate_venue_filter(question)
+
+    ambiguity, team_filters, label_parts = _rate_team_filters(question, "batting")
+
+    if ambiguity == "AMBIGUOUS_DC":
+        return _rate_dc_ambiguity(question)
+
+    filters = [
+        "d.innings IN (1, 2)",
+        venue_filter,
+    ]
+
+    filters.extend(team_filters)
+
+    if season:
+        filters.append(f"CAST(d.season AS varchar(20)) = '{_rate_q(season)}'")
+
+    where_sql = " AND ".join(filters)
+    threshold_where = _rate_threshold_where(thresholds, "batting")
+    min_label = _rate_min_label(thresholds, "batting")
+
+    sort_expr = "strike_rate DESC, runs DESC, batter ASC" if metric == "strike_rate" else "batting_average DESC, runs DESC, strike_rate DESC, batter ASC"
+
+    title_metric = "Best strike rate" if metric == "strike_rate" else "Best batting average"
+    title_parts = [title_metric]
+
+    if label_parts:
+        title_parts.extend(label_parts)
+
+    if venue_label:
+        title_parts.append(f"at {venue_label}")
+
+    if season:
+        title_parts.append(f"in {season}")
+
+    if min_label:
+        title_parts.append(f"({min_label})")
+
+    title = " ".join(title_parts)
+
+    sql = f"""
+WITH batter_innings AS (
+    SELECT
+        d.striker AS batter,
+        d.batting_team AS team,
+        d.season,
+        d.match_id,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+        MAX(CASE
+            WHEN d.player_dismissed = d.striker
+             AND d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('retired hurt', 'retired out', 'retired not out')
+            THEN 1 ELSE 0
+        END) AS out_flag
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.striker, d.batting_team, d.season, d.match_id, d.innings
+    HAVING SUM(COALESCE(d.runs_off_bat, 0)) > 0
+        OR COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0
+),
+batter_totals AS (
+    SELECT
+        batter,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM batter_innings bi2
+            WHERE bi2.batter = bi.batter
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(innings_runs) AS runs,
+        SUM(out_flag) AS dismissals,
+        SUM(balls) AS balls,
+        MAX(innings_runs) AS highest_score,
+        SUM(CASE WHEN innings_runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS fifties,
+        SUM(CASE WHEN innings_runs >= 100 THEN 1 ELSE 0 END) AS hundreds
+    FROM batter_innings bi
+    GROUP BY batter
+),
+ranked AS (
+    SELECT
+        batter,
+        team,
+        matches,
+        innings,
+        runs,
+        dismissals,
+        ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average,
+        balls,
+        ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+        highest_score,
+        fifties,
+        hundreds
+    FROM batter_totals
+)
+SELECT TOP {limit}
+    batter,
+    team,
+    matches,
+    innings,
+    runs,
+    dismissals,
+    batting_average,
+    balls,
+    strike_rate,
+    highest_score,
+    fifties,
+    hundreds
+FROM ranked
+WHERE {threshold_where}
+ORDER BY {sort_expr};
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The batting rate route failed: {error}",
+            "paragraph": f"The batting rate route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _rate_clean_table(df if df is not None else pd.DataFrame())
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "best strike rate in IPL min 500 balls faced",
+            "who has the best average at Chepauk min 5 matches played",
+            "best strike rate for CSK min 300 balls",
+            "best average against MI min 10 matches",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _rate_bowling_economy_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    if not _rate_is_bowling_economy_question(question):
+        return None
+
+    limit = _rate_extract_limit(question)
+    season = _rate_extract_season(question)
+    thresholds = _rate_extract_thresholds(question, "economy")
+    venue_filter, venue_label = _rate_venue_filter(question)
+
+    ambiguity, team_filters, label_parts = _rate_team_filters(question, "bowling")
+
+    if ambiguity == "AMBIGUOUS_DC":
+        return _rate_dc_ambiguity(question)
+
+    filters = [
+        "d.innings IN (1, 2)",
+        venue_filter,
+    ]
+
+    filters.extend(team_filters)
+
+    if season:
+        filters.append(f"CAST(d.season AS varchar(20)) = '{_rate_q(season)}'")
+
+    where_sql = " AND ".join(filters)
+    threshold_where = _rate_threshold_where(thresholds, "bowling")
+    min_label = _rate_min_label(thresholds, "bowling")
+
+    title_parts = ["Best economy rate"]
+
+    if label_parts:
+        title_parts.extend(label_parts)
+
+    if venue_label:
+        title_parts.append(f"at {venue_label}")
+
+    if season:
+        title_parts.append(f"in {season}")
+
+    if min_label:
+        title_parts.append(f"({min_label})")
+
+    title = " ".join(title_parts)
+
+    sql = f"""
+WITH bowler_innings AS (
+    SELECT
+        d.bowler,
+        d.bowling_team AS team,
+        d.match_id,
+        d.innings,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS legal_balls,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0)=0 AND COALESCE(d.extras, 0)=0 THEN 1 END) AS dot_balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.bowler, d.bowling_team, d.match_id, d.innings
+),
+bowler_totals AS (
+    SELECT
+        bowler,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM bowler_innings bi2
+            WHERE bi2.bowler = bi.bowler
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(legal_balls) AS legal_balls,
+        SUM(wickets) AS wickets,
+        SUM(runs_conceded) AS runs_conceded,
+        SUM(dot_balls) AS dot_balls
+    FROM bowler_innings bi
+    GROUP BY bowler
+),
+ranked AS (
+    SELECT
+        bowler,
+        team,
+        matches,
+        innings,
+        CAST(legal_balls / 6 AS varchar(20)) + '.' + CAST(legal_balls % 6 AS varchar(1)) AS overs_bowled,
+        legal_balls,
+        wickets,
+        runs_conceded,
+        ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy,
+        ROUND(legal_balls * 1.0 / NULLIF(wickets, 0), 2) AS bowling_strike_rate,
+        dot_balls
+    FROM bowler_totals
+)
+SELECT TOP {limit}
+    bowler,
+    team,
+    matches,
+    innings,
+    overs_bowled,
+    legal_balls,
+    wickets,
+    runs_conceded,
+    economy,
+    bowling_strike_rate,
+    dot_balls
+FROM ranked
+WHERE {threshold_where}
+ORDER BY economy ASC, wickets DESC, legal_balls DESC, bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The bowling economy route failed: {error}",
+            "paragraph": f"The bowling economy route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _rate_clean_table(df if df is not None else pd.DataFrame())
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "best economy rate in IPL min 700 balls bowled",
+            "who has the best economy rate at Chepauk min 300 balls",
+            "best economy rate for CSK min 300 balls",
+            "best economy rate against MI min 500 balls",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_rate_routes = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_rate_routes = None
+
+
+def answer_question_with_fallback(user_question):
+    for route in [
+        _rate_batting_route,
+        _rate_bowling_economy_route,
+    ]:
+        result = route(user_question)
+        if result is not None:
+            return result
+
+    result = _previous_answer_question_with_fallback_before_rate_routes(user_question)
+    return _rate_clean_result(result)
+
+# IPL SQL Agent batting rate and bowling economy filters END
+
+
+# IPL SQL Agent final robust rate/economy routes START
+
+def _rrfinal_q(value):
+    return str(value).replace("'", "''")
+
+
+def _rrfinal_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _rrfinal_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _rrfinal_short_team_value(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    parts = [p.strip() for p in str(value).split(",") if p and str(p).strip()]
+    out = []
+    seen = set()
+
+    for part in parts:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            out.append(short)
+            seen.add(key)
+
+    return ", ".join(out)
+
+
+def _rrfinal_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+        for col in ["team", "teams", "batting_team", "bowling_team", "opposition", "winner", "toss_winner"]:
+            if col in table.columns:
+                table[col] = table[col].apply(_rrfinal_short_team_value)
+        return table
+    except Exception:
+        return table
+
+
+def _rrfinal_clean_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _rrfinal_clean_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _rrfinal_clean_table(table)
+        result["extra_tables"] = extra
+
+    return result
+
+
+def _rrfinal_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text in {"ipl", "the ipl", "history", "overall", "all seasons", "all time"}:
+        return None, None, []
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+        ("RPS", "RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", "GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", "KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", "PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(t in text for t in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _rrfinal_venue_filter(raw):
+    low = str(raw or "").lower().strip(" .?")
+
+    if not low or low in {"ipl", "the ipl", "history", "overall", "all seasons", "all time"}:
+        return "1=1", None
+
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in low or "motera" in low or "ahmedabad" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+    if "dubai" in low:
+        return "(m.venue LIKE '%Dubai%' OR m.city LIKE '%Dubai%')", "Dubai"
+    if "sharjah" in low:
+        return "(m.venue LIKE '%Sharjah%' OR m.city LIKE '%Sharjah%')", "Sharjah"
+    if "abu dhabi" in low or "zayed" in low:
+        return "(m.venue LIKE '%Abu Dhabi%' OR m.venue LIKE '%Zayed%' OR m.city LIKE '%Abu Dhabi%')", "Abu Dhabi"
+    if "brabourne" in low:
+        return "m.venue LIKE '%Brabourne%'", "Brabourne"
+    if "kotla" in low or "arun jaitley" in low:
+        return "(m.venue LIKE '%Kotla%' OR m.venue LIKE '%Arun Jaitley%')", "Arun Jaitley Stadium"
+    if "mohali" in low or "bindra" in low:
+        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Bindra%' OR m.city LIKE '%Mohali%')", "Mohali"
+    if "dharamsala" in low or "dharamshala" in low:
+        return "(m.venue LIKE '%Dharamsala%' OR m.venue LIKE '%Dharamshala%' OR m.city LIKE '%Dharam%')", "Dharamshala"
+    if "rajiv gandhi" in low or "uppal" in low:
+        return "(m.venue LIKE '%Rajiv Gandhi%' OR m.venue LIKE '%Uppal%')", "Rajiv Gandhi Stadium"
+
+    return "1=1", None
+
+
+def _rrfinal_parse_minimums(question):
+    import re
+
+    text = str(question or "").lower()
+    mins = {"balls": None, "matches": None, "innings": None, "dismissals": None, "wickets": None}
+
+    # Capture either "(min 500 balls faced)" or "min 500 balls faced".
+    for match in re.finditer(r"(?:min|minimum|at least)\s*[:=]?\s*(\d+)\s*([a-z ]+)", text, flags=re.IGNORECASE):
+        value = int(match.group(1))
+        unit = match.group(2).strip()
+
+        # Stop unit at common next clauses.
+        for stop in [" at ", " in ", " for ", " against ", " by "]:
+            if stop in unit:
+                unit = unit.split(stop)[0].strip()
+
+        if "ball" in unit or "deliver" in unit:
+            mins["balls"] = value
+        elif "match" in unit:
+            mins["matches"] = value
+        elif "inning" in unit:
+            mins["innings"] = value
+        elif "dismiss" in unit or "out" in unit:
+            mins["dismissals"] = value
+        elif "wicket" in unit:
+            mins["wickets"] = value
+
+    return mins
+
+
+def _rrfinal_strip_min_clauses(question):
+    import re
+
+    text = str(question or "")
+
+    text = re.sub(
+        r"\((?:\s*)(?:min|minimum|at least)\s*[:=]?\s*\d+\s*[A-Za-z ]*(?:\s*)\)",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(
+        r"\b(?:min|minimum|at least)\s*[:=]?\s*\d+\s*[A-Za-z ]*",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    return text
+
+
+def _rrfinal_parse_context(question, kind):
+    import re
+
+    clean = _rrfinal_strip_min_clauses(question)
+    text = clean.lower()
+
+    season = None
+    season_match = re.search(r"\b(20\d{2}(?:/\d{2})?)\b", clean)
+    if season_match:
+        season = season_match.group(1)
+
+    venue_filter = "1=1"
+    venue_label = None
+
+    # Only these words should trigger venue parsing.
+    venue_match = re.search(
+        r"\b(?:at|inside|on|venue|ground)\s+([A-Za-z0-9 .'-]+?)(?:\s+for\s+|\s+against\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if venue_match:
+        venue_filter, venue_label = _rrfinal_venue_filter(venue_match.group(1))
+
+    # "in Chepauk" should be allowed, but "in IPL" should not become a venue.
+    if not venue_label:
+        in_match = re.search(
+            r"\bin\s+([A-Za-z0-9 .'-]+?)(?:\s+for\s+|\s+against\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if in_match:
+            possible = in_match.group(1).strip(" .?")
+            if possible.lower() not in {"ipl", "the ipl", "history", "overall", "all seasons", "all time"} and not re.fullmatch(r"20\d{2}(?:/\d{2})?", possible):
+                venue_filter, venue_label = _rrfinal_venue_filter(possible)
+
+    team_clauses = []
+    labels = []
+    ambiguity = False
+
+    # "for/from/by TEAM" means own team.
+    own_match = re.search(
+        r"\b(?:for|from|by)\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s+against\s+|\s*$)",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if own_match:
+        code, display, aliases = _rrfinal_team_lookup(own_match.group(1).strip(" .?"))
+
+        if code == "AMBIGUOUS_DC":
+            ambiguity = True
+        elif aliases:
+            team_col = "d.batting_team" if kind == "batting" else "d.bowling_team"
+            team_clauses.append(f"{team_col} IN {_rrfinal_sql_list(aliases)}")
+            labels.append(f"for {display}")
+
+    # "against TEAM" means opposition.
+    against_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+20\d{2}(?:/\d{2})?|\s*$)",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if against_match:
+        code, display, aliases = _rrfinal_team_lookup(against_match.group(1).strip(" .?"))
+
+        if code == "AMBIGUOUS_DC":
+            ambiguity = True
+        elif aliases:
+            opp_col = "d.bowling_team" if kind == "batting" else "d.batting_team"
+            team_clauses.append(f"{opp_col} IN {_rrfinal_sql_list(aliases)}")
+            labels.append(f"against {display}")
+
+    return {
+        "season": season,
+        "venue_filter": venue_filter,
+        "venue_label": venue_label,
+        "team_clauses": team_clauses,
+        "labels": labels,
+        "ambiguity": ambiguity,
+    }
+
+
+def _rrfinal_limit(question):
+    import re
+
+    match = re.search(r"\btop\s+(\d+)\b", str(question or ""), flags=re.IGNORECASE)
+
+    if match:
+        n = int(match.group(1))
+        if 1 <= n <= 50:
+            return n
+
+    return 10
+
+
+def _rrfinal_metric(question):
+    text = str(question or "").lower()
+
+    if "economy" in text and any(x in text for x in ["best", "lowest", "top"]):
+        return "economy"
+
+    if ("strike rate" in text or " sr" in text) and any(x in text for x in ["best", "highest", "top"]):
+        return "strike_rate"
+
+    if "average" in text and "bowling average" not in text and any(x in text for x in ["best", "highest", "top"]):
+        return "batting_average"
+
+    return None
+
+
+def _rrfinal_min_label(mins, kind):
+    parts = []
+
+    if mins.get("balls") is not None:
+        parts.append(f"min {mins['balls']} balls {'faced' if kind == 'batting' else 'bowled'}")
+    if mins.get("matches") is not None:
+        parts.append(f"min {mins['matches']} matches")
+    if mins.get("innings") is not None:
+        parts.append(f"min {mins['innings']} innings")
+    if mins.get("dismissals") is not None:
+        parts.append(f"min {mins['dismissals']} dismissals")
+    if mins.get("wickets") is not None:
+        parts.append(f"min {mins['wickets']} wickets")
+
+    return ", ".join(parts)
+
+
+def _rrfinal_dc_ambiguity(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "issue": "DC is ambiguous",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "example": "best strike rate for Delhi Capitals min 500 balls",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "best strike rate for Delhi Capitals min 500 balls",
+            "best average for Delhi Capitals min 5 matches",
+            "best economy rate for Delhi Capitals min 700 balls",
+            "best strike rate against Deccan Chargers min 200 balls",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _rrfinal_batting_rate_route(question, metric):
+    import pandas as pd
+    from app.db import run_query
+
+    ctx = _rrfinal_parse_context(question, "batting")
+    if ctx["ambiguity"]:
+        return _rrfinal_dc_ambiguity(question)
+
+    mins = _rrfinal_parse_minimums(question)
+
+    if not any(v is not None for v in mins.values()):
+        if metric == "strike_rate":
+            mins["balls"] = 300
+        else:
+            mins["dismissals"] = 10
+
+    filters = [
+        "d.innings IN (1, 2)",
+        ctx["venue_filter"],
+    ]
+    filters.extend(ctx["team_clauses"])
+
+    if ctx["season"]:
+        filters.append(f"CAST(d.season AS varchar(20)) = '{_rrfinal_q(ctx['season'])}'")
+
+    where_sql = " AND ".join(filters)
+
+    threshold_parts = ["balls > 0"]
+
+    if metric == "batting_average":
+        threshold_parts.append("dismissals > 0")
+
+    if mins.get("balls") is not None:
+        threshold_parts.append(f"balls >= {int(mins['balls'])}")
+    if mins.get("matches") is not None:
+        threshold_parts.append(f"matches >= {int(mins['matches'])}")
+    if mins.get("innings") is not None:
+        threshold_parts.append(f"innings >= {int(mins['innings'])}")
+    if mins.get("dismissals") is not None:
+        threshold_parts.append(f"dismissals >= {int(mins['dismissals'])}")
+
+    threshold_sql = " AND ".join(threshold_parts)
+
+    sort_sql = "strike_rate DESC, runs DESC, batter ASC" if metric == "strike_rate" else "batting_average DESC, runs DESC, strike_rate DESC, batter ASC"
+    limit = _rrfinal_limit(question)
+
+    sql = f"""
+WITH batter_innings AS (
+    SELECT
+        d.striker AS batter,
+        d.batting_team AS team,
+        d.match_id,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+        MAX(CASE
+            WHEN d.player_dismissed = d.striker
+             AND d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('retired hurt', 'retired out', 'retired not out')
+            THEN 1 ELSE 0
+        END) AS out_flag
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.striker, d.batting_team, d.match_id, d.innings
+),
+totals AS (
+    SELECT
+        batter,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM batter_innings bi2
+            WHERE bi2.batter = bi.batter
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(innings_runs) AS runs,
+        SUM(out_flag) AS dismissals,
+        SUM(balls) AS balls,
+        MAX(innings_runs) AS highest_score,
+        SUM(CASE WHEN innings_runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS fifties,
+        SUM(CASE WHEN innings_runs >= 100 THEN 1 ELSE 0 END) AS hundreds
+    FROM batter_innings bi
+    GROUP BY batter
+),
+ranked AS (
+    SELECT
+        batter,
+        team,
+        matches,
+        innings,
+        runs,
+        dismissals,
+        ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) AS batting_average,
+        balls,
+        ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+        highest_score,
+        fifties,
+        hundreds
+    FROM totals
+)
+SELECT TOP {limit}
+    batter,
+    team,
+    matches,
+    innings,
+    runs,
+    dismissals,
+    batting_average,
+    balls,
+    strike_rate,
+    highest_score,
+    fifties,
+    hundreds
+FROM ranked
+WHERE {threshold_sql}
+ORDER BY {sort_sql};
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The robust batting rate route failed: {error}",
+            "paragraph": f"The robust batting rate route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _rrfinal_clean_table(df if df is not None else pd.DataFrame())
+
+    title_parts = ["Best strike rate" if metric == "strike_rate" else "Best batting average"]
+    title_parts.extend(ctx["labels"])
+    if ctx["venue_label"]:
+        title_parts.append(f"at {ctx['venue_label']}")
+    if ctx["season"]:
+        title_parts.append(f"in {ctx['season']}")
+    min_label = _rrfinal_min_label(mins, "batting")
+    if min_label:
+        title_parts.append(f"({min_label})")
+    title = " ".join(title_parts)
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "best strike rate in IPL min 500 balls faced",
+            "who has the best average at Chepauk min 5 matches played",
+            "best strike rate for CSK min 300 balls",
+            "best average against MI min 10 matches",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _rrfinal_economy_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    ctx = _rrfinal_parse_context(question, "bowling")
+    if ctx["ambiguity"]:
+        return _rrfinal_dc_ambiguity(question)
+
+    mins = _rrfinal_parse_minimums(question)
+    if not any(v is not None for v in mins.values()):
+        mins["balls"] = 300
+
+    filters = [
+        "d.innings IN (1, 2)",
+        ctx["venue_filter"],
+    ]
+    filters.extend(ctx["team_clauses"])
+
+    if ctx["season"]:
+        filters.append(f"CAST(d.season AS varchar(20)) = '{_rrfinal_q(ctx['season'])}'")
+
+    where_sql = " AND ".join(filters)
+
+    threshold_parts = ["legal_balls > 0"]
+
+    if mins.get("balls") is not None:
+        threshold_parts.append(f"legal_balls >= {int(mins['balls'])}")
+    if mins.get("matches") is not None:
+        threshold_parts.append(f"matches >= {int(mins['matches'])}")
+    if mins.get("innings") is not None:
+        threshold_parts.append(f"innings >= {int(mins['innings'])}")
+    if mins.get("wickets") is not None:
+        threshold_parts.append(f"wickets >= {int(mins['wickets'])}")
+
+    threshold_sql = " AND ".join(threshold_parts)
+    limit = _rrfinal_limit(question)
+
+    sql = f"""
+WITH bowler_innings AS (
+    SELECT
+        d.bowler,
+        d.bowling_team AS team,
+        d.match_id,
+        d.innings,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS legal_balls,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0)=0 AND COALESCE(d.extras, 0)=0 THEN 1 END) AS dot_balls
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.bowler, d.bowling_team, d.match_id, d.innings
+),
+totals AS (
+    SELECT
+        bowler,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM bowler_innings bi2
+            WHERE bi2.bowler = bi.bowler
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(legal_balls) AS legal_balls,
+        SUM(wickets) AS wickets,
+        SUM(runs_conceded) AS runs_conceded,
+        SUM(dot_balls) AS dot_balls
+    FROM bowler_innings bi
+    GROUP BY bowler
+),
+ranked AS (
+    SELECT
+        bowler,
+        team,
+        matches,
+        innings,
+        CAST(legal_balls / 6 AS varchar(20)) + '.' + CAST(legal_balls % 6 AS varchar(1)) AS overs_bowled,
+        legal_balls,
+        wickets,
+        runs_conceded,
+        ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy,
+        ROUND(legal_balls * 1.0 / NULLIF(wickets, 0), 2) AS bowling_strike_rate,
+        dot_balls
+    FROM totals
+)
+SELECT TOP {limit}
+    bowler,
+    team,
+    matches,
+    innings,
+    overs_bowled,
+    legal_balls,
+    wickets,
+    runs_conceded,
+    economy,
+    bowling_strike_rate,
+    dot_balls
+FROM ranked
+WHERE {threshold_sql}
+ORDER BY economy ASC, wickets DESC, legal_balls DESC, bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The robust economy route failed: {error}",
+            "paragraph": f"The robust economy route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _rrfinal_clean_table(df if df is not None else pd.DataFrame())
+
+    title_parts = ["Best economy rate"]
+    title_parts.extend(ctx["labels"])
+    if ctx["venue_label"]:
+        title_parts.append(f"at {ctx['venue_label']}")
+    if ctx["season"]:
+        title_parts.append(f"in {ctx['season']}")
+    min_label = _rrfinal_min_label(mins, "bowling")
+    if min_label:
+        title_parts.append(f"({min_label})")
+    title = " ".join(title_parts)
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "best economy rate in IPL min 700 balls bowled",
+            "who has the best economy rate at Chepauk min 300 balls",
+            "best economy rate for CSK min 300 balls",
+            "best economy rate against MI min 500 balls",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_rrfinal = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_rrfinal = None
+
+
+def answer_question_with_fallback(user_question):
+    metric = _rrfinal_metric(user_question)
+
+    if metric == "strike_rate" or metric == "batting_average":
+        return _rrfinal_batting_rate_route(user_question, metric)
+
+    if metric == "economy":
+        return _rrfinal_economy_route(user_question)
+
+    result = _previous_answer_question_with_fallback_before_rrfinal(user_question)
+    return _rrfinal_clean_result(result)
+
+# IPL SQL Agent final robust rate/economy routes END
+
