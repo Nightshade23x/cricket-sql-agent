@@ -196,3 +196,6 @@ resolved team names
 
 day 16
 added documentation
+added support for strike rates and average
+updated example questions
+fixed some backend bugs
