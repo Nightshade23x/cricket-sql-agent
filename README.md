@@ -1,8 +1,13 @@
 # IPL SQL Agent
 
-A local cricket analytics assistant that answers Indian Premier League (IPL) questions by generating and running SQL queries over a local SQL Server database.
+A local cricket analytics assistant that answers Indian Premier League (IPL)
+questions by generating and running SQL queries over a local SQL Server database.
 
-The project uses processed Cricsheet IPL data, SQL Server, a local Ollama model, and a Streamlit frontend. It is designed to answer cricket questions through structured SQL instead of relying on internet search.
+The project uses processed Cricsheet IPL data, SQL Server, a local Ollama model,
+and a Streamlit frontend. It is designed to answer cricket questions through
+structured SQL instead of relying on internet search.
+
+> **Note:** This project is a local IPL analytics application. The GitHub repository contains the source code, but running the app requires local setup of SQL Server, the IPL dataset/database tables, and an Ollama model server.
 
 **Author:** Samar Mahajan
 

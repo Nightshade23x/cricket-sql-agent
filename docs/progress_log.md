@@ -193,3 +193,6 @@ day 15
 added season trend under player profiles
 cleaned frontend by removing unneccesary text
 resolved team names
+
+day 16
+added documentation
