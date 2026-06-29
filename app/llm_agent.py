@@ -22889,3 +22889,78 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent filtered player milestones and wickets against team END
 
+
+# IPL SQL Agent venue wording normalizer START
+
+def _vennorm_should_try(question):
+    text = str(question or "").lower()
+    return any(word in text for word in [
+        "run scorer", "run scorers", "run scoer", "run scoers", "most runs", "highest runs",
+        "wicket taker", "wicket takers", "most wickets", "highest wickets",
+        "fifties", "hundreds", "50s", "100s", "centuries",
+        "fastest 50", "fastest 100", "death overs", "powerplay", "middle overs"
+    ])
+
+
+def _vennorm_normalize(question):
+    import re
+
+    original = str(question or "")
+
+    if not _vennorm_should_try(original):
+        return original
+
+    venue_words = (
+        r"wankhede|chepauk|chidambaram|eden gardens|eden|chinnaswamy|"
+        r"narendra modi(?: stadium)?|motera|ahmedabad|dubai|sharjah|"
+        r"abu dhabi|zayed|brabourne|kotla|arun jaitley|"
+        r"sawai mansingh|sawai|jaipur|mohali|bindra|"
+        r"dharamsala|dharamshala|rajiv gandhi|uppal"
+    )
+
+    # Convert "in Wankhede" / "inside Wankhede" / "on Wankhede" to "at Wankhede"
+    # while avoiding "in 2026", "in IPL", etc.
+    pattern = re.compile(
+        rf"\b(?:in|inside|on)\s+({venue_words})(?=\s+in\s+20\d{{2}}(?:/\d{{2}})?|\s+for\s+|\s+against\s+|\s*$)",
+        flags=re.IGNORECASE,
+    )
+
+    normalized = pattern.sub(lambda m: "at " + m.group(1), original, count=1)
+
+    # Also support venue-first phrasing like "Wankhede top 10 run scorers".
+    if normalized == original:
+        venue_first = re.compile(
+            rf"^\s*({venue_words})\s+(top\s+\d+\s+.*|who\s+.*|most\s+.*|highest\s+.*)$",
+            flags=re.IGNORECASE,
+        )
+        match = venue_first.search(original)
+        if match:
+            normalized = f"{match.group(2)} at {match.group(1)}"
+
+    return normalized
+
+
+try:
+    _previous_answer_question_with_fallback_before_vennorm = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_vennorm = None
+
+
+def answer_question_with_fallback(user_question):
+    normalized_question = _vennorm_normalize(user_question)
+
+    if normalized_question != str(user_question or ""):
+        result = _previous_answer_question_with_fallback_before_vennorm(normalized_question)
+
+        if isinstance(result, dict):
+            result["question"] = user_question
+            result["normalized_question"] = normalized_question
+            result["route_used"] = ""
+            result["data_sources"] = ""
+
+        return result
+
+    return _previous_answer_question_with_fallback_before_vennorm(user_question)
+
+# IPL SQL Agent venue wording normalizer END
+

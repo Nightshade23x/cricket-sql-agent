@@ -512,3 +512,5 @@ under player teams...rcb is doubling,also delhi daredevils can be given as dd,no
 under analyse players,add 2 tabs,one for season trend for batting,one for bowling
 how many fifties does kohli have against csk gave his overall record,add route for against team,venue wise etc,same with hundreds
 who has taken the most wickets agains csk gave csk overall best bowlers,add route for this also
+
+top 10 run scorers in wankhede gave me overall run leaders,when i switched the ques to who has the most runs at wankhede it worked,so lets add support for if the ques is asked in a diff way but means the same,the agent should be smart enough to get that.

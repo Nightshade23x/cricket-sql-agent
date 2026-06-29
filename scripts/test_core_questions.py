@@ -12,6 +12,28 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "top 10 run scorers in wankhede",
+        "expected_columns": ["batter", "team", "runs", "batting_average", "strike_rate"],
+    },
+    {
+        "question": "who has the most runs in wankhede",
+        "expected_columns": ["batter", "team", "runs", "batting_average", "strike_rate"],
+    },
+    {
+        "question": "top 10 wicket takers in wankhede",
+        "expected_columns": ["bowler", "team", "innings", "wickets", "economy"],
+    },
+    {
+        "question": "who has the most wickets in wankhede",
+        "expected_columns": ["bowler", "team", "innings", "wickets", "economy"],
+    },
+    {
+        "question": "wankhede top 10 run scorers",
+        "expected_columns": ["batter", "team", "runs", "batting_average", "strike_rate"],
+    },
+
+
+    {
         "question": "how many fifties does Kohli have against CSK",
         "expected_columns": ["player", "fifties", "hundreds"],
     },
