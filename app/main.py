@@ -9,44 +9,38 @@ from app.llm_agent import answer_question_with_fallback
 APP_TITLE = "IPL SQL Agent"
 APP_SUBTITLE = "Ask IPL analytics questions using your local SQL Server database."
 
-EXAMPLE_QUESTION_GROUPS = {
-    "Classic analytics": [
-        "who are the top 10 run scorers in IPL",
-        "who are the top 10 wicket takers in IPL",
-        "who has the fastest 50 in ipl history",
-        "which team has the most trophies",
-    ],
-    "Player profiles": [
-        "analyse Kohli",
-        "analyse Bumrah",
-        "analyse Dhoni",
-        "analyse Rohit Sharma",
-    ],
-    "Match plans": [
-        "how can MI beat RCB",
-        "how can CSK beat GT at Chepauk",
-        "how can RCB beat GT at Chinnaswamy",
-        "how can GT beat RR at Narendra Modi Stadium",
-    ],
-    "Venue profiles": [
-        "tell me about Eden Gardens",
-        "tell me about Chepauk",
-        "tell me about Wankhede",
-        "tell me about Chinnaswamy",
-    ],
-    "Squad and prediction": [
-        "which team has the strongest current squad",
-        "analyse CSK squad",
-        "analyse RCB squad",
-        "who will win next season",
-    ],
-    "Tactical matchups": [
-        "how should Bumrah bowl to Kohli",
-        "what length should Rashid bowl to Suryavanshi",
-        "best bowlers against Kohli for GT",
-        "best bowlers against Dhoni at Chepauk",
-    ],
-}
+EXAMPLE_QUESTION_GROUPS = {'Classic analytics': ['who are the top 10 run scorers in IPL',
+                       'who are the top 10 wicket takers in IPL',
+                       'who has the fastest 50 in IPL history',
+                       'which team has the most trophies'],
+ 'Player profiles': ['analyse Kohli',
+                     'analyse Bumrah',
+                     'analyse Suryavanshi',
+                     'analyse Rohit Sharma'],
+ 'Match plans': ['how can CSK beat RCB at Chinnaswamy',
+                 'how can RCB beat PBKS',
+                 'how can KKR beat GT at Eden Gardens',
+                 'how can SRH beat RR at Uppal'],
+ 'Venue profiles': ['tell me about Eden Gardens',
+                    'tell me about Chepauk',
+                    'tell me about Wankhede',
+                    'tell me about Chinnaswamy'],
+ 'Squad analysis': ['analyse CSK squad',
+                    'analyse RCB squad',
+                    'analyse Delhi Capitals squad',
+                    'which team has the best win percentage'],
+ 'Tactical matchups': ['how should Bumrah bowl to Kohli',
+                       'what length should Rashid bowl to Suryavanshi',
+                       'best bowlers against Kohli for Delhi Capitals',
+                       'best bowlers against KL Rahul at Arun Jaitley'],
+ 'Rate and filter leaderboards': ['best strike rate in IPL min 500 balls faced',
+                                  'who has the best average at Chepauk min 5 matches played',
+                                  'best economy rate in IPL min 700 balls bowled',
+                                  'best economy rate at Chepauk min 300 balls bowled'],
+ 'Filtered player records': ['how many fifties does Kohli have against CSK',
+                             'how many hundreds does Kohli have at Wankhede',
+                             'who has taken the most wickets against CSK',
+                             'best bowlers against Dhoni at Chepauk']}
 
 
 HIDDEN_COLUMNS = {
