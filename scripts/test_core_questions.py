@@ -12,6 +12,32 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "who won orange cap in 2008",
+        "expected_columns": ["season", "batter", "runs"],
+    },
+    {
+        "question": "who won purple cap in 2010",
+        "expected_columns": ["season", "bowler", "wickets"],
+    },
+    {
+        "question": "who scored the most runs in a season",
+        "expected_columns": ["season", "batter", "runs"],
+    },
+    {
+        "question": "who took the most wickets in a season",
+        "expected_columns": ["season", "bowler", "wickets"],
+    },
+    {
+        "question": "top 10 run scorers in 2010",
+        "expected_columns": ["season", "batter", "runs"],
+    },
+    {
+        "question": "top 10 wicket takers in 2010",
+        "expected_columns": ["season", "bowler", "wickets"],
+    },
+
+
+    {
         "question": "best strike rate at New Chandigarh min 50 balls faced",
         "expected_columns": ["batter", "team", "balls", "strike_rate"],
     },

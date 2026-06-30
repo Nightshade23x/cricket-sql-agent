@@ -199,3 +199,8 @@ added documentation
 added support for strike rates and average
 updated example questions
 fixed some backend bugs
+
+day 17
+fixed example question bug
+added support for new chandigarh
+changed date format to dd-mm-yyyy

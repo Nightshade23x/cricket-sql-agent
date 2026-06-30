@@ -25055,3 +25055,439 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent display date format dd-mm-yyyy END
 
+
+# IPL SQL Agent season alias and cap routes START
+
+def _seasonfix_q(value):
+    return str(value).replace("'", "''")
+
+
+def _seasonfix_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    parts = [p.strip() for p in str(value).split(",") if p and str(p).strip()]
+    output = []
+    seen = set()
+
+    for part in parts:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            output.append(short)
+            seen.add(key)
+
+    return ", ".join(output)
+
+
+def _seasonfix_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        if "team" in table.columns:
+            table["team"] = table["team"].apply(_seasonfix_short_team)
+
+        return table
+
+    except Exception:
+        return table
+
+
+def _seasonfix_clean_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _seasonfix_clean_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _seasonfix_clean_table(table)
+        result["extra_tables"] = extra
+
+    return result
+
+
+def _seasonfix_extract_year(question):
+    import re
+
+    text = str(question or "")
+
+    # Prefer a full standalone year typed by the user.
+    match = re.search(r"\b(20\d{2})\b", text)
+
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def _seasonfix_season_condition(alias, typed_year):
+    year = int(typed_year)
+    slash_form = f"{year - 1}/{str(year)[-2:]}"
+    short_year = str(year)[-2:]
+
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{_seasonfix_q(slash_form)}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{_seasonfix_q(short_year)}')"
+    )
+
+
+def _seasonfix_season_label_expr(alias):
+    # Converts seasons like 2007/08, 2009/10, 2020/21 into 2008, 2010, 2021 for display/grouping.
+    return f"""
+CASE
+    WHEN CHARINDEX('/', CAST({alias}.season AS varchar(20))) > 0
+         AND TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) IS NOT NULL
+    THEN CAST(
+        CASE
+            WHEN TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) <= 30
+            THEN 2000 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+            ELSE 1900 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+        END AS varchar(4)
+    )
+    ELSE CAST({alias}.season AS varchar(20))
+END
+""".strip()
+
+
+def _seasonfix_limit(question, default_value=10):
+    import re
+
+    text = str(question or "").lower()
+
+    match = re.search(r"\btop\s+(\d+)\b", text)
+
+    if match:
+        value = int(match.group(1))
+        if 1 <= value <= 50:
+            return value
+
+    if "orange cap" in text or "purple cap" in text or "who won" in text:
+        return 1
+
+    return default_value
+
+
+def _seasonfix_is_batting_year_question(question):
+    text = str(question or "").lower()
+
+    if "orange cap" in text:
+        return True
+
+    if any(x in text for x in ["run scorer", "run scorers", "most runs", "highest runs", "scored the most runs"]):
+        return True
+
+    return False
+
+
+def _seasonfix_is_bowling_year_question(question):
+    text = str(question or "").lower()
+
+    if "purple cap" in text:
+        return True
+
+    if any(x in text for x in ["wicket taker", "wicket takers", "most wickets", "highest wickets", "taken the most wickets", "took the most wickets"]):
+        return True
+
+    return False
+
+
+def _seasonfix_is_single_season_batting_record(question):
+    text = str(question or "").lower()
+
+    if "in a season" in text or "in one season" in text or "single season" in text:
+        return any(x in text for x in ["most runs", "run scorer", "scored the most runs", "highest runs"])
+
+    return False
+
+
+def _seasonfix_is_single_season_bowling_record(question):
+    text = str(question or "").lower()
+
+    if "in a season" in text or "in one season" in text or "single season" in text:
+        return any(x in text for x in ["most wickets", "wicket taker", "taken the most wickets", "took the most wickets", "highest wickets"])
+
+    return False
+
+
+def _seasonfix_batting_leaderboard(question, typed_year=None):
+    import pandas as pd
+    from app.db import run_query
+
+    season_expr = _seasonfix_season_label_expr("d")
+    filters = ["d.innings IN (1, 2)"]
+
+    if typed_year is not None:
+        filters.append(_seasonfix_season_condition("d", typed_year))
+
+    where_sql = " AND ".join(filters)
+    limit = _seasonfix_limit(question, default_value=10)
+
+    sql = f"""
+WITH batter_innings AS (
+    SELECT
+        {season_expr} AS season,
+        d.striker AS batter,
+        d.batting_team AS team,
+        d.match_id,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS balls,
+        MAX(CASE
+            WHEN d.player_dismissed = d.striker
+             AND d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('retired hurt', 'retired out', 'retired not out')
+            THEN 1 ELSE 0
+        END) AS out_flag
+    FROM deliveries d
+    WHERE {where_sql}
+    GROUP BY {season_expr}, d.striker, d.batting_team, d.match_id, d.innings
+),
+totals AS (
+    SELECT
+        season,
+        batter,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM batter_innings bi2
+            WHERE bi2.batter = bi.batter
+              AND bi2.season = bi.season
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(innings_runs) AS runs,
+        SUM(balls) AS balls,
+        SUM(out_flag) AS dismissals,
+        ROUND(SUM(innings_runs) * 100.0 / NULLIF(SUM(balls), 0), 2) AS strike_rate,
+        ROUND(SUM(innings_runs) * 1.0 / NULLIF(SUM(out_flag), 0), 2) AS batting_average,
+        MAX(innings_runs) AS highest_score,
+        SUM(CASE WHEN innings_runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS fifties,
+        SUM(CASE WHEN innings_runs >= 100 THEN 1 ELSE 0 END) AS hundreds
+    FROM batter_innings bi
+    GROUP BY season, batter
+)
+SELECT TOP {limit}
+    season,
+    batter,
+    team,
+    matches,
+    innings,
+    runs,
+    balls,
+    strike_rate,
+    dismissals,
+    batting_average,
+    highest_score,
+    fifties,
+    hundreds
+FROM totals
+WHERE balls > 0
+ORDER BY runs DESC, strike_rate DESC, batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The season batting leaderboard route failed: {error}",
+            "paragraph": f"The season batting leaderboard route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _seasonfix_clean_table(df if df is not None else pd.DataFrame())
+
+    if typed_year is not None:
+        title = f"Top run scorer in {typed_year}" if limit == 1 else f"Top run scorers in {typed_year}"
+    else:
+        title = "Most runs in a single IPL season"
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}. Seasons stored as 2007/08, 2009/10, or 2020/21 are displayed using the year after the slash.",
+        "paragraph": f"{title}. Seasons stored as 2007/08, 2009/10, or 2020/21 are displayed using the year after the slash.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who won orange cap in 2008",
+            "who scored the most runs in a season",
+            "top 10 run scorers in 2010",
+            "who won orange cap in 2021",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _seasonfix_bowling_leaderboard(question, typed_year=None):
+    import pandas as pd
+    from app.db import run_query
+
+    season_expr = _seasonfix_season_label_expr("d")
+    filters = ["d.innings IN (1, 2)"]
+
+    if typed_year is not None:
+        filters.append(_seasonfix_season_condition("d", typed_year))
+
+    where_sql = " AND ".join(filters)
+    limit = _seasonfix_limit(question, default_value=10)
+
+    sql = f"""
+WITH bowler_innings AS (
+    SELECT
+        {season_expr} AS season,
+        d.bowler,
+        d.bowling_team AS team,
+        d.match_id,
+        d.innings,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS legal_balls,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0)=0 AND COALESCE(d.extras, 0)=0 THEN 1 END) AS dot_balls
+    FROM deliveries d
+    WHERE {where_sql}
+    GROUP BY {season_expr}, d.bowler, d.bowling_team, d.match_id, d.innings
+),
+totals AS (
+    SELECT
+        season,
+        bowler,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM bowler_innings bi2
+            WHERE bi2.bowler = bi.bowler
+              AND bi2.season = bi.season
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(legal_balls) AS legal_balls,
+        CAST(SUM(legal_balls) / 6 AS varchar(20)) + '.' + CAST(SUM(legal_balls) % 6 AS varchar(1)) AS overs_bowled,
+        SUM(wickets) AS wickets,
+        SUM(runs_conceded) AS runs_conceded,
+        ROUND(SUM(runs_conceded) * 6.0 / NULLIF(SUM(legal_balls), 0), 2) AS economy,
+        ROUND(SUM(legal_balls) * 1.0 / NULLIF(SUM(wickets), 0), 2) AS bowling_strike_rate,
+        SUM(dot_balls) AS dot_balls
+    FROM bowler_innings bi
+    GROUP BY season, bowler
+)
+SELECT TOP {limit}
+    season,
+    bowler,
+    team,
+    matches,
+    innings,
+    overs_bowled,
+    legal_balls,
+    wickets,
+    runs_conceded,
+    economy,
+    bowling_strike_rate,
+    dot_balls
+FROM totals
+WHERE legal_balls > 0
+ORDER BY wickets DESC, economy ASC, legal_balls DESC, bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The season bowling leaderboard route failed: {error}",
+            "paragraph": f"The season bowling leaderboard route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _seasonfix_clean_table(df if df is not None else pd.DataFrame())
+
+    if typed_year is not None:
+        title = f"Top wicket taker in {typed_year}" if limit == 1 else f"Top wicket takers in {typed_year}"
+    else:
+        title = "Most wickets in a single IPL season"
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}. Seasons stored as 2007/08, 2009/10, or 2020/21 are displayed using the year after the slash.",
+        "paragraph": f"{title}. Seasons stored as 2007/08, 2009/10, or 2020/21 are displayed using the year after the slash.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who won purple cap in 2008",
+            "who took the most wickets in a season",
+            "top 10 wicket takers in 2010",
+            "who won purple cap in 2021",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_seasonfix = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_seasonfix = None
+
+
+def answer_question_with_fallback(user_question):
+    year = _seasonfix_extract_year(user_question)
+
+    # Single-season all-time records must be caught before year-specific wording.
+    if _seasonfix_is_single_season_batting_record(user_question):
+        return _seasonfix_batting_leaderboard(user_question, typed_year=None)
+
+    if _seasonfix_is_single_season_bowling_record(user_question):
+        return _seasonfix_bowling_leaderboard(user_question, typed_year=None)
+
+    if year is not None and _seasonfix_is_batting_year_question(user_question):
+        return _seasonfix_batting_leaderboard(user_question, typed_year=year)
+
+    if year is not None and _seasonfix_is_bowling_year_question(user_question):
+        return _seasonfix_bowling_leaderboard(user_question, typed_year=year)
+
+    result = _previous_answer_question_with_fallback_before_seasonfix(user_question)
+    return _seasonfix_clean_result(result)
+
+# IPL SQL Agent season alias and cap routes END
+
