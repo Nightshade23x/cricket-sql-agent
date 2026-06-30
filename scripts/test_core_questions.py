@@ -12,6 +12,16 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "how many fifties does JC Buttler have for MI",
+        "expected_columns": ["batter", "team", "fifties", "hundreds"],
+    },
+    {
+        "question": "how many hundreds does JC Buttler have for MI",
+        "expected_columns": ["batter", "team", "fifties", "hundreds"],
+    },
+
+
+    {
         "question": "fastest 50 in IPL history",
         "expected_columns": ["batter", "team", "balls_to_fifty", "innings_runs"],
     },

@@ -26178,3 +26178,499 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent fastest milestone batting_team compatibility END
 
+
+# IPL SQL Agent filtered player fifties/hundreds team fix START
+
+def _pfh_q(value):
+    return str(value).replace("'", "''")
+
+
+def _pfh_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _pfh_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _pfh_short_team(value):
+    if value is None:
+        return value
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+    out, seen = [], set()
+    for part in [p.strip() for p in str(value).split(",") if p and str(p).strip()]:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            out.append(short)
+            seen.add(key)
+    return ", ".join(out)
+
+
+def _pfh_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+    try:
+        table = table.copy()
+        for col in ["team", "teams", "batting_team", "bowling_team", "opposition"]:
+            if col in table.columns:
+                table[col] = table[col].apply(_pfh_short_team)
+        return table
+    except Exception:
+        return table
+
+
+def _pfh_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+        ("RPS", "RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", "GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", "KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", "PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _pfh_player_aliases(raw):
+    label = str(raw or "").strip()
+    low = label.lower()
+    aliases = [label]
+    known = {
+        "buttler": ["JC Buttler", "Jos Buttler"],
+        "jc buttler": ["JC Buttler", "Jos Buttler"],
+        "jos buttler": ["JC Buttler", "Jos Buttler"],
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "dhoni": ["MS Dhoni"],
+        "rahul": ["KL Rahul"],
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "suryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+        "sooryavanshi": ["V Suryavanshi", "Vaibhav Suryavanshi", "Vaibhav Sooryavanshi"],
+    }
+    for key, values in known.items():
+        if key in low:
+            for value in values:
+                if value not in aliases:
+                    aliases.append(value)
+    return aliases
+
+
+def _pfh_resolve_player(raw):
+    aliases = _pfh_player_aliases(raw)
+    try:
+        from app.db import run_query
+        low = str(raw or "").lower().strip()
+        where_bits = [f"striker IN {_pfh_sql_list(aliases)}"]
+        if "buttler" in low:
+            where_bits.append("LOWER(striker) LIKE '%buttler%'")
+        elif len(low) >= 4:
+            where_bits.append(f"LOWER(striker) LIKE '%{_pfh_q(low)}%'")
+        sql = f"""
+SELECT TOP 1 striker AS player_name, COUNT(*) AS n
+FROM deliveries
+WHERE {" OR ".join(where_bits)}
+GROUP BY striker
+ORDER BY COUNT(*) DESC, striker ASC;
+""".strip()
+        df = run_query(sql)
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+            return resolved, aliases
+    except Exception:
+        pass
+    return aliases[0], aliases
+
+
+def _pfh_venue_filter(raw):
+    low = str(raw or "").lower().strip(" .?")
+    if "new chandigarh" in low or "mullanpur" in low or "yadavindra" in low:
+        return "(m.venue LIKE '%Yadavindra%' OR m.venue LIKE '%Mullanpur%' OR m.venue LIKE '%New Chandigarh%' OR m.city LIKE '%Chandigarh%' OR m.city LIKE '%Mullanpur%')", "New Chandigarh"
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in low or "motera" in low or "ahmedabad" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+    if "uppal" in low or "rajiv gandhi" in low:
+        return "(m.venue LIKE '%Rajiv Gandhi%' OR m.venue LIKE '%Uppal%')", "Uppal"
+    if "arun jaitley" in low or "kotla" in low:
+        return "(m.venue LIKE '%Arun Jaitley%' OR m.venue LIKE '%Kotla%')", "Arun Jaitley Stadium"
+    return None, None
+
+
+def _pfh_season_condition(alias, year):
+    year = int(year)
+    if year == 2020:
+        return f"(CAST({alias}.season AS varchar(20)) = '2020' OR CAST({alias}.season AS varchar(20)) = '2020/21')"
+    if year == 2021:
+        return f"(CAST({alias}.season AS varchar(20)) = '2021')"
+    slash_form = f"{year - 1}/{str(year)[-2:]}"
+    short_year = str(year)[-2:]
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{_pfh_q(slash_form)}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{_pfh_q(short_year)}')"
+    )
+
+
+def _pfh_parse(question):
+    import re
+    text = str(question or "").strip()
+    low = text.lower()
+    if "how many" not in low:
+        return None
+
+    if re.search(r"\b(fifties|fifty|50s|50|half[\s-]*centuries|half[\s-]*century)\b", low):
+        milestone = "fifties"
+    elif re.search(r"\b(hundreds|hundred|100s|100|centuries|century)\b", low):
+        milestone = "hundreds"
+    else:
+        return None
+
+    match = re.search(
+        r"\bhow many\b.*?\b(?:does|has|did)\s+(.+?)\s+(?:have|score|hit|make)\b(.*)$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    player_raw = match.group(1).strip(" .?")
+    remainder = match.group(2).strip(" .?")
+
+    filters = ["d.innings IN (1, 2)"]
+    labels = []
+
+    for_match = re.search(
+        r"\b(?:for|from|by)\s+([A-Za-z0-9 .]+?)(?:\s+against\s+|\s+at\s+|\s+in\s+20\d{2}|\s*$)",
+        remainder,
+        flags=re.IGNORECASE,
+    )
+    if for_match:
+        code, display, aliases = _pfh_team_lookup(for_match.group(1).strip(" .?"))
+        if code == "AMBIGUOUS_DC":
+            return {"ambiguous": True}
+        if aliases:
+            filters.append(f"d.batting_team IN {_pfh_sql_list(aliases)}")
+            labels.append(f"for {display}")
+
+    against_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s+for\s+|\s+at\s+|\s+in\s+20\d{2}|\s*$)",
+        remainder,
+        flags=re.IGNORECASE,
+    )
+    if against_match:
+        code, display, aliases = _pfh_team_lookup(against_match.group(1).strip(" .?"))
+        if code == "AMBIGUOUS_DC":
+            return {"ambiguous": True}
+        if aliases:
+            filters.append(f"d.bowling_team IN {_pfh_sql_list(aliases)}")
+            labels.append(f"against {display}")
+
+    venue_match = re.search(
+        r"\b(?:at|inside|on)\s+([A-Za-z0-9 .'-]+?)(?:\s+for\s+|\s+against\s+|\s+in\s+20\d{2}|\s*$)",
+        remainder,
+        flags=re.IGNORECASE,
+    )
+    if not venue_match:
+        in_match = re.search(
+            r"\bin\s+([A-Za-z0-9 .'-]+?)(?:\s+for\s+|\s+against\s+|\s+in\s+20\d{2}|\s*$)",
+            remainder,
+            flags=re.IGNORECASE,
+        )
+        if in_match and not re.fullmatch(r"20\d{2}", in_match.group(1).strip(" .?")):
+            venue_match = in_match
+    if venue_match:
+        venue_sql, venue_label = _pfh_venue_filter(venue_match.group(1))
+        if venue_label:
+            filters.append(venue_sql)
+            labels.append(f"at {venue_label}")
+
+    year_match = re.search(r"\b(20\d{2})\b", remainder)
+    if year_match:
+        year = int(year_match.group(1))
+        filters.append(_pfh_season_condition("d", year))
+        labels.append(f"in {year}")
+
+    return {
+        "player_raw": player_raw,
+        "milestone": milestone,
+        "filters": filters,
+        "labels": labels,
+        "ambiguous": False,
+    }
+
+
+def _pfh_ambiguity(question):
+    import pandas as pd
+    df = pd.DataFrame([{
+        "issue": "DC is ambiguous",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "example": "how many fifties does Kohli have against Delhi Capitals",
+    }])
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "how many fifties does JC Buttler have for MI",
+            "how many hundreds does JC Buttler have for MI",
+            "how many fifties does Kohli have against CSK",
+            "how many hundreds does Rohit have for MI",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _pfh_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _pfh_parse(question)
+    if not parsed:
+        return None
+    if parsed.get("ambiguous"):
+        return _pfh_ambiguity(question)
+
+    resolved, aliases = _pfh_resolve_player(parsed["player_raw"])
+    filters = [f"d.striker IN {_pfh_sql_list(aliases)}"]
+    filters.extend(parsed["filters"])
+    where_sql = " AND ".join(filters)
+
+    sql = f"""
+WITH batter_innings AS (
+    SELECT
+        d.striker AS batter,
+        d.batting_team AS team,
+        d.bowling_team AS opposition,
+        d.match_id,
+        d.innings,
+        m.start_date AS match_date,
+        m.venue,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) AS balls
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.striker, d.batting_team, d.bowling_team, d.match_id, d.innings, m.start_date, m.venue
+),
+summary AS (
+    SELECT
+        batter,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM batter_innings bi2
+            WHERE bi2.batter = bi.batter
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(innings_runs) AS runs,
+        SUM(balls) AS balls,
+        SUM(CASE WHEN innings_runs BETWEEN 50 AND 99 THEN 1 ELSE 0 END) AS fifties,
+        SUM(CASE WHEN innings_runs >= 100 THEN 1 ELSE 0 END) AS hundreds,
+        MAX(innings_runs) AS highest_score
+    FROM batter_innings bi
+    GROUP BY batter
+)
+SELECT
+    batter,
+    team,
+    matches,
+    innings,
+    runs,
+    balls,
+    fifties,
+    hundreds,
+    highest_score
+FROM summary
+ORDER BY runs DESC, batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The filtered player fifties/hundreds route failed: {error}",
+            "paragraph": f"The filtered player fifties/hundreds route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _pfh_clean_table(df if df is not None else pd.DataFrame())
+    label = " ".join(parsed["labels"]).strip()
+    milestone = parsed["milestone"]
+
+    if not df.empty and milestone in df.columns:
+        count_value = int(df.iloc[0][milestone])
+        answer = f"{resolved} has {count_value} {milestone}"
+        if label:
+            answer += f" {label}"
+        answer += "."
+    else:
+        answer = f"No {milestone} found for {resolved}"
+        if label:
+            answer += f" {label}"
+        answer += "."
+
+    return {
+        "question": question,
+        "analysis_paragraph": answer,
+        "paragraph": answer,
+        "result": df,
+        "extra_tables": {f"{resolved} {milestone}": df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "how many fifties does JC Buttler have for MI",
+            "how many hundreds does JC Buttler have for MI",
+            "how many fifties does Kohli have against CSK",
+            "how many hundreds does Rohit have for MI",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_pfh = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_pfh = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _pfh_route(user_question)
+    if result is not None:
+        return result
+    result = _previous_answer_question_with_fallback_before_pfh(user_question)
+    return result
+
+# IPL SQL Agent filtered player fifties/hundreds team fix END
+
+
+# IPL SQL Agent player milestone player-column compatibility START
+
+def _milestone_add_player_column(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        if "player" not in table.columns:
+            if "batter" in table.columns:
+                insert_at = list(table.columns).index("batter")
+                table.insert(insert_at, "player", table["batter"])
+            elif "striker" in table.columns:
+                insert_at = list(table.columns).index("striker")
+                table.insert(insert_at, "player", table["striker"])
+
+        return table
+
+    except Exception:
+        return table
+
+
+def _milestone_needs_player_column(question, result):
+    text = str(question or "").lower()
+
+    if "how many" not in text:
+        return False
+
+    if any(word in text for word in ["fifties", "fifty", "50", "hundreds", "hundred", "100", "centuries", "century"]):
+        return True
+
+    if isinstance(result, dict):
+        table = result.get("result")
+        if hasattr(table, "columns"):
+            cols = {str(c).lower() for c in table.columns}
+            if ("fifties" in cols or "hundreds" in cols) and ("batter" in cols or "striker" in cols):
+                return True
+
+    return False
+
+
+def _milestone_apply_player_column(result, question):
+    if not isinstance(result, dict):
+        return result
+
+    if not _milestone_needs_player_column(question, result):
+        return result
+
+    result["result"] = _milestone_add_player_column(result.get("result"))
+
+    extra = result.get("extra_tables")
+
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _milestone_add_player_column(table)
+
+        result["extra_tables"] = extra
+
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_milestone_player_column = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_milestone_player_column = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_milestone_player_column(user_question)
+    return _milestone_apply_player_column(result, user_question)
+
+# IPL SQL Agent player milestone player-column compatibility END
+
