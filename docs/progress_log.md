@@ -205,3 +205,5 @@ fixed example question bug
 added support for new chandigarh
 changed date format to dd-mm-yyyy
 fixed season error of 2007/08 where it doesnt recognise 2008...also fixed other top run scorers bugs
+fixed fifties for team bug
+added venue profile for mullanpur
