@@ -28274,3 +28274,295 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent outside-India, team boundary, and weekday leaderboards END
 
+
+# IPL SQL Agent team-player boundary phrasing fix START
+
+def _tpb_q(value):
+    return str(value).replace("'", "''")
+
+
+def _tpb_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _tpb_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _tpb_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+        ("RPS", "RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", "GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", "KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", "PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _tpb_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    out = []
+    seen = set()
+
+    for part in [p.strip() for p in str(value).split(",") if p and str(p).strip()]:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            out.append(short)
+            seen.add(key)
+
+    return ", ".join(out)
+
+
+def _tpb_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+        for col in ["team", "batting_team", "bowling_team", "opposition"]:
+            if col in table.columns:
+                table[col] = table[col].apply(_tpb_short_team)
+        return table
+    except Exception:
+        return table
+
+
+def _tpb_metric(question):
+    text = str(question or "").lower()
+
+    if "six" in text or "6" in text:
+        return "sixes"
+
+    if "four" in text or "4" in text or "boundary" in text or "boundaries" in text:
+        return "fours"
+
+    return None
+
+
+def _tpb_parse(question):
+    import re
+
+    text = str(question or "")
+    low = text.lower()
+    metric = _tpb_metric(question)
+
+    if metric not in {"sixes", "fours"}:
+        return None
+
+    # Do not hijack opposition questions.
+    if re.search(r"\bagainst\s+(csk|mi|rcb|kkr|rr|srh|gt|pbks|kxip|lsg|dc|delhi|kolkata|mumbai|chennai|bangalore|bengaluru|rajasthan|punjab|hyderabad|gujarat|lucknow)\b", low):
+        return None
+
+    # New forms:
+    # "which KKR player has hit the most sixes"
+    # "which KKR batter has hit most fours"
+    # "KKR player most sixes"
+    team_raw = None
+
+    match = re.search(
+        r"\b(?:which|what|who)\s+([A-Za-z0-9 .]+?)\s+(?:player|batter|batsman)\b.*?\b(?:most|highest|top)\b.*?\b(?:six|sixes|four|fours|boundaries)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        team_raw = match.group(1).strip(" .?")
+
+    if not team_raw:
+        match = re.search(
+            r"\b(csk|mi|rcb|kkr|rr|srh|gt|pbks|kxip|lsg|delhi capitals|deccan chargers|kolkata knight riders|mumbai indians|chennai super kings|royal challengers bangalore|royal challengers bengaluru|rajasthan royals|sunrisers hyderabad|gujarat titans|lucknow super giants|punjab kings|kings xi punjab)\s+(?:player|batter|batsman)\b.*?\b(?:most|highest|top)\b.*?\b(?:six|sixes|four|fours|boundaries)\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            team_raw = match.group(1).strip(" .?")
+
+    # Also support the already-natural form if the older route missed it:
+    # "which player has hit the most sixes for KKR"
+    if not team_raw:
+        match = re.search(
+            r"\b(?:for|from|by)\s+([A-Za-z0-9 .]+?)(?:\s+in\s+20\d{2}|\s*$)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            team_raw = match.group(1).strip(" .?")
+
+    if not team_raw:
+        return None
+
+    code, display, aliases = _tpb_team_lookup(team_raw)
+
+    if code == "AMBIGUOUS_DC":
+        return {"ambiguous": True}
+
+    if not aliases:
+        return None
+
+    return {
+        "metric": metric,
+        "display": display,
+        "aliases": aliases,
+    }
+
+
+def _tpb_ambiguity(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "issue": "DC is ambiguous",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "example": "which Delhi Capitals player has hit the most sixes",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "which Delhi Capitals player has hit the most sixes",
+            "which Delhi Capitals player has hit the most fours",
+            "most sixes for Delhi Capitals",
+            "most fours for Deccan Chargers",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _tpb_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _tpb_parse(question)
+
+    if not parsed:
+        return None
+
+    if parsed.get("ambiguous"):
+        return _tpb_ambiguity(question)
+
+    metric = parsed["metric"]
+    value_col = "sixes" if metric == "sixes" else "fours"
+    value_expr = "SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END)" if metric == "sixes" else "SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END)"
+
+    sql = f"""
+SELECT TOP 10
+    d.striker AS batter,
+    STUFF((
+        SELECT DISTINCT ', ' + d2.batting_team
+        FROM deliveries d2
+        WHERE d2.striker = d.striker
+          AND d2.batting_team IN {_tpb_sql_list(parsed["aliases"])}
+        FOR XML PATH(''), TYPE
+    ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+    COUNT(DISTINCT d.match_id) AS matches,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) AS balls,
+    SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END) AS fours,
+    SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END) AS sixes
+FROM deliveries d
+WHERE d.innings IN (1, 2)
+  AND d.batting_team IN {_tpb_sql_list(parsed["aliases"])}
+GROUP BY d.striker
+HAVING {value_expr} > 0
+ORDER BY {value_col} DESC, runs DESC, batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The team player boundary route failed: {error}",
+            "paragraph": f"The team player boundary route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _tpb_clean_table(df if df is not None else pd.DataFrame())
+    title = f"Most {metric} for {parsed['display']}"
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "which KKR player has hit the most sixes",
+            "which KKR player has hit the most fours",
+            "which MI player has hit the most sixes",
+            "which CSK player has hit the most fours",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_tpb = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_tpb = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _tpb_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_tpb(user_question)
+
+# IPL SQL Agent team-player boundary phrasing fix END
+

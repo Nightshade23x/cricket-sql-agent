@@ -12,6 +12,20 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "which KKR player has hit the most sixes",
+        "expected_columns": ["batter", "team", "sixes"],
+    },
+    {
+        "question": "which KKR player has hit the most fours",
+        "expected_columns": ["batter", "team", "fours"],
+    },
+    {
+        "question": "which MI player has hit the most sixes",
+        "expected_columns": ["batter", "team", "sixes"],
+    },
+
+
+    {
         "question": "who has scored the most runs outside of India",
         "expected_columns": ["batter", "team", "runs"],
     },
