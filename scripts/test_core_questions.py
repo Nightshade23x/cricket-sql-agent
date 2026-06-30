@@ -12,6 +12,16 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "best economy rate at mullanpur min 300 balls bowled",
+        "expected_columns": ["bowler", "team", "legal_balls", "economy"],
+    },
+    {
+        "question": "best strike rate at mullanpur min 100 balls faced",
+        "expected_columns": ["batter", "team", "balls", "strike_rate"],
+    },
+
+
+    {
         "question": "how many fifties does JC Buttler have for MI",
         "expected_columns": ["batter", "team", "fifties", "hundreds"],
     },

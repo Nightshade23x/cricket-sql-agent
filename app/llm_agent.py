@@ -26674,3 +26674,325 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent player milestone player-column compatibility END
 
+
+# IPL SQL Agent strict Mullanpur/New Chandigarh venue separation START
+
+def _mullanpur_strict_condition(prefix="m."):
+    # Keep Mullanpur/New Chandigarh separate from old Mohali/PCA/IS Bindra records.
+    # Do NOT use city LIKE '%Chandigarh%' because older Mohali records may share city labels.
+    return (
+        f"({prefix}venue LIKE '%Yadavindra%' "
+        f"OR {prefix}venue LIKE '%Mullanpur%' "
+        f"OR {prefix}venue LIKE '%New Chandigarh%')"
+    )
+
+
+def _mullanpur_is_alias(text):
+    low = str(text or "").lower()
+    return (
+        "new chandigarh" in low
+        or "mullanpur" in low
+        or "yadavindra" in low
+        or "maharaja yadavindra" in low
+    )
+
+
+def _mullanpur_label():
+    return "Mullanpur / New Chandigarh"
+
+
+# Override the earlier New Chandigarh helper if present.
+def _nc_venue_filter_condition(prefix="m."):
+    return _mullanpur_strict_condition(prefix)
+
+
+def _nc_is_new_chandigarh(text):
+    return _mullanpur_is_alias(text)
+
+
+# Robust rate/economy route venue helper.
+try:
+    _previous_rrfinal_venue_filter_before_mullanpur_strict = _rrfinal_venue_filter
+except NameError:
+    _previous_rrfinal_venue_filter_before_mullanpur_strict = None
+
+
+def _rrfinal_venue_filter(raw):
+    if _mullanpur_is_alias(raw):
+        return _mullanpur_strict_condition("m."), _mullanpur_label()
+
+    if _previous_rrfinal_venue_filter_before_mullanpur_strict:
+        return _previous_rrfinal_venue_filter_before_mullanpur_strict(raw)
+
+    return "1=1", None
+
+
+# Earlier rate route venue helper.
+try:
+    _previous_rate_venue_filter_before_mullanpur_strict = _rate_venue_filter
+except NameError:
+    _previous_rate_venue_filter_before_mullanpur_strict = None
+
+
+def _rate_venue_filter(question):
+    if _mullanpur_is_alias(question):
+        return _mullanpur_strict_condition("m."), _mullanpur_label()
+
+    if _previous_rate_venue_filter_before_mullanpur_strict:
+        return _previous_rate_venue_filter_before_mullanpur_strict(question)
+
+    return "1=1", None
+
+
+# Fastest milestone route venue helper.
+try:
+    _previous_fastmile_venue_filter_before_mullanpur_strict = _fastmile_venue_filter
+except NameError:
+    _previous_fastmile_venue_filter_before_mullanpur_strict = None
+
+
+def _fastmile_venue_filter(raw):
+    if _mullanpur_is_alias(raw):
+        return _mullanpur_strict_condition("m."), _mullanpur_label()
+
+    if _previous_fastmile_venue_filter_before_mullanpur_strict:
+        return _previous_fastmile_venue_filter_before_mullanpur_strict(raw)
+
+    return "1=1", None
+
+
+# Player fifties/hundreds route venue helper.
+try:
+    _previous_pfh_venue_filter_before_mullanpur_strict = _pfh_venue_filter
+except NameError:
+    _previous_pfh_venue_filter_before_mullanpur_strict = None
+
+
+def _pfh_venue_filter(raw):
+    if _mullanpur_is_alias(raw):
+        return _mullanpur_strict_condition("m."), _mullanpur_label()
+
+    if _previous_pfh_venue_filter_before_mullanpur_strict:
+        return _previous_pfh_venue_filter_before_mullanpur_strict(raw)
+
+    return None, None
+
+
+# Bowler-vs-batter-at-venue helper.
+try:
+    _previous_bvv_venue_filter_before_mullanpur_strict = _bvv_venue_filter
+except NameError:
+    _previous_bvv_venue_filter_before_mullanpur_strict = None
+
+
+def _bvv_venue_filter(raw):
+    if _mullanpur_is_alias(raw):
+        return _mullanpur_strict_condition("m."), _mullanpur_label()
+
+    if _previous_bvv_venue_filter_before_mullanpur_strict:
+        return _previous_bvv_venue_filter_before_mullanpur_strict(raw)
+
+    return None, None
+
+
+# Older bowler-vs-batter helper name.
+try:
+    _previous_bvvenue_venue_filter_from_raw_before_mullanpur_strict = _bvvenue_venue_filter_from_raw
+except NameError:
+    _previous_bvvenue_venue_filter_from_raw_before_mullanpur_strict = None
+
+
+def _bvvenue_venue_filter_from_raw(raw):
+    if _mullanpur_is_alias(raw):
+        return _mullanpur_strict_condition("m."), _mullanpur_label()
+
+    if _previous_bvvenue_venue_filter_from_raw_before_mullanpur_strict:
+        return _previous_bvvenue_venue_filter_from_raw_before_mullanpur_strict(raw)
+
+    return None, None
+
+
+def _mullanpur_result_looks_contaminated(result):
+    try:
+        table = result.get("result") if isinstance(result, dict) else None
+
+        if table is None or not hasattr(table, "columns") or table.empty:
+            return False
+
+        if "legal_balls" in table.columns:
+            return int(table["legal_balls"].max()) > 1000
+
+        if "matches" in table.columns:
+            return int(table["matches"].max()) > 40
+
+    except Exception:
+        return False
+
+    return False
+
+
+try:
+    _previous_answer_question_with_fallback_before_mullanpur_strict = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_mullanpur_strict = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_mullanpur_strict(user_question)
+
+    if isinstance(result, dict) and _mullanpur_is_alias(user_question):
+        # Make the wording clear in the output.
+        paragraph = result.get("analysis_paragraph") or result.get("paragraph") or ""
+        paragraph = str(paragraph).replace("New Chandigarh", _mullanpur_label())
+        result["analysis_paragraph"] = paragraph
+        result["paragraph"] = paragraph
+
+    return result
+
+# IPL SQL Agent strict Mullanpur/New Chandigarh venue separation END
+
+
+# IPL SQL Agent no-qualifier message for rate/economy routes START
+
+def _noqual_table_is_empty(result):
+    try:
+        table = result.get("result") if isinstance(result, dict) else None
+        return table is None or (hasattr(table, "empty") and table.empty)
+    except Exception:
+        return False
+
+
+def _noqual_min_balls_from_question(question):
+    import re
+
+    text = str(question or "").lower()
+
+    match = re.search(
+        r"\b(?:min|minimum|at least)\s*[:=]?\s*(\d+)\s*(?:balls?|deliveries|balls bowled|balls faced)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def _noqual_is_economy_question(question):
+    text = str(question or "").lower()
+    return "economy" in text and any(x in text for x in ["best", "lowest", "top"])
+
+
+def _noqual_is_strike_rate_question(question):
+    text = str(question or "").lower()
+    return ("strike rate" in text or " sr" in text) and any(x in text for x in ["best", "highest", "top"])
+
+
+def _noqual_empty_economy_result(question, previous_result):
+    import pandas as pd
+
+    min_balls = _noqual_min_balls_from_question(question)
+    min_text = f"{min_balls} balls" if min_balls is not None else "the requested minimum"
+
+    message = f"No bowler has bowled at least {min_text} for this filter yet."
+
+    data = pd.DataFrame([{
+        "bowler": "No qualifying bowler",
+        "team": "",
+        "matches": 0,
+        "innings": 0,
+        "overs_bowled": "0.0",
+        "legal_balls": 0,
+        "wickets": 0,
+        "runs_conceded": 0,
+        "economy": None,
+        "bowling_strike_rate": None,
+        "dot_balls": 0,
+        "note": message,
+    }])
+
+    sql_query = previous_result.get("sql_query", "") if isinstance(previous_result, dict) else ""
+
+    return {
+        "question": question,
+        "analysis_paragraph": message,
+        "paragraph": message,
+        "result": data,
+        "extra_tables": {"No qualifying bowlers": data},
+        "sql_query": sql_query,
+        "similar_questions": [
+            "best economy rate at mullanpur min 100 balls bowled",
+            "best economy rate at mullanpur min 50 balls bowled",
+            "best economy rate at New Chandigarh min 100 balls bowled",
+            "best strike rate at mullanpur min 50 balls faced",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _noqual_empty_strike_rate_result(question, previous_result):
+    import pandas as pd
+
+    min_balls = _noqual_min_balls_from_question(question)
+    min_text = f"{min_balls} balls" if min_balls is not None else "the requested minimum"
+
+    message = f"No batter has faced at least {min_text} for this filter yet."
+
+    data = pd.DataFrame([{
+        "batter": "No qualifying batter",
+        "team": "",
+        "matches": 0,
+        "innings": 0,
+        "runs": 0,
+        "dismissals": 0,
+        "batting_average": None,
+        "balls": 0,
+        "strike_rate": None,
+        "highest_score": 0,
+        "fifties": 0,
+        "hundreds": 0,
+        "note": message,
+    }])
+
+    sql_query = previous_result.get("sql_query", "") if isinstance(previous_result, dict) else ""
+
+    return {
+        "question": question,
+        "analysis_paragraph": message,
+        "paragraph": message,
+        "result": data,
+        "extra_tables": {"No qualifying batters": data},
+        "sql_query": sql_query,
+        "similar_questions": [
+            "best strike rate at mullanpur min 100 balls faced",
+            "best strike rate at mullanpur min 50 balls faced",
+            "best strike rate at New Chandigarh min 100 balls faced",
+            "best economy rate at mullanpur min 50 balls bowled",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_noqual_messages = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_noqual_messages = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_noqual_messages(user_question)
+
+    if _noqual_table_is_empty(result):
+        if _noqual_is_economy_question(user_question):
+            return _noqual_empty_economy_result(user_question, result)
+
+        if _noqual_is_strike_rate_question(user_question):
+            return _noqual_empty_strike_rate_result(user_question, result)
+
+    return result
+
+# IPL SQL Agent no-qualifier message for rate/economy routes END
+
