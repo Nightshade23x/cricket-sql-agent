@@ -25491,3 +25491,155 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent season alias and cap routes END
 
+
+# IPL SQL Agent 2020 slash season correction START
+
+def _seasondisplay_year_from_value(value):
+    import re
+
+    if value is None:
+        return value
+
+    text = str(value).strip()
+
+    # Special IPL data case: 2020/21 is the 2020 season, not the 2021 season.
+    if text == "2020/21":
+        return "2020"
+
+    match = re.fullmatch(r"(\d{4})/(\d{2})", text)
+
+    if match:
+        first_year = int(match.group(1))
+        suffix = int(match.group(2))
+
+        if suffix <= 30:
+            return str(2000 + suffix)
+
+        return str(1900 + suffix)
+
+    return value
+
+
+def _seasondisplay_replace_slash_years(value):
+    import re
+
+    if value is None:
+        return value
+
+    text = str(value)
+
+    def repl(match):
+        return str(_seasondisplay_year_from_value(match.group(0)))
+
+    return re.sub(r"\b\d{4}/\d{2}\b", repl, text)
+
+
+def _seasondisplay_fix_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        for column in table.columns:
+            name = str(column).lower()
+
+            if "season" in name or "year" in name or "years won" in name:
+                table[column] = table[column].apply(_seasondisplay_replace_slash_years)
+
+        return table
+
+    except Exception:
+        return table
+
+
+def _seasondisplay_fix_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _seasondisplay_fix_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _seasondisplay_fix_table(table)
+
+        result["extra_tables"] = extra
+
+    return result
+
+
+# Override the previous season condition.
+# 2007/08 should still match 2008 and 2009/10 should still match 2010.
+# But 2020/21 should match 2020 only, not 2021.
+def _seasonfix_season_condition(alias, typed_year):
+    year = int(typed_year)
+
+    if year == 2020:
+        return (
+            f"(CAST({alias}.season AS varchar(20)) = '2020' "
+            f"OR CAST({alias}.season AS varchar(20)) = '2020/21')"
+        )
+
+    if year == 2021:
+        return f"(CAST({alias}.season AS varchar(20)) = '2021')"
+
+    slash_form = f"{year - 1}/{str(year)[-2:]}"
+    short_year = str(year)[-2:]
+
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{slash_form}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{short_year}')"
+    )
+
+
+# Override the previous SQL display/grouping expression.
+# It keeps 2007/08 -> 2008 and 2009/10 -> 2010,
+# but changes 2020/21 -> 2020.
+def _seasonfix_season_label_expr(alias):
+    return f"""
+CASE
+    WHEN CAST({alias}.season AS varchar(20)) = '2020/21'
+    THEN '2020'
+    WHEN CHARINDEX('/', CAST({alias}.season AS varchar(20))) > 0
+         AND TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) IS NOT NULL
+    THEN CAST(
+        CASE
+            WHEN TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) <= 30
+            THEN 2000 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+            ELSE 1900 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+        END AS varchar(4)
+    )
+    ELSE CAST({alias}.season AS varchar(20))
+END
+""".strip()
+
+
+try:
+    _previous_answer_question_with_fallback_before_2020slashfix = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_2020slashfix = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_2020slashfix(user_question)
+
+    if isinstance(result, dict):
+        paragraph = result.get("analysis_paragraph") or result.get("paragraph") or ""
+
+        if "2020/21" in str(paragraph):
+            paragraph = str(paragraph).replace(
+                "Seasons stored as 2007/08, 2009/10, or 2020/21 are displayed using the year after the slash.",
+                "Slash seasons are displayed as normal years. For example, 2007/08 is shown as 2008, 2009/10 as 2010, and 2020/21 as 2020."
+            )
+            paragraph = paragraph.replace("2020/21", "2020")
+
+            result["analysis_paragraph"] = paragraph
+            result["paragraph"] = paragraph
+
+    return _seasondisplay_fix_result(result)
+
+# IPL SQL Agent 2020 slash season correction END
+

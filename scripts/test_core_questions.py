@@ -12,6 +12,20 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "who scored the most runs in 2020",
+        "expected_columns": ["season", "batter", "runs"],
+    },
+    {
+        "question": "who scored the most runs in 2021",
+        "expected_columns": ["season", "batter", "runs"],
+    },
+    {
+        "question": "which team has the most trophies",
+        "expected_columns": ["Team", "Trophies"],
+    },
+
+
+    {
         "question": "who won orange cap in 2008",
         "expected_columns": ["season", "batter", "runs"],
     },
