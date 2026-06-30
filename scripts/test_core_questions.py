@@ -12,6 +12,42 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "who has scored the most runs outside of India",
+        "expected_columns": ["batter", "team", "runs"],
+    },
+    {
+        "question": "who has taken the most wickets outside India",
+        "expected_columns": ["bowler", "team", "wickets"],
+    },
+    {
+        "question": "most sixes for MI",
+        "expected_columns": ["batter", "team", "sixes"],
+    },
+    {
+        "question": "most fours for RCB",
+        "expected_columns": ["batter", "team", "fours"],
+    },
+    {
+        "question": "who has scored the most runs on a Tuesday",
+        "expected_columns": ["batter", "team", "runs"],
+    },
+    {
+        "question": "who has taken the most wickets on a Sunday",
+        "expected_columns": ["bowler", "team", "wickets"],
+    },
+
+
+    {
+        "question": "who has played the most finals",
+        "expected_columns": ["Team", "Finals Played", "Years Played"],
+    },
+    {
+        "question": "which team has reached the most IPL finals",
+        "expected_columns": ["Team", "Finals Played", "Years Played"],
+    },
+
+
+    {
         "question": "tell me about Mullanpur",
         "expected_columns": ["venue", "matches"],
     },

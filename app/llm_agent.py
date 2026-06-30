@@ -27410,3 +27410,867 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent strict Mullanpur/New Chandigarh venue profile END
 
+
+# IPL SQL Agent finals appearances team merge fix START
+
+def _finals_team_case_expr(column_name):
+    return f"""
+CASE
+    WHEN {column_name} IN ('Royal Challengers Bangalore', 'Royal Challengers Bengaluru') THEN 'RCB'
+    WHEN {column_name} IN ('Kings XI Punjab', 'Punjab Kings') THEN 'PBKS'
+    WHEN {column_name} IN ('Delhi Daredevils', 'Delhi Capitals') THEN 'Delhi Capitals'
+    WHEN {column_name} IN ('Rising Pune Supergiant', 'Rising Pune Supergiants') THEN 'RPS'
+    WHEN {column_name} = 'Chennai Super Kings' THEN 'CSK'
+    WHEN {column_name} = 'Mumbai Indians' THEN 'MI'
+    WHEN {column_name} = 'Kolkata Knight Riders' THEN 'KKR'
+    WHEN {column_name} = 'Rajasthan Royals' THEN 'RR'
+    WHEN {column_name} = 'Sunrisers Hyderabad' THEN 'SRH'
+    WHEN {column_name} = 'Gujarat Titans' THEN 'GT'
+    WHEN {column_name} = 'Lucknow Super Giants' THEN 'LSG'
+    ELSE {column_name}
+END
+""".strip()
+
+
+def _finals_season_label_expr(alias):
+    return f"""
+CASE
+    WHEN CAST({alias}.season AS varchar(20)) = '2020/21' THEN '2020'
+    WHEN CHARINDEX('/', CAST({alias}.season AS varchar(20))) > 0
+         AND TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) IS NOT NULL
+    THEN CAST(
+        CASE
+            WHEN TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) <= 30
+            THEN 2000 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+            ELSE 1900 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+        END AS varchar(4)
+    )
+    ELSE CAST({alias}.season AS varchar(20))
+END
+""".strip()
+
+
+def _finals_is_question(question):
+    text = str(question or "").lower()
+    return (
+        "final" in text
+        and any(x in text for x in ["most", "played", "appeared", "appearances", "reached"])
+        and not any(x in text for x in ["fastest", "fifty", "50", "hundred", "100"])
+    )
+
+
+def _finals_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    if not _finals_is_question(question):
+        return None
+
+    season_expr = _finals_season_label_expr("m")
+    team_expr = _finals_team_case_expr("team_name")
+    winner_expr = _finals_team_case_expr("winner")
+
+    sql = f"""
+WITH season_matches AS (
+    SELECT
+        m.match_id,
+        {season_expr} AS season,
+        m.start_date,
+        m.winner
+    FROM matches m
+),
+final_dates AS (
+    SELECT season, MAX(start_date) AS final_date
+    FROM season_matches
+    GROUP BY season
+),
+final_matches AS (
+    SELECT sm.match_id, sm.season, sm.start_date, sm.winner
+    FROM season_matches sm
+    JOIN final_dates fd
+        ON sm.season = fd.season
+       AND sm.start_date = fd.final_date
+),
+final_teams_raw AS (
+    SELECT DISTINCT
+        fm.season,
+        d.batting_team AS team_name,
+        fm.winner
+    FROM final_matches fm
+    JOIN deliveries d
+        ON fm.match_id = d.match_id
+    WHERE d.innings IN (1, 2)
+      AND d.batting_team IS NOT NULL
+),
+final_teams AS (
+    SELECT DISTINCT
+        season,
+        {team_expr} AS Team,
+        {winner_expr} AS normalized_winner
+    FROM final_teams_raw
+),
+team_summary AS (
+    SELECT
+        Team,
+        COUNT(DISTINCT season) AS [Finals Played],
+        SUM(CASE WHEN Team = normalized_winner THEN 1 ELSE 0 END) AS Titles,
+        COUNT(DISTINCT season) - SUM(CASE WHEN Team = normalized_winner THEN 1 ELSE 0 END) AS [Final Losses],
+        STUFF((
+            SELECT ', ' + ft2.season
+            FROM final_teams ft2
+            WHERE ft2.Team = ft.Team
+            GROUP BY ft2.season
+            ORDER BY TRY_CONVERT(int, ft2.season)
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS [Years Played],
+        STUFF((
+            SELECT ', ' + ft3.season
+            FROM final_teams ft3
+            WHERE ft3.Team = ft.Team
+              AND ft3.Team = ft3.normalized_winner
+            GROUP BY ft3.season
+            ORDER BY TRY_CONVERT(int, ft3.season)
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS [Years Won]
+    FROM final_teams ft
+    GROUP BY Team
+)
+SELECT
+    Team,
+    [Finals Played],
+    Titles,
+    [Final Losses],
+    [Years Played],
+    COALESCE(NULLIF([Years Won], ''), '-') AS [Years Won]
+FROM team_summary
+ORDER BY [Finals Played] DESC, Titles DESC, Team ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The finals appearances route failed: {error}",
+            "paragraph": f"The finals appearances route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = df if df is not None else pd.DataFrame()
+
+    return {
+        "question": question,
+        "analysis_paragraph": "Teams with the most IPL final appearances. RCB/Bangalore/Bengaluru and PBKS/Kings XI Punjab are merged correctly.",
+        "paragraph": "Teams with the most IPL final appearances. RCB/Bangalore/Bengaluru and PBKS/Kings XI Punjab are merged correctly.",
+        "result": df,
+        "extra_tables": {"Finals Appearances": df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who has played the most finals",
+            "which team has reached the most IPL finals",
+            "which team has the most final appearances",
+            "which team has won the most trophies",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_finals_merge = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_finals_merge = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _finals_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_finals_merge(user_question)
+
+# IPL SQL Agent finals appearances team merge fix END
+
+
+# IPL SQL Agent outside-India, team boundary, and weekday leaderboards START
+
+def _obw_q(value):
+    return str(value).replace("'", "''")
+
+
+def _obw_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _obw_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _obw_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    parts = [p.strip() for p in str(value).split(",") if p and str(p).strip()]
+    out = []
+    seen = set()
+
+    for part in parts:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            out.append(short)
+            seen.add(key)
+
+    return ", ".join(out)
+
+
+def _obw_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+        for col in ["team", "teams", "batting_team", "bowling_team", "opposition", "winner", "toss_winner"]:
+            if col in table.columns:
+                table[col] = table[col].apply(_obw_short_team)
+        return table
+    except Exception:
+        return table
+
+
+def _obw_clean_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _obw_clean_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _obw_clean_table(table)
+        result["extra_tables"] = extra
+
+    return result
+
+
+def _obw_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+        ("RPS", "RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", "GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", "KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", "PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _obw_limit(question, default_value=10):
+    import re
+
+    match = re.search(r"\btop\s+(\d+)\b", str(question or ""), flags=re.IGNORECASE)
+    if match:
+        value = int(match.group(1))
+        if 1 <= value <= 50:
+            return value
+
+    return default_value
+
+
+def _obw_season_condition(alias, year):
+    year = int(year)
+
+    if year == 2020:
+        return f"(CAST({alias}.season AS varchar(20)) = '2020' OR CAST({alias}.season AS varchar(20)) = '2020/21')"
+
+    if year == 2021:
+        return f"(CAST({alias}.season AS varchar(20)) = '2021')"
+
+    slash_form = f"{year - 1}/{str(year)[-2:]}"
+    short_year = str(year)[-2:]
+
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{_obw_q(slash_form)}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{_obw_q(short_year)}')"
+    )
+
+
+def _obw_extract_year(question):
+    import re
+
+    match = re.search(r"\b(20\d{2})\b", str(question or ""))
+    return int(match.group(1)) if match else None
+
+
+def _obw_season_label_expr(alias):
+    return f"""
+CASE
+    WHEN CAST({alias}.season AS varchar(20)) = '2020/21' THEN '2020'
+    WHEN CHARINDEX('/', CAST({alias}.season AS varchar(20))) > 0
+         AND TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) IS NOT NULL
+    THEN CAST(
+        CASE
+            WHEN TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) <= 30
+            THEN 2000 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+            ELSE 1900 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+        END AS varchar(4)
+    )
+    ELSE CAST({alias}.season AS varchar(20))
+END
+""".strip()
+
+
+def _obw_outside_india_condition(alias="m"):
+    # Positive overseas IPL venue/city list. This avoids accidentally classifying Indian venues
+    # with missing/odd city names as outside India.
+    return f"""
+(
+    LOWER(COALESCE({alias}.city, '')) IN (
+        'abu dhabi', 'dubai', 'sharjah',
+        'cape town', 'durban', 'johannesburg', 'centurion',
+        'port elizabeth', 'east london', 'bloemfontein', 'kimberley'
+    )
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%dubai%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%sharjah%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%zayed%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%abu dhabi%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%newlands%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%kingsmead%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%wanderers%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%supersport park%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%st george%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%buffalo park%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%mangaung%'
+    OR LOWER(COALESCE({alias}.venue, '')) LIKE '%de beers diamond oval%'
+)
+""".strip()
+
+
+def _obw_day_name(question):
+    text = str(question or "").lower()
+
+    days = {
+        "monday": "Monday",
+        "mon": "Monday",
+        "tuesday": "Tuesday",
+        "tue": "Tuesday",
+        "wednesday": "Wednesday",
+        "wed": "Wednesday",
+        "thursday": "Thursday",
+        "thu": "Thursday",
+        "friday": "Friday",
+        "fri": "Friday",
+        "saturday": "Saturday",
+        "sat": "Saturday",
+        "sunday": "Sunday",
+        "sun": "Sunday",
+    }
+
+    # Prefer full names.
+    for key in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+        if key in text:
+            return days[key]
+
+    import re
+    for key, value in days.items():
+        if re.search(rf"\b{key}\b", text):
+            return value
+
+    return None
+
+
+def _obw_day_condition(day_label, alias="m"):
+    return f"DATENAME(WEEKDAY, TRY_CONVERT(date, {alias}.start_date)) = '{_obw_q(day_label)}'"
+
+
+def _obw_metric(question):
+    text = str(question or "").lower()
+
+    if "wicket" in text:
+        return "wickets"
+
+    if "six" in text or "6" in text:
+        return "sixes"
+
+    if "four" in text or "4" in text or "boundaries" in text:
+        return "fours"
+
+    if "run" in text or "scored" in text or "score" in text:
+        return "runs"
+
+    return None
+
+
+def _obw_dc_ambiguity(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "issue": "DC is ambiguous",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "example": "most sixes for Delhi Capitals",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "most sixes for Delhi Capitals",
+            "most fours for Delhi Capitals",
+            "most runs outside India",
+            "most wickets on Tuesday",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _obw_team_boundary_parse(question):
+    import re
+
+    text = str(question or "")
+    low = text.lower()
+
+    metric = _obw_metric(question)
+
+    if metric not in {"sixes", "fours"}:
+        return None
+
+    # Must include a team filter. This prevents hijacking overall sixes/fours.
+    match = re.search(
+        r"\b(?:for|from|by)\s+([A-Za-z0-9 .]+?)(?:\s+in\s+20\d{2}|\s+on\s+|\s+at\s+|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    team_raw = match.group(1).strip(" .?")
+    code, display, aliases = _obw_team_lookup(team_raw)
+
+    if code == "AMBIGUOUS_DC":
+        return {"ambiguous": True}
+
+    if not aliases:
+        return None
+
+    return {
+        "metric": metric,
+        "display": display,
+        "aliases": aliases,
+    }
+
+
+def _obw_team_boundary_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _obw_team_boundary_parse(question)
+
+    if not parsed:
+        return None
+
+    if parsed.get("ambiguous"):
+        return _obw_dc_ambiguity(question)
+
+    metric = parsed["metric"]
+    team_display = parsed["display"]
+    year = _obw_extract_year(question)
+    limit = _obw_limit(question, default_value=10)
+    season_expr = _obw_season_label_expr("d")
+
+    filters = [
+        "d.innings IN (1, 2)",
+        f"d.batting_team IN {_obw_sql_list(parsed['aliases'])}",
+    ]
+
+    if year:
+        filters.append(_obw_season_condition("d", year))
+
+    where_sql = " AND ".join(filters)
+    value_expr = "SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END)" if metric == "sixes" else "SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END)"
+    value_col = "sixes" if metric == "sixes" else "fours"
+
+    sql = f"""
+WITH batter_stats AS (
+    SELECT
+        d.striker AS batter,
+        STUFF((
+            SELECT DISTINCT ', ' + d2.batting_team
+            FROM deliveries d2
+            WHERE d2.striker = d.striker
+              AND d2.batting_team IN {_obw_sql_list(parsed['aliases'])}
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT d.match_id) AS matches,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) AS balls,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END) AS sixes
+    FROM deliveries d
+    WHERE {where_sql}
+    GROUP BY d.striker
+)
+SELECT TOP {limit}
+    batter,
+    team,
+    matches,
+    runs,
+    balls,
+    fours,
+    sixes
+FROM batter_stats
+WHERE {value_col} > 0
+ORDER BY {value_col} DESC, runs DESC, batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The team {metric} route failed: {error}",
+            "paragraph": f"The team {metric} route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _obw_clean_table(df if df is not None else pd.DataFrame())
+
+    title = f"Most {metric} for {team_display}"
+    if year:
+        title += f" in {year}"
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "most sixes for MI",
+            "most fours for MI",
+            "most sixes for RCB",
+            "most fours for CSK",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _obw_batting_leaderboard(question, filters, title, limit=10):
+    import pandas as pd
+    from app.db import run_query
+
+    season_expr = _obw_season_label_expr("d")
+    where_sql = " AND ".join(["d.innings IN (1, 2)"] + filters)
+
+    sql = f"""
+WITH batter_innings AS (
+    SELECT
+        {season_expr} AS season,
+        d.striker AS batter,
+        d.batting_team AS team,
+        d.match_id,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) AS balls,
+        MAX(CASE
+            WHEN d.player_dismissed = d.striker
+             AND d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('retired hurt', 'retired out', 'retired not out')
+            THEN 1 ELSE 0
+        END) AS out_flag,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END) AS sixes
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY {season_expr}, d.striker, d.batting_team, d.match_id, d.innings
+),
+totals AS (
+    SELECT
+        batter,
+        STUFF((
+            SELECT DISTINCT ', ' + bi2.team
+            FROM batter_innings bi2
+            WHERE bi2.batter = bi.batter
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT match_id) AS matches,
+        COUNT(*) AS innings,
+        SUM(innings_runs) AS runs,
+        SUM(balls) AS balls,
+        SUM(out_flag) AS dismissals,
+        ROUND(SUM(innings_runs) * 100.0 / NULLIF(SUM(balls), 0), 2) AS strike_rate,
+        ROUND(SUM(innings_runs) * 1.0 / NULLIF(SUM(out_flag), 0), 2) AS batting_average,
+        SUM(fours) AS fours,
+        SUM(sixes) AS sixes
+    FROM batter_innings bi
+    GROUP BY batter
+)
+SELECT TOP {limit}
+    batter,
+    team,
+    matches,
+    innings,
+    runs,
+    balls,
+    strike_rate,
+    dismissals,
+    batting_average,
+    fours,
+    sixes
+FROM totals
+WHERE balls > 0
+ORDER BY runs DESC, strike_rate DESC, batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The batting leaderboard route failed: {error}",
+            "paragraph": f"The batting leaderboard route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _obw_clean_table(df if df is not None else pd.DataFrame())
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who has scored the most runs outside India",
+            "who has scored the most runs on a Tuesday",
+            "who has scored the most runs on a Sunday",
+            "most sixes for MI",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _obw_bowling_leaderboard(question, filters, title, limit=10):
+    import pandas as pd
+    from app.db import run_query
+
+    season_expr = _obw_season_label_expr("d")
+    where_sql = " AND ".join(["d.innings IN (1, 2)"] + filters)
+
+    sql = f"""
+WITH bowler_stats AS (
+    SELECT
+        d.bowler,
+        STUFF((
+            SELECT DISTINCT ', ' + d2.bowling_team
+            FROM deliveries d2
+            JOIN matches m2 ON d2.match_id = m2.match_id
+            WHERE d2.bowler = d.bowler
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(DISTINCT CONCAT(CAST(d.match_id AS varchar(50)), '-', CAST(d.innings AS varchar(10)))) AS innings,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS legal_balls,
+        CAST(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) / 6 AS varchar(20))
+            + '.' +
+        CAST(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) % 6 AS varchar(1)) AS overs_bowled,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        ROUND(SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) * 6.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS economy,
+        ROUND(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) * 1.0 / NULLIF(COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END), 0), 2) AS bowling_strike_rate
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.bowler
+)
+SELECT TOP {limit}
+    bowler,
+    team,
+    matches,
+    innings,
+    overs_bowled,
+    legal_balls,
+    wickets,
+    runs_conceded,
+    economy,
+    bowling_strike_rate
+FROM bowler_stats
+WHERE legal_balls > 0
+ORDER BY wickets DESC, economy ASC, legal_balls DESC, bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The bowling leaderboard route failed: {error}",
+            "paragraph": f"The bowling leaderboard route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _obw_clean_table(df if df is not None else pd.DataFrame())
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "who has taken the most wickets outside India",
+            "who has taken the most wickets on a Tuesday",
+            "who has taken the most wickets on a Sunday",
+            "most fours for RCB",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _obw_outside_india_route(question):
+    text = str(question or "").lower()
+
+    if not any(phrase in text for phrase in ["outside india", "outside of india", "overseas", "outside indian"]):
+        return None
+
+    metric = _obw_metric(question)
+    limit = _obw_limit(question, default_value=10)
+    filt = [_obw_outside_india_condition("m")]
+
+    if metric == "wickets":
+        return _obw_bowling_leaderboard(question, filt, "Most wickets outside India", limit=limit)
+
+    if metric == "runs" or metric is None:
+        return _obw_batting_leaderboard(question, filt, "Most runs outside India", limit=limit)
+
+    return None
+
+
+def _obw_weekday_route(question):
+    day = _obw_day_name(question)
+
+    if not day:
+        return None
+
+    text = str(question or "").lower()
+
+    # Require clear "on a Tuesday" / "on Tuesday" / "Tuesday games" intent.
+    weekday_intent = (
+        f"on a {day.lower()}" in text
+        or f"on {day.lower()}" in text
+        or f"{day.lower()} games" in text
+        or f"{day.lower()} matches" in text
+        or f"played on {day.lower()}" in text
+    )
+
+    if not weekday_intent:
+        return None
+
+    metric = _obw_metric(question)
+    limit = _obw_limit(question, default_value=10)
+    filt = [_obw_day_condition(day, "m")]
+
+    if metric == "wickets":
+        return _obw_bowling_leaderboard(question, filt, f"Most wickets on {day}", limit=limit)
+
+    if metric == "runs" or metric is None:
+        return _obw_batting_leaderboard(question, filt, f"Most runs on {day}", limit=limit)
+
+    return None
+
+
+try:
+    _previous_answer_question_with_fallback_before_obw = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_obw = None
+
+
+def answer_question_with_fallback(user_question):
+    for route in [
+        _obw_team_boundary_route,
+        _obw_outside_india_route,
+        _obw_weekday_route,
+    ]:
+        result = route(user_question)
+
+        if result is not None:
+            return result
+
+    result = _previous_answer_question_with_fallback_before_obw(user_question)
+    return _obw_clean_result(result)
+
+# IPL SQL Agent outside-India, team boundary, and weekday leaderboards END
+
