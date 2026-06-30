@@ -25643,3 +25643,538 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent 2020 slash season correction END
 
+
+# IPL SQL Agent corrected fastest milestone routes START
+
+def _fastmile_q(value):
+    return str(value).replace("'", "''")
+
+
+def _fastmile_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _fastmile_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _fastmile_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    parts = [p.strip() for p in str(value).split(",") if p and str(p).strip()]
+    out = []
+    seen = set()
+
+    for part in parts:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            out.append(short)
+            seen.add(key)
+
+    return ", ".join(out)
+
+
+def _fastmile_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+        for col in ["team", "opposition", "batting_team", "bowling_team"]:
+            if col in table.columns:
+                table[col] = table[col].apply(_fastmile_short_team)
+        return table
+    except Exception:
+        return table
+
+
+def _fastmile_clean_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _fastmile_clean_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _fastmile_clean_table(table)
+        result["extra_tables"] = extra
+
+    return result
+
+
+def _fastmile_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text in {"ipl", "the ipl", "history", "overall", "all seasons", "all time"}:
+        return None, None, []
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow"]),
+        ("RPS", "RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", "GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", "KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", "PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(t in text for t in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _fastmile_venue_filter(raw):
+    low = str(raw or "").lower().strip(" .?")
+
+    if not low or low in {"ipl", "the ipl", "history", "overall", "all seasons", "all time"}:
+        return "1=1", None
+
+    if "new chandigarh" in low or "mullanpur" in low or "yadavindra" in low:
+        return "(m.venue LIKE '%Yadavindra%' OR m.venue LIKE '%Mullanpur%' OR m.venue LIKE '%New Chandigarh%' OR m.city LIKE '%Chandigarh%' OR m.city LIKE '%Mullanpur%')", "New Chandigarh"
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in low or "motera" in low or "ahmedabad" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+    if "uppal" in low or "rajiv gandhi" in low:
+        return "(m.venue LIKE '%Rajiv Gandhi%' OR m.venue LIKE '%Uppal%')", "Uppal"
+    if "arun jaitley" in low or "kotla" in low:
+        return "(m.venue LIKE '%Arun Jaitley%' OR m.venue LIKE '%Kotla%')", "Arun Jaitley Stadium"
+    if "dubai" in low:
+        return "(m.venue LIKE '%Dubai%' OR m.city LIKE '%Dubai%')", "Dubai"
+    if "sharjah" in low:
+        return "(m.venue LIKE '%Sharjah%' OR m.city LIKE '%Sharjah%')", "Sharjah"
+    if "abu dhabi" in low or "zayed" in low:
+        return "(m.venue LIKE '%Abu Dhabi%' OR m.venue LIKE '%Zayed%' OR m.city LIKE '%Abu Dhabi%')", "Abu Dhabi"
+    if "brabourne" in low:
+        return "m.venue LIKE '%Brabourne%'", "Brabourne"
+    if "mohali" in low or "bindra" in low:
+        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Bindra%' OR m.city LIKE '%Mohali%')", "Mohali"
+    if "dharamsala" in low or "dharamshala" in low:
+        return "(m.venue LIKE '%Dharamsala%' OR m.venue LIKE '%Dharamshala%' OR m.city LIKE '%Dharam%')", "Dharamshala"
+
+    return "1=1", None
+
+
+def _fastmile_season_condition(alias, typed_year):
+    year = int(typed_year)
+
+    if year == 2020:
+        return f"(CAST({alias}.season AS varchar(20)) = '2020' OR CAST({alias}.season AS varchar(20)) = '2020/21')"
+
+    if year == 2021:
+        return f"(CAST({alias}.season AS varchar(20)) = '2021')"
+
+    slash_form = f"{year - 1}/{str(year)[-2:]}"
+    short_year = str(year)[-2:]
+
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{_fastmile_q(slash_form)}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{_fastmile_q(short_year)}')"
+    )
+
+
+def _fastmile_season_label_expr(alias):
+    return f"""
+CASE
+    WHEN CAST({alias}.season AS varchar(20)) = '2020/21'
+    THEN '2020'
+    WHEN CHARINDEX('/', CAST({alias}.season AS varchar(20))) > 0
+         AND TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) IS NOT NULL
+    THEN CAST(
+        CASE
+            WHEN TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2)) <= 30
+            THEN 2000 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+            ELSE 1900 + TRY_CONVERT(int, RIGHT(CAST({alias}.season AS varchar(20)), 2))
+        END AS varchar(4)
+    )
+    ELSE CAST({alias}.season AS varchar(20))
+END
+""".strip()
+
+
+def _fastmile_parse(question):
+    import re
+
+    text = str(question or "")
+    low = text.lower()
+
+    if "fastest" not in low:
+        return None
+
+    milestone = None
+
+    if re.search(r"\b(50|fifty|half[\s-]*century|half century)\b", low):
+        milestone = 50
+    elif re.search(r"\b(100|hundred|century)\b", low):
+        milestone = 100
+
+    if milestone is None:
+        return None
+
+    limit = 10
+    top_match = re.search(r"\btop\s+(\d+)\b", low)
+    if top_match:
+        value = int(top_match.group(1))
+        if 1 <= value <= 50:
+            limit = value
+
+    year = None
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    if year_match:
+        year = int(year_match.group(1))
+
+    # Remove parenthesised/extra minimum words if ever included.
+    clean = re.sub(r"\([^)]*\)", " ", text)
+
+    filters = ["d.innings IN (1, 2)"]
+    labels = []
+    ambiguity = False
+
+    # Venue: at/in/on/inside VENUE. "in IPL history" is ignored.
+    venue_match = re.search(
+        r"\b(?:at|inside|on)\s+([A-Za-z0-9 .'-]+?)(?:\s+for\s+|\s+against\s+|\s+in\s+20\d{2}|\s*$)",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if not venue_match:
+        in_match = re.search(
+            r"\bin\s+([A-Za-z0-9 .'-]+?)(?:\s+for\s+|\s+against\s+|\s+in\s+20\d{2}|\s*$)",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if in_match and in_match.group(1).strip(" .?").lower() not in {"ipl", "the ipl", "history", "ipl history"}:
+            venue_match = in_match
+
+    if venue_match:
+        venue_sql, venue_label = _fastmile_venue_filter(venue_match.group(1))
+        if venue_label:
+            filters.append(venue_sql)
+            labels.append(f"at {venue_label}")
+
+    # Own team: for/from/by TEAM.
+    own_match = re.search(
+        r"\b(?:for|from|by)\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+20\d{2}|\s+against\s+|\s*$)",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if own_match:
+        code, display, aliases = _fastmile_team_lookup(own_match.group(1).strip(" .?"))
+        if code == "AMBIGUOUS_DC":
+            ambiguity = True
+        elif aliases:
+            filters.append(f"d.batting_team IN {_fastmile_sql_list(aliases)}")
+            labels.append(f"for {display}")
+
+    # Opposition: against TEAM.
+    against_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+20\d{2}|\s*$)",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if against_match:
+        code, display, aliases = _fastmile_team_lookup(against_match.group(1).strip(" .?"))
+        if code == "AMBIGUOUS_DC":
+            ambiguity = True
+        elif aliases:
+            filters.append(f"d.bowling_team IN {_fastmile_sql_list(aliases)}")
+            labels.append(f"against {display}")
+
+    if year is not None:
+        filters.append(_fastmile_season_condition("d", year))
+        labels.append(f"in {year}")
+
+    return {
+        "milestone": milestone,
+        "limit": limit,
+        "filters": filters,
+        "labels": labels,
+        "ambiguity": ambiguity,
+    }
+
+
+def _fastmile_dc_ambiguity(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "issue": "DC is ambiguous",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "example": "fastest 50 against Delhi Capitals",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "fastest 50 against Delhi Capitals",
+            "fastest 100 for Delhi Capitals",
+            "fastest 50 against Deccan Chargers",
+            "fastest 50 at Arun Jaitley",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _fastmile_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _fastmile_parse(question)
+
+    if not parsed:
+        return None
+
+    if parsed["ambiguity"]:
+        return _fastmile_dc_ambiguity(question)
+
+    milestone = int(parsed["milestone"])
+    limit = int(parsed["limit"])
+    where_sql = " AND ".join(parsed["filters"])
+    season_expr = _fastmile_season_label_expr("d")
+
+    milestone_col = "balls_to_fifty" if milestone == 50 else "balls_to_hundred"
+    milestone_name = "50" if milestone == 50 else "100"
+
+    # Correct ball-counting rule:
+    # balls faced excludes wides only. No-balls are still faced deliveries for the batter,
+    # so excluding no-balls can undercount fastest 50/100 by 1-2 balls.
+    sql = f"""
+WITH innings_events AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        d.batting_team AS team,
+        d.bowling_team AS opposition,
+        {season_expr} AS season,
+        m.start_date AS match_date,
+        m.venue,
+        d.ball,
+        COALESCE(d.runs_off_bat, 0) AS runs_off_bat,
+        CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 ELSE 0 END AS ball_faced,
+        CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END AS four_hit,
+        CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END AS six_hit,
+        SUM(COALESCE(d.runs_off_bat, 0)) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS cumulative_runs,
+        SUM(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+            ORDER BY d.ball
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS cumulative_balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+        ) AS innings_runs,
+        SUM(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+        ) AS innings_balls,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+        ) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END) OVER (
+            PARTITION BY d.match_id, d.innings, d.striker
+        ) AS sixes
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+),
+milestone_rows AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY match_id, innings, batter
+            ORDER BY ball
+        ) AS milestone_rank
+    FROM innings_events
+    WHERE cumulative_runs >= {milestone}
+)
+SELECT TOP {limit}
+    batter,
+    team,
+    season,
+    match_date,
+    venue,
+    opposition,
+    innings_runs,
+    cumulative_balls AS {milestone_col},
+    cumulative_balls AS balls_to_milestone,
+    innings_balls,
+    fours,
+    sixes,
+    ball AS milestone_delivery
+FROM milestone_rows
+WHERE milestone_rank = 1
+ORDER BY
+    cumulative_balls ASC,
+    innings_runs DESC,
+    match_date ASC,
+    batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The corrected fastest {milestone_name} route failed: {error}",
+            "paragraph": f"The corrected fastest {milestone_name} route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = _fastmile_clean_table(df if df is not None else pd.DataFrame())
+
+    label_suffix = " ".join(parsed["labels"]).strip()
+    title = f"Fastest {milestone_name}s"
+    if label_suffix:
+        title = f"{title} {label_suffix}"
+
+    paragraph = (
+        f"{title}. Balls faced are counted using batter balls faced, which excludes wides only. "
+        f"No-balls are included as faced deliveries, preventing the fastest {milestone_name} count from being understated."
+    )
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "fastest 50 in IPL history",
+            "fastest 100 in IPL history",
+            "fastest 50 for CSK",
+            "fastest 50 at Wankhede",
+            "fastest 50 against MI",
+            "fastest 100 for RCB at Chinnaswamy",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_fastmile = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_fastmile = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _fastmile_route(user_question)
+
+    if result is not None:
+        return result
+
+    result = _previous_answer_question_with_fallback_before_fastmile(user_question)
+    return _fastmile_clean_result(result)
+
+# IPL SQL Agent corrected fastest milestone routes END
+
+
+# IPL SQL Agent fastest milestone batting_team compatibility START
+
+def _fastmile_add_batting_team_column(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        if "batting_team" not in table.columns and "team" in table.columns:
+            insert_at = list(table.columns).index("team") + 1
+            table.insert(insert_at, "batting_team", table["team"])
+
+        return table
+
+    except Exception:
+        return table
+
+
+def _fastmile_add_batting_team_to_result(result, question):
+    if not isinstance(result, dict):
+        return result
+
+    if "fastest" not in str(question or "").lower():
+        return result
+
+    result["result"] = _fastmile_add_batting_team_column(result.get("result"))
+
+    extra = result.get("extra_tables")
+
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _fastmile_add_batting_team_column(table)
+
+        result["extra_tables"] = extra
+
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_fastmile_batting_team = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_fastmile_batting_team = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_fastmile_batting_team(user_question)
+    return _fastmile_add_batting_team_to_result(result, user_question)
+
+# IPL SQL Agent fastest milestone batting_team compatibility END
+

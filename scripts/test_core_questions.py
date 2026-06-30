@@ -12,6 +12,28 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "fastest 50 in IPL history",
+        "expected_columns": ["batter", "team", "balls_to_fifty", "innings_runs"],
+    },
+    {
+        "question": "fastest 100 in IPL history",
+        "expected_columns": ["batter", "team", "balls_to_hundred", "innings_runs"],
+    },
+    {
+        "question": "fastest 50 for CSK",
+        "expected_columns": ["batter", "team", "balls_to_fifty", "innings_runs"],
+    },
+    {
+        "question": "fastest 50 at Wankhede",
+        "expected_columns": ["batter", "team", "balls_to_fifty", "venue"],
+    },
+    {
+        "question": "fastest 50 against MI",
+        "expected_columns": ["batter", "opposition", "balls_to_fifty", "innings_runs"],
+    },
+
+
+    {
         "question": "who scored the most runs in 2020",
         "expected_columns": ["season", "batter", "runs"],
     },
