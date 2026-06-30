@@ -12,6 +12,16 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "best strike rate at New Chandigarh min 50 balls faced",
+        "expected_columns": ["batter", "team", "balls", "strike_rate"],
+    },
+    {
+        "question": "best economy rate at New Chandigarh min 50 balls bowled",
+        "expected_columns": ["bowler", "team", "legal_balls", "economy"],
+    },
+
+
+    {
         "question": "best strike rate in ipl min 500 balls faced",
         "expected_columns": ["batter", "team", "balls", "strike_rate"],
     },

@@ -24826,3 +24826,232 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent final robust rate/economy routes END
 
+
+# IPL SQL Agent New Chandigarh venue alias START
+
+def _nc_venue_filter_condition(prefix="m."):
+    return (
+        f"({prefix}venue LIKE '%Yadavindra%' "
+        f"OR {prefix}venue LIKE '%Mullanpur%' "
+        f"OR {prefix}venue LIKE '%New Chandigarh%' "
+        f"OR {prefix}city LIKE '%Chandigarh%' "
+        f"OR {prefix}city LIKE '%Mullanpur%')"
+    )
+
+
+def _nc_is_new_chandigarh(text):
+    low = str(text or "").lower()
+    return (
+        "new chandigarh" in low
+        or "mullanpur" in low
+        or "yadavindra" in low
+        or "maharaja yadavindra" in low
+    )
+
+
+def _nc_normalize_question_text(question):
+    text = str(question or "")
+    replacements = [
+        "New Chandigarh",
+        "new chandigarh",
+        "Mullanpur",
+        "mullanpur",
+        "Maharaja Yadavindra Singh Stadium",
+        "maharaja yadavindra singh stadium",
+        "Maharaja Yadavindra Singh International Cricket Stadium",
+        "maharaja yadavindra singh international cricket stadium",
+    ]
+    for old in replacements:
+        text = text.replace(old, "Maharaja Yadavindra Singh")
+    return text
+
+
+try:
+    _previous_rrfinal_venue_filter_before_nc = _rrfinal_venue_filter
+except NameError:
+    _previous_rrfinal_venue_filter_before_nc = None
+
+
+def _rrfinal_venue_filter(raw):
+    if _nc_is_new_chandigarh(raw):
+        return _nc_venue_filter_condition("m."), "New Chandigarh"
+    if _previous_rrfinal_venue_filter_before_nc:
+        return _previous_rrfinal_venue_filter_before_nc(raw)
+    return "1=1", None
+
+
+try:
+    _previous_bvv_venue_filter_before_nc = _bvv_venue_filter
+except NameError:
+    _previous_bvv_venue_filter_before_nc = None
+
+
+def _bvv_venue_filter(raw):
+    if _nc_is_new_chandigarh(raw):
+        return _nc_venue_filter_condition("m."), "New Chandigarh"
+    if _previous_bvv_venue_filter_before_nc:
+        return _previous_bvv_venue_filter_before_nc(raw)
+    return None, None
+
+
+try:
+    _previous_bvvenue_venue_filter_from_raw_before_nc = _bvvenue_venue_filter_from_raw
+except NameError:
+    _previous_bvvenue_venue_filter_from_raw_before_nc = None
+
+
+def _bvvenue_venue_filter_from_raw(raw):
+    if _nc_is_new_chandigarh(raw):
+        return _nc_venue_filter_condition("m."), "New Chandigarh"
+    if _previous_bvvenue_venue_filter_from_raw_before_nc:
+        return _previous_bvvenue_venue_filter_from_raw_before_nc(raw)
+    return None, None
+
+
+try:
+    _previous_rate_venue_filter_before_nc = _rate_venue_filter
+except NameError:
+    _previous_rate_venue_filter_before_nc = None
+
+
+def _rate_venue_filter(question):
+    if _nc_is_new_chandigarh(question):
+        return _nc_venue_filter_condition("m."), "New Chandigarh"
+    if _previous_rate_venue_filter_before_nc:
+        return _previous_rate_venue_filter_before_nc(question)
+    return "1=1", None
+
+
+try:
+    _previous_answer_question_with_fallback_before_nc_alias = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_nc_alias = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_nc_alias(user_question)
+
+    try:
+        table = result.get("result") if isinstance(result, dict) else None
+        is_empty = table is None or (hasattr(table, "empty") and table.empty)
+    except Exception:
+        is_empty = False
+
+    if _nc_is_new_chandigarh(user_question) and is_empty:
+        normalized_question = _nc_normalize_question_text(user_question)
+        if normalized_question != str(user_question):
+            retry_result = _previous_answer_question_with_fallback_before_nc_alias(normalized_question)
+            if isinstance(retry_result, dict):
+                retry_result["question"] = user_question
+                paragraph = retry_result.get("analysis_paragraph") or retry_result.get("paragraph") or ""
+                paragraph = str(paragraph).replace("Maharaja Yadavindra Singh", "New Chandigarh")
+                retry_result["analysis_paragraph"] = paragraph
+                retry_result["paragraph"] = paragraph
+                return retry_result
+
+    return result
+
+# IPL SQL Agent New Chandigarh venue alias END
+
+
+# IPL SQL Agent display date format dd-mm-yyyy START
+
+def _ddmmyyyy_convert_value(value):
+    import re
+    import pandas as pd
+
+    if value is None:
+        return value
+
+    try:
+        if pd.isna(value):
+            return value
+    except Exception:
+        pass
+
+    # Pandas / Python datetime-like values
+    if hasattr(value, "strftime") and not isinstance(value, str):
+        try:
+            return value.strftime("%d-%m-%Y")
+        except Exception:
+            return value
+
+    text = str(value).strip()
+
+    # Convert ISO dates such as 2026-04-12 or 2026-04-12 00:00:00.
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:[ T].*)?$", text)
+    if match:
+        yyyy, mm, dd = match.groups()
+        return f"{dd}-{mm}-{yyyy}"
+
+    return value
+
+
+def _ddmmyyyy_column_looks_like_date(series, column_name):
+    import re
+    import pandas as pd
+
+    name = str(column_name).lower()
+
+    if "date" in name:
+        return True
+
+    try:
+        sample = series.dropna().astype(str).head(20).tolist()
+    except Exception:
+        return False
+
+    if not sample:
+        return False
+
+    iso_count = sum(1 for value in sample if re.match(r"^\d{4}-\d{2}-\d{2}(?:[ T].*)?$", value.strip()))
+
+    return iso_count >= max(1, int(len(sample) * 0.8))
+
+
+def _ddmmyyyy_format_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        for column in table.columns:
+            if _ddmmyyyy_column_looks_like_date(table[column], column):
+                table[column] = table[column].apply(_ddmmyyyy_convert_value)
+
+        return table
+
+    except Exception:
+        return table
+
+
+def _ddmmyyyy_format_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    result["result"] = _ddmmyyyy_format_table(result.get("result"))
+
+    extra = result.get("extra_tables")
+
+    if isinstance(extra, dict):
+        for name, table in list(extra.items()):
+            extra[name] = _ddmmyyyy_format_table(table)
+
+        result["extra_tables"] = extra
+
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_ddmmyyyy = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_ddmmyyyy = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_ddmmyyyy(user_question)
+    return _ddmmyyyy_format_result(result)
+
+# IPL SQL Agent display date format dd-mm-yyyy END
+

@@ -36,11 +36,11 @@ EXAMPLE_QUESTION_GROUPS = {'Classic analytics': ['who are the top 10 run scorers
  'Rate and filter leaderboards': ['best strike rate in IPL min 500 balls faced',
                                   'who has the best average at Chepauk min 5 matches played',
                                   'best economy rate in IPL min 700 balls bowled',
-                                  'best economy rate at Chepauk min 300 balls bowled'],
+                                  'best economy rate at Wankhede min 300 balls bowled'],
  'Filtered player records': ['how many fifties does Kohli have against CSK',
-                             'how many hundreds does Kohli have at Wankhede',
+                             'how many hundreds does JC Buttler have at Wankhede',
                              'who has taken the most wickets against CSK',
-                             'best bowlers against Dhoni at Chepauk']}
+                             'best bowlers against Rohit Sharma at Chepauk']}
 
 
 HIDDEN_COLUMNS = {
