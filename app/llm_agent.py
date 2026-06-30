@@ -26996,3 +26996,417 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent no-qualifier message for rate/economy routes END
 
+
+# IPL SQL Agent strict Mullanpur/New Chandigarh venue profile START
+
+def _mvp_is_mullanpur(text):
+    low = str(text or "").lower()
+    return (
+        "new chandigarh" in low
+        or "mullanpur" in low
+        or "yadavindra" in low
+        or "maharaja yadavindra" in low
+    )
+
+
+def _mvp_venue_condition(alias="m"):
+    # Strict venue-only match. Do not use city LIKE '%Chandigarh%',
+    # otherwise old Mohali/PCA records can get mixed in.
+    return (
+        f"({alias}.venue LIKE '%Yadavindra%' "
+        f"OR {alias}.venue LIKE '%Mullanpur%' "
+        f"OR {alias}.venue LIKE '%New Chandigarh%')"
+    )
+
+
+def _mvp_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Gujarat Titans": "GT",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Kochi Tuskers Kerala": "KTK",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    parts = [p.strip() for p in str(value).split(",") if p and str(p).strip()]
+    out = []
+    seen = set()
+
+    for part in parts:
+        short = mapping.get(part, part)
+        key = short.lower()
+        if key not in seen:
+            out.append(short)
+            seen.add(key)
+
+    return ", ".join(out)
+
+
+def _mvp_clean_table(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        for col in ["team", "Team", "winner", "Winner", "toss_winner", "Toss Winner", "batting_team", "bowling_team"]:
+            if col in table.columns:
+                table[col] = table[col].apply(_mvp_short_team)
+
+        return table
+
+    except Exception:
+        return table
+
+
+def _mvp_parse(question):
+    import re
+
+    text = str(question or "").strip()
+    low = text.lower()
+
+    if not _mvp_is_mullanpur(text):
+        return False
+
+    venue_intent = (
+        "venue profile" in low
+        or "venue stats" in low
+        or "ground profile" in low
+        or "ground stats" in low
+        or "tell me about" in low
+        or "stats for" in low
+        or "profile for" in low
+        or re.search(r"\b(mullanpur|new chandigarh|yadavindra)\s+(?:stats|profile|venue profile)\b", low)
+    )
+
+    return bool(venue_intent)
+
+
+def _mvp_no_data_result(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "venue": "Mullanpur / New Chandigarh",
+        "matches": 0,
+        "note": "No IPL matches found for this strict venue filter.",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "No IPL matches found for Mullanpur / New Chandigarh using the strict venue filter.",
+        "paragraph": "No IPL matches found for Mullanpur / New Chandigarh using the strict venue filter.",
+        "result": df,
+        "extra_tables": {"Venue Summary": df},
+        "sql_query": "",
+        "similar_questions": [
+            "tell me about Mullanpur",
+            "venue profile for New Chandigarh",
+            "best strike rate at Mullanpur min 50 balls faced",
+            "best economy rate at Mullanpur min 50 balls bowled",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _mvp_venue_profile_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    if not _mvp_parse(question):
+        return None
+
+    cond_m = _mvp_venue_condition("m")
+    cond_m2 = _mvp_venue_condition("m2")
+    cond_m3 = _mvp_venue_condition("m3")
+
+    summary_sql = f"""
+WITH venue_matches AS (
+    SELECT
+        m.match_id,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.toss_winner,
+        m.toss_decision,
+        m.winner
+    FROM matches m
+    WHERE {cond_m}
+),
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        MAX(d.batting_team) AS batting_team,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS innings_runs
+    FROM deliveries d
+    JOIN venue_matches vm
+        ON d.match_id = vm.match_id
+    WHERE d.innings IN (1, 2)
+    GROUP BY d.match_id, d.innings
+),
+match_scores AS (
+    SELECT
+        vm.match_id,
+        vm.start_date,
+        vm.venue,
+        vm.toss_decision,
+        vm.winner,
+        MAX(CASE WHEN ins.innings = 1 THEN ins.batting_team END) AS batting_first_team,
+        MAX(CASE WHEN ins.innings = 2 THEN ins.batting_team END) AS chasing_team,
+        MAX(CASE WHEN ins.innings = 1 THEN ins.innings_runs END) AS first_innings_runs,
+        MAX(CASE WHEN ins.innings = 2 THEN ins.innings_runs END) AS second_innings_runs
+    FROM venue_matches vm
+    LEFT JOIN innings_scores ins
+        ON vm.match_id = ins.match_id
+    GROUP BY vm.match_id, vm.start_date, vm.venue, vm.toss_decision, vm.winner
+)
+SELECT
+    'Mullanpur / New Chandigarh' AS venue,
+    COUNT(DISTINCT match_id) AS matches,
+    MIN(start_date) AS first_match_date,
+    MAX(start_date) AS last_match_date,
+    ROUND(AVG(CAST(first_innings_runs AS float)), 2) AS avg_first_innings_score,
+    ROUND(AVG(CAST(second_innings_runs AS float)), 2) AS avg_second_innings_score,
+    SUM(CASE WHEN winner = batting_first_team THEN 1 ELSE 0 END) AS batting_first_wins,
+    SUM(CASE WHEN winner = chasing_team THEN 1 ELSE 0 END) AS chasing_wins,
+    SUM(CASE WHEN LOWER(COALESCE(toss_decision, '')) = 'bat' THEN 1 ELSE 0 END) AS toss_bat_count,
+    SUM(CASE WHEN LOWER(COALESCE(toss_decision, '')) = 'field' THEN 1 ELSE 0 END) AS toss_field_count
+FROM match_scores;
+""".strip()
+
+    season_sql = f"""
+WITH venue_matches AS (
+    SELECT
+        m.match_id,
+        CASE
+            WHEN CAST(m.season AS varchar(20)) = '2020/21' THEN '2020'
+            WHEN CHARINDEX('/', CAST(m.season AS varchar(20))) > 0
+                 AND TRY_CONVERT(int, RIGHT(CAST(m.season AS varchar(20)), 2)) IS NOT NULL
+            THEN CAST(
+                CASE
+                    WHEN TRY_CONVERT(int, RIGHT(CAST(m.season AS varchar(20)), 2)) <= 30
+                    THEN 2000 + TRY_CONVERT(int, RIGHT(CAST(m.season AS varchar(20)), 2))
+                    ELSE 1900 + TRY_CONVERT(int, RIGHT(CAST(m.season AS varchar(20)), 2))
+                END AS varchar(4)
+            )
+            ELSE CAST(m.season AS varchar(20))
+        END AS season
+    FROM matches m
+    WHERE {cond_m}
+),
+innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS innings_runs
+    FROM deliveries d
+    JOIN venue_matches vm
+        ON d.match_id = vm.match_id
+    WHERE d.innings IN (1, 2)
+    GROUP BY d.match_id, d.innings
+)
+SELECT
+    vm.season,
+    COUNT(DISTINCT vm.match_id) AS matches,
+    ROUND(AVG(CASE WHEN ins.innings = 1 THEN CAST(ins.innings_runs AS float) END), 2) AS avg_first_innings_score,
+    ROUND(AVG(CASE WHEN ins.innings = 2 THEN CAST(ins.innings_runs AS float) END), 2) AS avg_second_innings_score
+FROM venue_matches vm
+LEFT JOIN innings_scores ins
+    ON vm.match_id = ins.match_id
+GROUP BY vm.season
+ORDER BY vm.season;
+""".strip()
+
+    team_sql = f"""
+WITH venue_matches AS (
+    SELECT m.match_id, m.winner
+    FROM matches m
+    WHERE {cond_m}
+),
+team_matches AS (
+    SELECT DISTINCT
+        d.match_id,
+        d.batting_team AS team
+    FROM deliveries d
+    JOIN venue_matches vm
+        ON d.match_id = vm.match_id
+    WHERE d.innings IN (1, 2)
+)
+SELECT
+    tm.team AS Team,
+    COUNT(DISTINCT tm.match_id) AS Matches,
+    SUM(CASE WHEN vm.winner = tm.team THEN 1 ELSE 0 END) AS Wins,
+    COUNT(DISTINCT tm.match_id) - SUM(CASE WHEN vm.winner = tm.team THEN 1 ELSE 0 END) AS Losses,
+    ROUND(SUM(CASE WHEN vm.winner = tm.team THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(DISTINCT tm.match_id), 0), 2) AS [Win Pct]
+FROM team_matches tm
+JOIN venue_matches vm
+    ON tm.match_id = vm.match_id
+GROUP BY tm.team
+ORDER BY Matches DESC, Wins DESC, Team ASC;
+""".strip()
+
+    batters_sql = f"""
+SELECT TOP 10
+    d.striker AS batter,
+    STUFF((
+        SELECT DISTINCT ', ' + d2.batting_team
+        FROM deliveries d2
+        JOIN matches m2
+            ON d2.match_id = m2.match_id
+        WHERE d2.striker = d.striker
+          AND {cond_m2}
+        FOR XML PATH(''), TYPE
+    ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+    COUNT(DISTINCT d.match_id) AS matches,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) AS balls,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END), 0), 2) AS strike_rate
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {cond_m}
+  AND d.innings IN (1, 2)
+GROUP BY d.striker
+HAVING COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) > 0
+ORDER BY runs DESC, strike_rate DESC, batter ASC;
+""".strip()
+
+    bowlers_sql = f"""
+SELECT TOP 10
+    d.bowler,
+    STUFF((
+        SELECT DISTINCT ', ' + d2.bowling_team
+        FROM deliveries d2
+        JOIN matches m2
+            ON d2.match_id = m2.match_id
+        WHERE d2.bowler = d.bowler
+          AND {cond_m2}
+        FOR XML PATH(''), TYPE
+    ).value('.', 'nvarchar(max)'), 1, 2, '') AS team,
+    COUNT(DISTINCT d.match_id) AS matches,
+    COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS legal_balls,
+    CAST(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) / 6 AS varchar(20))
+        + '.' +
+    CAST(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) % 6 AS varchar(1)) AS overs_bowled,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+        THEN 1
+    END) AS wickets,
+    SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) * 6.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS economy
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE {cond_m}
+  AND d.innings IN (1, 2)
+GROUP BY d.bowler
+HAVING COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) > 0
+ORDER BY wickets DESC, economy ASC, legal_balls DESC, bowler ASC;
+""".strip()
+
+    toss_sql = f"""
+SELECT
+    COALESCE(m.toss_decision, 'unknown') AS toss_decision,
+    COUNT(*) AS matches,
+    SUM(CASE WHEN m.toss_winner = m.winner THEN 1 ELSE 0 END) AS toss_winner_wins,
+    ROUND(SUM(CASE WHEN m.toss_winner = m.winner THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS toss_winner_win_pct
+FROM matches m
+WHERE {cond_m}
+GROUP BY COALESCE(m.toss_decision, 'unknown')
+ORDER BY matches DESC, toss_decision ASC;
+""".strip()
+
+    try:
+        summary = run_query(summary_sql)
+        if summary is None or summary.empty or int(summary.iloc[0].get("matches", 0) or 0) == 0:
+            return _mvp_no_data_result(question)
+
+        season = run_query(season_sql)
+        team = run_query(team_sql)
+        batters = run_query(batters_sql)
+        bowlers = run_query(bowlers_sql)
+        toss = run_query(toss_sql)
+
+    except Exception as error:
+        df = pd.DataFrame([{"error": str(error)}])
+        return {
+            "question": question,
+            "analysis_paragraph": f"Mullanpur / New Chandigarh venue profile failed: {error}",
+            "paragraph": f"Mullanpur / New Chandigarh venue profile failed: {error}",
+            "result": df,
+            "extra_tables": {"Error": df},
+            "sql_query": summary_sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    summary = _mvp_clean_table(summary if summary is not None else pd.DataFrame())
+    season = _mvp_clean_table(season if season is not None else pd.DataFrame())
+    team = _mvp_clean_table(team if team is not None else pd.DataFrame())
+    batters = _mvp_clean_table(batters if batters is not None else pd.DataFrame())
+    bowlers = _mvp_clean_table(bowlers if bowlers is not None else pd.DataFrame())
+    toss = _mvp_clean_table(toss if toss is not None else pd.DataFrame())
+
+    return {
+        "question": question,
+        "analysis_paragraph": "Venue profile for Mullanpur / New Chandigarh using a strict venue-name filter, kept separate from Mohali/PCA/IS Bindra records.",
+        "paragraph": "Venue profile for Mullanpur / New Chandigarh using a strict venue-name filter, kept separate from Mohali/PCA/IS Bindra records.",
+        "result": summary,
+        "extra_tables": {
+            "Venue Summary": summary,
+            "Season Trend": season,
+            "Team Record At Venue": team,
+            "Top Batters At Venue": batters,
+            "Top Bowlers At Venue": bowlers,
+            "Toss Decision At Venue": toss,
+        },
+        "sql_query": summary_sql,
+        "similar_questions": [
+            "tell me about Mullanpur",
+            "venue profile for New Chandigarh",
+            "best strike rate at Mullanpur min 50 balls faced",
+            "best economy rate at Mullanpur min 50 balls bowled",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_mvp = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_mvp = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _mvp_venue_profile_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_mvp(user_question)
+
+# IPL SQL Agent strict Mullanpur/New Chandigarh venue profile END
+

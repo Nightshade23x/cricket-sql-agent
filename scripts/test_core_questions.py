@@ -12,6 +12,16 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "tell me about Mullanpur",
+        "expected_columns": ["venue", "matches"],
+    },
+    {
+        "question": "venue profile for New Chandigarh",
+        "expected_columns": ["venue", "matches"],
+    },
+
+
+    {
         "question": "best economy rate at mullanpur min 300 balls bowled",
         "expected_columns": ["bowler", "team", "legal_balls", "economy"],
     },
