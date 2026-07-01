@@ -24866,10 +24866,7 @@ def _nc_normalize_question_text(question):
     return text
 
 
-try:
-    _previous_rrfinal_venue_filter_before_nc = _rrfinal_venue_filter
-except NameError:
-    _previous_rrfinal_venue_filter_before_nc = None
+_previous_rrfinal_venue_filter_before_nc = globals().get("_rrfinal_venue_filter")
 
 
 def _rrfinal_venue_filter(raw):
@@ -24880,10 +24877,7 @@ def _rrfinal_venue_filter(raw):
     return "1=1", None
 
 
-try:
-    _previous_bvv_venue_filter_before_nc = _bvv_venue_filter
-except NameError:
-    _previous_bvv_venue_filter_before_nc = None
+_previous_bvv_venue_filter_before_nc = globals().get("_bvv_venue_filter")
 
 
 def _bvv_venue_filter(raw):
@@ -24894,10 +24888,7 @@ def _bvv_venue_filter(raw):
     return None, None
 
 
-try:
-    _previous_bvvenue_venue_filter_from_raw_before_nc = _bvvenue_venue_filter_from_raw
-except NameError:
-    _previous_bvvenue_venue_filter_from_raw_before_nc = None
+_previous_bvvenue_venue_filter_from_raw_before_nc = globals().get("_bvvenue_venue_filter_from_raw")
 
 
 def _bvvenue_venue_filter_from_raw(raw):
@@ -24908,10 +24899,7 @@ def _bvvenue_venue_filter_from_raw(raw):
     return None, None
 
 
-try:
-    _previous_rate_venue_filter_before_nc = _rate_venue_filter
-except NameError:
-    _previous_rate_venue_filter_before_nc = None
+_previous_rate_venue_filter_before_nc = globals().get("_rate_venue_filter")
 
 
 def _rate_venue_filter(question):
@@ -26711,10 +26699,7 @@ def _nc_is_new_chandigarh(text):
 
 
 # Robust rate/economy route venue helper.
-try:
-    _previous_rrfinal_venue_filter_before_mullanpur_strict = _rrfinal_venue_filter
-except NameError:
-    _previous_rrfinal_venue_filter_before_mullanpur_strict = None
+_previous_rrfinal_venue_filter_before_mullanpur_strict = globals().get("_rrfinal_venue_filter")
 
 
 def _rrfinal_venue_filter(raw):
@@ -26728,10 +26713,7 @@ def _rrfinal_venue_filter(raw):
 
 
 # Earlier rate route venue helper.
-try:
-    _previous_rate_venue_filter_before_mullanpur_strict = _rate_venue_filter
-except NameError:
-    _previous_rate_venue_filter_before_mullanpur_strict = None
+_previous_rate_venue_filter_before_mullanpur_strict = globals().get("_rate_venue_filter")
 
 
 def _rate_venue_filter(question):
@@ -26745,10 +26727,7 @@ def _rate_venue_filter(question):
 
 
 # Fastest milestone route venue helper.
-try:
-    _previous_fastmile_venue_filter_before_mullanpur_strict = _fastmile_venue_filter
-except NameError:
-    _previous_fastmile_venue_filter_before_mullanpur_strict = None
+_previous_fastmile_venue_filter_before_mullanpur_strict = globals().get("_fastmile_venue_filter")
 
 
 def _fastmile_venue_filter(raw):
@@ -26762,10 +26741,7 @@ def _fastmile_venue_filter(raw):
 
 
 # Player fifties/hundreds route venue helper.
-try:
-    _previous_pfh_venue_filter_before_mullanpur_strict = _pfh_venue_filter
-except NameError:
-    _previous_pfh_venue_filter_before_mullanpur_strict = None
+_previous_pfh_venue_filter_before_mullanpur_strict = globals().get("_pfh_venue_filter")
 
 
 def _pfh_venue_filter(raw):
@@ -26779,10 +26755,7 @@ def _pfh_venue_filter(raw):
 
 
 # Bowler-vs-batter-at-venue helper.
-try:
-    _previous_bvv_venue_filter_before_mullanpur_strict = _bvv_venue_filter
-except NameError:
-    _previous_bvv_venue_filter_before_mullanpur_strict = None
+_previous_bvv_venue_filter_before_mullanpur_strict = globals().get("_bvv_venue_filter")
 
 
 def _bvv_venue_filter(raw):
@@ -26796,10 +26769,7 @@ def _bvv_venue_filter(raw):
 
 
 # Older bowler-vs-batter helper name.
-try:
-    _previous_bvvenue_venue_filter_from_raw_before_mullanpur_strict = _bvvenue_venue_filter_from_raw
-except NameError:
-    _previous_bvvenue_venue_filter_from_raw_before_mullanpur_strict = None
+_previous_bvvenue_venue_filter_from_raw_before_mullanpur_strict = globals().get("_bvvenue_venue_filter_from_raw")
 
 
 def _bvvenue_venue_filter_from_raw(raw):
@@ -29034,4 +29004,464 @@ def answer_question_with_fallback(user_question):
     return _previous_answer_question_with_fallback_before_ftb(user_question)
 
 # IPL SQL Agent filtered team boundary route END
+
+
+# IPL SQL Agent tactical tab cleanup and match-plan extensions START
+
+def _tacui_q(value):
+    return str(value).replace("'", "''")
+
+
+def _tacui_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _tacui_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _tacui_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "chennai super kings", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai", "mumbai indians"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat", "gujarat titans"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata", "kolkata knight riders"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan", "rajasthan royals"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad", "sunrisers hyderabad"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi", "punjab kings", "kings xi punjab"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow", "lucknow super giants"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _tacui_parse_match_plan_teams(question):
+    import re
+
+    text = str(question or "").strip()
+
+    patterns = [
+        r"\bhow\s+can\s+([A-Za-z0-9 .]+?)\s+beat\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+|\s+on\s+|\?|$)",
+        r"\b([A-Za-z0-9 .]+?)\s+vs\s+([A-Za-z0-9 .]+?)\s+match\s+plan\b",
+        r"\bmatch\s+plan\s+for\s+([A-Za-z0-9 .]+?)\s+(?:vs|against)\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+|\s+on\s+|\?|$)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+
+        if not match:
+            continue
+
+        team_raw = match.group(1).strip(" .?")
+        opp_raw = match.group(2).strip(" .?")
+
+        team_code, team_display, team_aliases = _tacui_team_lookup(team_raw)
+        opp_code, opp_display, opp_aliases = _tacui_team_lookup(opp_raw)
+
+        if team_code and opp_code and team_code != "AMBIGUOUS_DC" and opp_code != "AMBIGUOUS_DC":
+            return {
+                "team_code": team_code,
+                "team_display": team_display,
+                "team_aliases": team_aliases,
+                "opponent_code": opp_code,
+                "opponent_display": opp_display,
+                "opponent_aliases": opp_aliases,
+            }
+
+    return None
+
+
+def _tacui_is_match_plan_question(question):
+    text = str(question or "").lower()
+
+    return (
+        "how can" in text and " beat " in text
+    ) or (
+        "match plan" in text
+    )
+
+
+def _tacui_is_bowler_to_batter_question(question):
+    text = str(question or "").lower()
+
+    return (
+        ("bowl to" in text or "bowl against" in text or "how should" in text)
+        and not _tacui_is_match_plan_question(question)
+    )
+
+
+def _tacui_pretty_name(name):
+    raw = str(name)
+
+    mapping = {
+        "length_line_plan": "Length/Line Plan",
+        "direct_length_line_plan": "Direct Length/Line Plan",
+        "proxy_bowler_style_plan": "Similar Bowler Style Plan",
+        "proxy_batter_style_plan": "Similar Batter Style Plan",
+        "shot_response": "Shot Response Plan",
+        "shot_response_plan": "Shot Response Plan",
+        "key_matchups": "Key Matchups",
+        "opponent_key_batters": "Opponent Key Batters",
+        "team_bowling_options": "Team Bowling Options",
+        "toss_decision_guide": "Toss Decision Guide",
+        "batting_bowling_first_plan": "Batting/Bowling First Plan",
+    }
+
+    key = raw.strip().lower()
+
+    if key in mapping:
+        return mapping[key]
+
+    if "_" in raw:
+        return raw.replace("_", " ").title()
+
+    return raw
+
+
+def _tacui_pretty_columns(table):
+    if table is None or not hasattr(table, "columns"):
+        return table
+
+    try:
+        table = table.copy()
+
+        column_mapping = {
+            "length_line_plan": "Length/Line Plan",
+            "direct_length_line_plan": "Direct Length/Line Plan",
+            "proxy_bowler_style_plan": "Similar Bowler Style Plan",
+            "proxy_batter_style_plan": "Similar Batter Style Plan",
+            "proxy_bowler_type": "Similar Bowler Type",
+            "proxy_batter_type": "Similar Batter Type",
+            "proxy_bowler_style": "Similar Bowler Style",
+            "proxy_batter_style": "Similar Batter Style",
+            "shot_response": "Shot Response Plan",
+            "shot_response_plan": "Shot Response Plan",
+            "bowler": "Bowler",
+            "batter": "Batter",
+            "player": "Player",
+            "role": "Role",
+            "team": "Team",
+            "opposition": "Opposition",
+            "bowling_style": "Bowling Style",
+            "bowling_arm": "Bowling Arm",
+            "batting_style": "Batting Style",
+            "matches": "Matches",
+            "innings": "Innings",
+            "runs": "Runs",
+            "balls": "Balls",
+            "wickets": "Wickets",
+            "economy": "Economy",
+            "strike_rate": "Strike Rate",
+            "bowling_strike_rate": "Bowling Strike Rate",
+            "matchup_plan": "Matchup Plan",
+            "reason": "Reason",
+            "phase": "Phase",
+            "priority": "Priority",
+            "plan": "Plan",
+            "note": "Note",
+            "sample_note": "Sample Note",
+            "latest_matches": "Latest Matches",
+            "latest_innings": "Latest Innings",
+            "latest_runs": "Latest Runs",
+            "latest_balls": "Latest Balls",
+            "latest_strike_rate": "Latest Strike Rate",
+            "captaincy_note": "Captaincy Note",
+        }
+
+        rename = {}
+
+        for col in table.columns:
+            key = str(col).strip().lower()
+
+            if key in column_mapping:
+                rename[col] = column_mapping[key]
+            elif "_" in str(col):
+                rename[col] = str(col).replace("_", " ").title()
+
+        if rename:
+            table = table.rename(columns=rename)
+
+        return table
+
+    except Exception:
+        return table
+
+
+def _tacui_opponent_key_bowlers(team_info):
+    import pandas as pd
+    from app.db import run_query
+
+    if not team_info:
+        return pd.DataFrame()
+
+    opponent_code = team_info["opponent_code"]
+    opponent_aliases = team_info["opponent_aliases"]
+
+    sql = f"""
+WITH squad_bowlers AS (
+    SELECT
+        cs.display_name AS bowler,
+        cs.cricsheet_name,
+        cs.role,
+        cs.bowling_style,
+        cs.bowling_arm,
+        cs.is_overseas
+    FROM current_squads cs
+    WHERE (
+            cs.team_code = '{_tacui_q(opponent_code)}'
+            OR cs.team_name IN {_tacui_sql_list(opponent_aliases)}
+          )
+      AND COALESCE(cs.is_active, 1) = 1
+      AND (
+            LOWER(COALESCE(cs.role, '')) LIKE '%bowler%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all-rounder%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all rounder%'
+          )
+),
+bowling_stats AS (
+    SELECT
+        sb.bowler,
+        sb.role,
+        sb.bowling_style,
+        sb.bowling_arm,
+        sb.is_overseas,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END) AS legal_balls,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS wickets,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        ROUND(SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) * 6.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0)=0 AND COALESCE(d.noballs, 0)=0 THEN 1 END), 0), 2) AS economy
+    FROM squad_bowlers sb
+    LEFT JOIN deliveries d
+        ON d.bowler = sb.cricsheet_name
+    GROUP BY sb.bowler, sb.role, sb.bowling_style, sb.bowling_arm, sb.is_overseas
+)
+SELECT TOP 10
+    bowler,
+    role,
+    bowling_style,
+    bowling_arm,
+    is_overseas,
+    matches,
+    legal_balls,
+    wickets,
+    economy,
+    CASE
+        WHEN LOWER(COALESCE(role, '')) LIKE '%bowler%' THEN 'Frontline bowling option'
+        WHEN LOWER(COALESCE(role, '')) LIKE '%all%' THEN 'All-round bowling option'
+        ELSE 'Part-time or matchup option'
+    END AS planning_note
+FROM bowling_stats
+ORDER BY
+    CASE WHEN LOWER(COALESCE(role, '')) LIKE '%bowler%' THEN 0 ELSE 1 END,
+    wickets DESC,
+    legal_balls DESC,
+    bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+        return _tacui_pretty_columns(df if df is not None else pd.DataFrame())
+    except Exception as error:
+        return pd.DataFrame([{"Error": str(error)}])
+
+
+def _tacui_batting_matchups(team_info):
+    import pandas as pd
+    from app.db import run_query
+
+    if not team_info:
+        return pd.DataFrame()
+
+    team_code = team_info["team_code"]
+    team_aliases = team_info["team_aliases"]
+    opponent_code = team_info["opponent_code"]
+    opponent_aliases = team_info["opponent_aliases"]
+
+    sql = f"""
+WITH our_batters AS (
+    SELECT TOP 8
+        cs.display_name AS batter,
+        cs.cricsheet_name,
+        cs.role,
+        cs.batting_style
+    FROM current_squads cs
+    WHERE (
+            cs.team_code = '{_tacui_q(team_code)}'
+            OR cs.team_name IN {_tacui_sql_list(team_aliases)}
+          )
+      AND COALESCE(cs.is_active, 1) = 1
+      AND (
+            LOWER(COALESCE(cs.role, '')) LIKE '%batter%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%wk%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all-rounder%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all rounder%'
+          )
+    ORDER BY
+        CASE
+            WHEN LOWER(COALESCE(cs.role, '')) LIKE '%batter%' THEN 0
+            WHEN LOWER(COALESCE(cs.role, '')) LIKE '%wk%' THEN 1
+            ELSE 2
+        END,
+        cs.display_name
+),
+opp_bowlers AS (
+    SELECT TOP 8
+        cs.display_name AS bowler,
+        cs.cricsheet_name,
+        cs.role,
+        cs.bowling_style,
+        cs.bowling_arm
+    FROM current_squads cs
+    WHERE (
+            cs.team_code = '{_tacui_q(opponent_code)}'
+            OR cs.team_name IN {_tacui_sql_list(opponent_aliases)}
+          )
+      AND COALESCE(cs.is_active, 1) = 1
+      AND (
+            LOWER(COALESCE(cs.role, '')) LIKE '%bowler%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all-rounder%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all rounder%'
+          )
+    ORDER BY
+        CASE WHEN LOWER(COALESCE(cs.role, '')) LIKE '%bowler%' THEN 0 ELSE 1 END,
+        cs.display_name
+),
+direct_matchups AS (
+    SELECT
+        ob.batter,
+        ob.role AS batter_role,
+        ob.batting_style,
+        ow.bowler,
+        ow.role AS bowler_role,
+        ow.bowling_style,
+        ow.bowling_arm,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals
+    FROM our_batters ob
+    CROSS JOIN opp_bowlers ow
+    LEFT JOIN deliveries d
+        ON d.striker = ob.cricsheet_name
+       AND d.bowler = ow.cricsheet_name
+    GROUP BY
+        ob.batter,
+        ob.role,
+        ob.batting_style,
+        ow.bowler,
+        ow.role,
+        ow.bowling_style,
+        ow.bowling_arm
+)
+SELECT TOP 12
+    batter,
+    batter_role,
+    batting_style,
+    bowler,
+    bowler_role,
+    bowling_style,
+    bowling_arm,
+    balls,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+    CASE
+        WHEN balls >= 12 AND dismissals > 0 THEN 'Direct history: caution matchup'
+        WHEN balls >= 12 AND dismissals = 0 THEN 'Direct history: scoring opportunity'
+        WHEN bowling_style IS NOT NULL THEN 'Limited direct history: use style matchup'
+        ELSE 'Limited direct history'
+    END AS matchup_plan
+FROM direct_matchups
+ORDER BY
+    CASE WHEN balls >= 12 THEN 0 ELSE 1 END,
+    dismissals DESC,
+    balls DESC,
+    runs DESC,
+    batter ASC,
+    bowler ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+        return _tacui_pretty_columns(df if df is not None else pd.DataFrame())
+    except Exception as error:
+        return pd.DataFrame([{"Error": str(error)}])
+
+
+def _tacui_rebuild_extra_tables(result, question):
+    if not isinstance(result, dict):
+        return result
+
+    extra = result.get("extra_tables")
+
+    if not isinstance(extra, dict):
+        return result
+
+    team_info = _tacui_parse_match_plan_teams(question) if _tacui_is_match_plan_question(question) else None
+    batting_matchups = _tacui_batting_matchups(team_info) if team_info else None
+    opponent_bowlers = _tacui_opponent_key_bowlers(team_info) if team_info else None
+
+    new_extra = {}
+
+    for raw_name, raw_table in extra.items():
+        pretty_name = _tacui_pretty_name(raw_name)
+        pretty_table = _tacui_pretty_columns(raw_table)
+
+        if team_info and pretty_name == "Key Matchups":
+            new_extra["Key Matchups While Bowling"] = pretty_table
+
+            if batting_matchups is not None and hasattr(batting_matchups, "empty") and not batting_matchups.empty:
+                new_extra["Key Matchups While Batting"] = batting_matchups
+
+            continue
+
+        new_extra[pretty_name] = pretty_table
+
+        if team_info and pretty_name == "Opponent Key Batters":
+            if opponent_bowlers is not None and hasattr(opponent_bowlers, "empty") and not opponent_bowlers.empty:
+                new_extra["Opponent Key Bowlers"] = opponent_bowlers
+
+    # If the original output did not include Key Matchups/Opponent Key Batters,
+    # still attach the new tactical tables at the end for match plans.
+    if team_info:
+        if "Key Matchups While Batting" not in new_extra and batting_matchups is not None and hasattr(batting_matchups, "empty") and not batting_matchups.empty:
+            new_extra["Key Matchups While Batting"] = batting_matchups
+
+        if "Opponent Key Bowlers" not in new_extra and opponent_bowlers is not None and hasattr(opponent_bowlers, "empty") and not opponent_bowlers.empty:
+            new_extra["Opponent Key Bowlers"] = opponent_bowlers
+
+    result["extra_tables"] = new_extra
+    result["result"] = _tacui_pretty_columns(result.get("result"))
+
+    return result
+
+
+try:
+    _previous_answer_question_with_fallback_before_tacui = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_tacui = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_tacui(user_question)
+    return _tacui_rebuild_extra_tables(result, user_question)
+
+# IPL SQL Agent tactical tab cleanup and match-plan extensions END
 

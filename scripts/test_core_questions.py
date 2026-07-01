@@ -12,6 +12,16 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "how can CSK beat PBKS",
+        "expected_columns": ["Batter"],
+    },
+    {
+        "question": "how should Bumrah bowl to Kohli",
+        "expected_columns": ["Bowler"],
+    },
+
+
+    {
         "question": "which MI player hit the most sixes in 2026",
         "expected_columns": ["batter", "team", "sixes"],
     },
