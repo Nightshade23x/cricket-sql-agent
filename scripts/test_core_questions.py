@@ -12,6 +12,24 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "who is the best batsman against Bumrah",
+        "expected_columns": ["batter", "batting_team", "runs", "dismissals", "strike_rate"],
+    },
+    {
+        "question": "best batter against Rashid Khan",
+        "expected_columns": ["batter", "batting_team", "runs", "dismissals", "strike_rate"],
+    },
+    {
+        "question": "who has dismissed Gill the most",
+        "expected_columns": ["bowler", "bowling_team", "dismissals"],
+    },
+    {
+        "question": "who has dismissed Kohli the most",
+        "expected_columns": ["bowler", "bowling_team", "dismissals"],
+    },
+
+
+    {
         "question": "how can CSK beat PBKS",
         "expected_columns": ["Batter"],
     },
