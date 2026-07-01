@@ -12,6 +12,24 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "which MI player hit the most sixes in 2026",
+        "expected_columns": ["batter", "team", "sixes"],
+    },
+    {
+        "question": "most sixes for MI in 2026 at Wankhede",
+        "expected_columns": ["batter", "team", "sixes"],
+    },
+    {
+        "question": "most fours for MI in 2026 at Wankhede",
+        "expected_columns": ["batter", "team", "fours"],
+    },
+    {
+        "question": "most sixes for RCB in 2026 against CSK",
+        "expected_columns": ["batter", "team", "sixes"],
+    },
+
+
+    {
         "question": "which KKR player has hit the most sixes",
         "expected_columns": ["batter", "team", "sixes"],
     },

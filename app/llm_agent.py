@@ -28566,3 +28566,472 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent team-player boundary phrasing fix END
 
+
+# IPL SQL Agent squad auction needs table START
+
+def _squadneeds_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+    teams = {
+        "csk": "CSK", "chennai": "CSK", "chennai super kings": "CSK",
+        "mi": "MI", "mumbai": "MI", "mumbai indians": "MI",
+        "rcb": "RCB", "bangalore": "RCB", "bengaluru": "RCB",
+        "royal challengers bangalore": "RCB", "royal challengers bengaluru": "RCB",
+        "kkr": "KKR", "kolkata": "KKR", "kolkata knight riders": "KKR",
+        "rr": "RR", "rajasthan": "RR", "rajasthan royals": "RR",
+        "srh": "SRH", "sunrisers": "SRH", "sunrisers hyderabad": "SRH",
+        "gt": "GT", "gujarat": "GT", "gujarat titans": "GT",
+        "pbks": "PBKS", "kxip": "PBKS", "punjab": "PBKS", "punjab kings": "PBKS", "kings xi punjab": "PBKS",
+        "lsg": "LSG", "lucknow": "LSG", "lucknow super giants": "LSG",
+        "delhi capitals": "Delhi Capitals", "delhi daredevils": "Delhi Capitals",
+    }
+    if text == "dc":
+        return "AMBIGUOUS_DC", None
+    return teams.get(text), teams.get(text)
+
+
+def _squadneeds_parse_team(question):
+    import re
+    text = str(question or "").strip()
+    patterns = [
+        r"\b(?:analyse|analyze|review|evaluate)\s+([A-Za-z0-9 .]+?)\s+squad\b",
+        r"\b([A-Za-z0-9 .]+?)\s+squad\s+(?:analysis|review|profile)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return _squadneeds_team_lookup(match.group(1).strip(" .?"))
+    return None, None
+
+
+def _squadneeds_recommendations(team_code):
+    # Role-profile recommendations, not named-player predictions.
+    base = {
+        "CSK": [
+            ("1", "Indian middle-order batter who plays spin well", "Adds a stable No. 4/5 option on slower pitches.", "Indian", "Middle overs", "Prioritise strike rotation and spin-hitting."),
+            ("2", "Powerplay wicket-taking fast bowler", "Early wickets let CSK control the middle overs with spin.", "Indian or overseas", "Powerplay", "New-ball swing/seam preferred."),
+            ("3", "Death-overs pace backup", "Protects the XI if the main death bowler is unavailable.", "Indian", "Death overs", "Yorker and slower-ball execution."),
+            ("4", "Attacking wrist-spinner", "Adds a wicket-taking option when finger spin is being milked.", "Indian", "Middle overs", "Useful against right-heavy lineups."),
+            ("5", "Young Indian finishing all-rounder", "Improves long-term balance and impact-player flexibility.", "Indian", "Overs 16-20", "Should offer batting power or two seam overs."),
+        ],
+        "RCB": [
+            ("1", "Indian spin-hitting middle-order batter", "Reduces dependence on the top order.", "Indian", "Middle overs", "Must handle spin and high pace."),
+            ("2", "High-control death bowler", "Small-ground games need better end-overs control.", "Indian or overseas", "Death overs", "Yorkers and slower balls."),
+            ("3", "Left-arm pace option", "Adds angle variety against right-hand heavy top orders.", "Indian", "Powerplay", "Can share new-ball overs."),
+            ("4", "Defensive finger spinner", "Gives control when games become high-scoring.", "Indian", "Middle overs", "Low boundary percentage is key."),
+            ("5", "Indian wicketkeeper-batter backup", "Improves XI flexibility if the first-choice keeper is unavailable.", "Indian", "Batting depth", "Top-six batting ability preferred."),
+        ],
+        "MI": [
+            ("1", "Reliable Indian middle-order anchor", "Balances a power-heavy batting core.", "Indian", "Middle overs", "Strong spin game required."),
+            ("2", "Left-arm powerplay seamer", "Adds angle variety and early wicket threat.", "Indian or overseas", "Powerplay", "New-ball movement preferred."),
+            ("3", "Backup death bowler", "Keeps the bowling plan stable if the lead pacer is unavailable.", "Indian", "Death overs", "Yorkers and wide-line accuracy."),
+            ("4", "Wrist-spin wicket-taker", "Adds middle-over breakthroughs on slower pitches.", "Indian", "Middle overs", "Should attack both hands."),
+            ("5", "Lower-order batting all-rounder", "Extends batting depth without weakening bowling.", "Indian", "Overs 14-20", "Seam-bowling all-rounder preferred."),
+        ],
+        "KKR": [
+            ("1", "Indian top-order backup batter", "Protects the high-tempo powerplay plan.", "Indian", "Powerplay", "Should handle pace and hit square."),
+            ("2", "Middle-order batter strong against spin", "Keeps middle overs stable before the finishers.", "Indian", "Middle overs", "Rotation plus spin-hitting."),
+            ("3", "Death-overs specialist seamer", "Adds insurance beyond the main pace options.", "Indian or overseas", "Death overs", "Slower-ball and yorker control."),
+            ("4", "Left-arm seam variation", "Creates matchup value with a different angle.", "Indian", "Powerplay/middle", "Useful against right-hand heavy teams."),
+            ("5", "Backup mystery/wrist spin option", "Keeps KKR's spin identity strong.", "Indian", "Middle overs", "Wicket-taking ceiling matters."),
+        ],
+    }
+    default = [
+        ("1", "Indian middle-order batter who plays spin well", "Improves batting stability and matchup flexibility.", "Indian", "Middle overs", "Low dot-ball rate preferred."),
+        ("2", "Powerplay wicket-taking fast bowler", "Creates early breakthroughs.", "Indian or overseas", "Powerplay", "New-ball movement preferred."),
+        ("3", "Death-overs specialist", "Improves end-overs control.", "Indian", "Death overs", "Yorkers and slower balls."),
+        ("4", "Spin-bowling all-rounder", "Improves balance on slow pitches.", "Indian", "Middle overs", "Batting depth is a bonus."),
+        ("5", "Backup wicketkeeper-batter", "Improves selection flexibility.", "Indian", "Batting depth", "Top-six batting ability preferred."),
+    ]
+    return base.get(team_code, default)
+
+
+def _squadneeds_build_table(team_code):
+    import pandas as pd
+    rows = []
+    for priority, player_type, reason, local_overseas, phase, notes in _squadneeds_recommendations(team_code):
+        rows.append({
+            "Priority": priority,
+            "Player Type Needed": player_type,
+            "Why Needed": reason,
+            "Indian/Overseas": local_overseas,
+            "Phase/Role": phase,
+            "Notes": notes,
+        })
+    return pd.DataFrame(rows)
+
+
+try:
+    _previous_answer_question_with_fallback_before_squadneeds = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_squadneeds = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _previous_answer_question_with_fallback_before_squadneeds(user_question)
+    team_code, team_display = _squadneeds_parse_team(user_question)
+
+    if team_code and team_code != "AMBIGUOUS_DC" and isinstance(result, dict):
+        needs_df = _squadneeds_build_table(team_code)
+        extra = result.get("extra_tables")
+        if not isinstance(extra, dict):
+            extra = {}
+        extra["Auction Role Needs"] = needs_df
+        result["extra_tables"] = extra
+
+        paragraph = result.get("analysis_paragraph") or result.get("paragraph") or ""
+        if "Auction Role Needs" not in str(paragraph):
+            result["analysis_paragraph"] = str(paragraph).rstrip() + f" I also added an Auction Role Needs tab with five player profiles {team_display} could target at the next auction."
+            result["paragraph"] = result["analysis_paragraph"]
+
+    return result
+
+# IPL SQL Agent squad auction needs table END
+
+
+# IPL SQL Agent filtered team boundary route START
+
+def _ftb_q(value):
+    return str(value).replace("'", "''")
+
+
+def _ftb_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _ftb_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _ftb_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", ["Chennai Super Kings"], ["csk", "chennai", "super kings", "chennai super kings"]),
+        ("MI", ["Mumbai Indians"], ["mi", "mumbai", "mumbai indians"]),
+        ("RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers", "royal challengers bangalore", "royal challengers bengaluru"]),
+        ("GT", ["Gujarat Titans"], ["gt", "gujarat", "gujarat titans"]),
+        ("KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata", "kolkata knight riders"]),
+        ("RR", ["Rajasthan Royals"], ["rr", "rajasthan", "rajasthan royals"]),
+        ("SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad", "sunrisers hyderabad"]),
+        ("Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+        ("PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi", "punjab kings", "kings xi punjab"]),
+        ("LSG", ["Lucknow Super Giants"], ["lsg", "lucknow", "lucknow super giants"]),
+        ("RPS", ["Rising Pune Supergiant", "Rising Pune Supergiants"], ["rps", "rising pune"]),
+        ("GL", ["Gujarat Lions"], ["gujarat lions"]),
+        ("KTK", ["Kochi Tuskers Kerala"], ["kochi"]),
+        ("PWI", ["Pune Warriors", "Pune Warriors India"], ["pune warriors"]),
+    ]
+
+    for display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return display, display, aliases
+
+    return None, None, []
+
+
+def _ftb_metric(question):
+    text = str(question or "").lower()
+
+    if "six" in text or "6" in text:
+        return "sixes"
+
+    if "four" in text or "4" in text or "boundary" in text or "boundaries" in text:
+        return "fours"
+
+    return None
+
+
+def _ftb_limit(question):
+    import re
+
+    match = re.search(r"\btop\s+(\d+)\b", str(question or ""), flags=re.IGNORECASE)
+
+    if match:
+        value = int(match.group(1))
+        if 1 <= value <= 50:
+            return value
+
+    return 10
+
+
+def _ftb_season_condition(alias, year):
+    year = int(year)
+
+    if year == 2020:
+        return f"(CAST({alias}.season AS varchar(20)) = '2020' OR CAST({alias}.season AS varchar(20)) = '2020/21')"
+
+    if year == 2021:
+        return f"(CAST({alias}.season AS varchar(20)) = '2021')"
+
+    slash_form = f"{year - 1}/{str(year)[-2:]}"
+    short_year = str(year)[-2:]
+
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{_ftb_q(slash_form)}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{_ftb_q(short_year)}')"
+    )
+
+
+def _ftb_venue_filter(raw):
+    low = str(raw or "").lower().strip(" .?")
+
+    if not low:
+        return None, None
+
+    if "new chandigarh" in low or "mullanpur" in low or "yadavindra" in low:
+        return "(m.venue LIKE '%Yadavindra%' OR m.venue LIKE '%Mullanpur%' OR m.venue LIKE '%New Chandigarh%')", "Mullanpur / New Chandigarh"
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "narendra" in low or "motera" in low or "ahmedabad" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+    if "uppal" in low or "rajiv gandhi" in low:
+        return "(m.venue LIKE '%Rajiv Gandhi%' OR m.venue LIKE '%Uppal%')", "Uppal"
+    if "arun jaitley" in low or "kotla" in low:
+        return "(m.venue LIKE '%Arun Jaitley%' OR m.venue LIKE '%Kotla%')", "Arun Jaitley Stadium"
+    if "dubai" in low:
+        return "(m.venue LIKE '%Dubai%' OR m.city LIKE '%Dubai%')", "Dubai"
+    if "sharjah" in low:
+        return "(m.venue LIKE '%Sharjah%' OR m.city LIKE '%Sharjah%')", "Sharjah"
+    if "abu dhabi" in low or "zayed" in low:
+        return "(m.venue LIKE '%Abu Dhabi%' OR m.venue LIKE '%Zayed%' OR m.city LIKE '%Abu Dhabi%')", "Abu Dhabi"
+    if "brabourne" in low:
+        return "m.venue LIKE '%Brabourne%'", "Brabourne"
+    if "mohali" in low or "bindra" in low:
+        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Bindra%' OR m.city LIKE '%Mohali%')", "Mohali"
+
+    return None, None
+
+
+def _ftb_parse(question):
+    import re
+
+    text = str(question or "").strip()
+    low = text.lower()
+    metric = _ftb_metric(question)
+
+    if metric not in {"sixes", "fours"}:
+        return None
+
+    # Team can appear as:
+    # "which MI player hit the most sixes..."
+    # "most sixes for MI..."
+    # "which player hit most sixes for MI..."
+    team_raw = None
+
+    match = re.search(
+        r"\b(?:which|what|who)\s+([A-Za-z0-9 .]+?)\s+(?:player|batter|batsman)\b.*?\b(?:most|highest|top)\b.*?\b(?:six|sixes|four|fours|boundaries)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        team_raw = match.group(1).strip(" .?")
+
+    if not team_raw:
+        match = re.search(
+            r"\b(?:for|from|by)\s+([A-Za-z0-9 .]+?)(?:\s+in\s+20\d{2}|\s+at\s+|\s+against\s+|\s+on\s+|\s*$)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            team_raw = match.group(1).strip(" .?")
+
+    if not team_raw:
+        return None
+
+    code, display, aliases = _ftb_team_lookup(team_raw)
+
+    if code == "AMBIGUOUS_DC":
+        return {"ambiguous": True}
+
+    if not aliases:
+        return None
+
+    filters = [
+        "d.innings IN (1, 2)",
+        f"d.batting_team IN {_ftb_sql_list(aliases)}",
+    ]
+    labels = [f"for {display}"]
+
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    if year_match:
+        year = int(year_match.group(1))
+        filters.append(_ftb_season_condition("d", year))
+        labels.append(f"in {year}")
+
+    # Venue: support "at Wankhede" and "in Wankhede"; do not confuse with "in 2026".
+    venue_match = re.search(
+        r"\b(?:at|inside|on)\s+([A-Za-z0-9 .'-]+?)(?:\s+against\s+|\s+for\s+|\s+in\s+20\d{2}|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not venue_match:
+        in_match = re.search(
+            r"\bin\s+([A-Za-z0-9 .'-]+?)(?:\s+against\s+|\s+for\s+|\s+in\s+20\d{2}|\s*$)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if in_match:
+            possible = in_match.group(1).strip(" .?")
+            if not re.fullmatch(r"20\d{2}", possible) and possible.lower() not in {"ipl", "the ipl", "history", "all seasons", "overall"}:
+                venue_match = in_match
+
+    if venue_match:
+        venue_sql, venue_label = _ftb_venue_filter(venue_match.group(1))
+        if venue_label:
+            filters.append(venue_sql)
+            labels.append(f"at {venue_label}")
+
+    against_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s+at\s+|\s+in\s+20\d{2}|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if against_match:
+        opp_code, opp_display, opp_aliases = _ftb_team_lookup(against_match.group(1).strip(" .?"))
+        if opp_code == "AMBIGUOUS_DC":
+            return {"ambiguous": True}
+        if opp_aliases:
+            filters.append(f"d.bowling_team IN {_ftb_sql_list(opp_aliases)}")
+            labels.append(f"against {opp_display}")
+
+    return {
+        "metric": metric,
+        "display": display,
+        "aliases": aliases,
+        "filters": filters,
+        "labels": labels,
+        "limit": _ftb_limit(question),
+    }
+
+
+def _ftb_ambiguity(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "issue": "DC is ambiguous",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "example": "which Delhi Capitals player hit the most sixes in 2026",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "which Delhi Capitals player hit the most sixes in 2026",
+            "most fours for Delhi Capitals at Arun Jaitley",
+            "most sixes for Deccan Chargers",
+            "most fours for Delhi Capitals against MI",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _ftb_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _ftb_parse(question)
+    if not parsed:
+        return None
+
+    if parsed.get("ambiguous"):
+        return _ftb_ambiguity(question)
+
+    metric = parsed["metric"]
+    value_col = "sixes" if metric == "sixes" else "fours"
+    where_sql = " AND ".join(parsed["filters"])
+    team_label = parsed["display"]
+    limit = int(parsed["limit"])
+
+    sql = f"""
+WITH batter_stats AS (
+    SELECT
+        d.striker AS batter,
+        '{_ftb_q(team_label)}' AS team,
+        COUNT(DISTINCT d.match_id) AS matches,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0)=0 THEN 1 END) AS balls,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0)=6 THEN 1 ELSE 0 END) AS sixes
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY d.striker
+)
+SELECT TOP {limit}
+    batter,
+    team,
+    matches,
+    runs,
+    balls,
+    fours,
+    sixes
+FROM batter_stats
+WHERE {value_col} > 0
+ORDER BY {value_col} DESC, runs DESC, batter ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The filtered team boundary route failed: {error}",
+            "paragraph": f"The filtered team boundary route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+        }
+
+    df = df if df is not None else pd.DataFrame()
+
+    title = f"Most {metric} " + " ".join(parsed["labels"])
+
+    return {
+        "question": question,
+        "analysis_paragraph": f"{title}.",
+        "paragraph": f"{title}.",
+        "result": df,
+        "extra_tables": {title: df} if not df.empty else {},
+        "sql_query": sql,
+        "similar_questions": [
+            "which MI player hit the most sixes in 2026",
+            "most sixes for MI in 2026 at Wankhede",
+            "most fours for MI in 2026 at Wankhede",
+            "most sixes for RCB in 2026 against CSK",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_ftb = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_ftb = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _ftb_route(user_question)
+    if result is not None:
+        return result
+    return _previous_answer_question_with_fallback_before_ftb(user_question)
+
+# IPL SQL Agent filtered team boundary route END
+
