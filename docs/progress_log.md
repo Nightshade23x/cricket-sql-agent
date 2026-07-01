@@ -208,3 +208,9 @@ fixed season error of 2007/08 where it doesnt recognise 2008...also fixed other 
 fixed fifties for team bug
 added venue profile for mullanpur
 added support for sixes per venue
+
+day 18
+added auction plans
+added key matchups for batters
+cleaned up column names
+cleaned sixes for team bug
