@@ -214,3 +214,5 @@ added auction plans
 added key matchups for batters
 cleaned up column names
 cleaned sixes for team bug
+added matchup ques for batsmans
+fixed column bugs where certain tables didnt appear

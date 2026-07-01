@@ -276,7 +276,80 @@ def render_details(df):
             st.markdown(_ipl_frontend_clean_text(row.get(detail_col)))
 
 
+
+# IPL SQL Agent Streamlit dataframe duplicate-column guard START
+
+def _streamlit_safe_dedupe_columns(df):
+    """Return a display-safe dataframe with unique column names for Streamlit/PyArrow."""
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        df = df.copy()
+        seen = {}
+        new_cols = []
+
+        for col in list(df.columns):
+            base = str(col)
+
+            # Streamlit/PyArrow fails if final displayed column names collide.
+            # Keep the first name unchanged, then suffix later duplicates.
+            if base not in seen:
+                seen[base] = 1
+                new_cols.append(base)
+            else:
+                seen[base] += 1
+                new_cols.append(f"{base} ({seen[base]})")
+
+        df.columns = new_cols
+        return df
+
+    except Exception:
+        return df
+
+# IPL SQL Agent Streamlit dataframe duplicate-column guard END
+
+
+
+# IPL SQL Agent safe Streamlit dataframe wrapper START
+
+def _dedupe_dataframe_columns_for_streamlit(df):
+    """Make dataframe columns unique immediately before Streamlit renders them."""
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        df = df.copy()
+        seen = {}
+        new_columns = []
+
+        for col in list(df.columns):
+            base = str(col)
+
+            if base not in seen:
+                seen[base] = 1
+                new_columns.append(base)
+            else:
+                seen[base] += 1
+                new_columns.append(f"{base} ({seen[base]})")
+
+        df.columns = new_columns
+        return df
+
+    except Exception:
+        return df
+
+
+def _safe_st_dataframe(data=None, *args, **kwargs):
+    """Wrapper around st.dataframe that prevents PyArrow duplicate-column crashes."""
+    data = _dedupe_dataframe_columns_for_streamlit(data)
+    return st.dataframe(data, *args, **kwargs)
+
+# IPL SQL Agent safe Streamlit dataframe wrapper END
+
+
 def render_dataframe(df, name=None):
+    df = _streamlit_safe_dedupe_columns(df)
     display_df = clean_dataframe(df)
 
     if display_df is None:
@@ -287,9 +360,9 @@ def render_dataframe(df, name=None):
             st.info("No rows returned for this section.")
             return
 
-        st.dataframe(
+        _safe_st_dataframe(
             display_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "#": st.column_config.NumberColumn(
@@ -499,7 +572,7 @@ def render_answer(result):
                     key=f"similar_{index}_{question}",
                     on_click=select_question,
                     args=(question,),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 
@@ -515,7 +588,7 @@ def render_sidebar_examples():
                     key=f"sidebar_example_{group_name}_{question}",
                     on_click=select_question,
                     args=(question,),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 
@@ -547,14 +620,14 @@ def render_top_question_box():
     with col_submit:
         ask_clicked = st.button(
             "Ask",
-            use_container_width=True,
+            width="stretch",
             type="primary",
         )
 
     with col_clear:
         st.button(
             "Clear",
-            use_container_width=True,
+            width="stretch",
             on_click=_ipl_clear_question_box,
         )
 
@@ -707,7 +780,7 @@ def render_answer(result):
                 key=f"similar_question_{index}_{question}",
                 on_click=select_question,
                 args=(question,),
-                use_container_width=True,
+                width="stretch",
             )
 
 # IPL SQL Agent route badge UI override END
