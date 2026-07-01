@@ -30633,3 +30633,268 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent universal lowercase schema aliases END
 
+
+# IPL SQL Agent exact score dismissal route START
+
+def _exactscore_parse_question(question):
+    import re
+
+    text = str(question or "").strip()
+
+    patterns = [
+        r"\b(?:most\s+)?times\s+out\s+on\s+(\d{1,3})\b",
+        r"\bwho\s+(?:has\s+)?(?:been\s+)?out\s+on\s+(\d{1,3})\s+(?:the\s+)?most\b",
+        r"\bplayers?\s+out\s+on\s+(\d{1,3})\b",
+        r"\b(?:dismissed|got\s+out)\s+on\s+(\d{1,3})\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+
+        if match:
+            score = int(match.group(1))
+
+            if 0 <= score <= 300:
+                return score
+
+    return None
+
+
+def _exactscore_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Gujarat Titans": "GT",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Kochi Tuskers Kerala": "KTK",
+    }
+
+    return mapping.get(str(value), value)
+
+
+def _exactscore_clean(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        df = df.copy()
+
+        for col in ["team", "opponent", "batting_team", "bowling_team"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_exactscore_short_team)
+
+        return df
+
+    except Exception:
+        return df
+
+
+def _exactscore_out_on_score_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    score = _exactscore_parse_question(question)
+
+    if score is None:
+        return None
+
+    sql = f"""
+WITH innings_scores AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS player,
+        MAX(d.batting_team) AS team,
+        MAX(d.bowling_team) AS opponent,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls_faced,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 6 THEN 1 ELSE 0 END) AS sixes
+    FROM deliveries d
+    WHERE d.innings IN (1, 2)
+    GROUP BY
+        d.match_id,
+        d.innings,
+        d.striker
+),
+dismissals AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.player_dismissed AS player,
+        MAX(d.wicket_type) AS dismissal_type,
+        MAX(d.bowler) AS bowler
+    FROM deliveries d
+    WHERE d.player_dismissed IS NOT NULL
+      AND d.player_dismissed = d.striker
+      AND d.wicket_type IS NOT NULL
+      AND d.wicket_type NOT IN ('retired hurt', 'retired not out', 'retired out')
+    GROUP BY
+        d.match_id,
+        d.innings,
+        d.player_dismissed
+),
+out_on_score AS (
+    SELECT
+        i.player,
+        {score} AS score,
+        i.match_id,
+        i.innings,
+        m.season,
+        m.start_date,
+        i.team,
+        i.opponent,
+        m.venue,
+        i.innings_runs,
+        i.balls_faced,
+        ROUND(i.innings_runs * 100.0 / NULLIF(i.balls_faced, 0), 2) AS strike_rate,
+        i.fours,
+        i.sixes,
+        d.dismissal_type,
+        d.bowler
+    FROM innings_scores i
+    JOIN dismissals d
+        ON i.match_id = d.match_id
+       AND i.innings = d.innings
+       AND i.player = d.player
+    JOIN matches m
+        ON i.match_id = m.match_id
+    WHERE i.innings_runs = {score}
+),
+summary AS (
+    SELECT
+        player,
+        COUNT(*) AS times_out_on_score
+    FROM out_on_score
+    GROUP BY player
+)
+SELECT
+    o.player,
+    o.score,
+    s.times_out_on_score,
+    o.match_id,
+    o.season,
+    o.start_date,
+    o.team,
+    o.opponent,
+    o.venue,
+    o.innings,
+    o.innings_runs,
+    o.balls_faced,
+    o.strike_rate,
+    o.fours,
+    o.sixes,
+    o.dismissal_type,
+    o.bowler
+FROM out_on_score o
+JOIN summary s
+    ON o.player = s.player
+ORDER BY
+    s.times_out_on_score DESC,
+    o.start_date DESC,
+    o.player ASC,
+    o.match_id ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The exact-score dismissal route failed: {error}",
+            "paragraph": f"The exact-score dismissal route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    df = _exactscore_clean(df if df is not None else pd.DataFrame())
+
+    if df.empty:
+        message_df = pd.DataFrame([{
+            "player": "",
+            "score": score,
+            "times_out_on_score": 0,
+            "match_id": "",
+            "opponent": "",
+            "message": f"No batter in the database was dismissed on {score}.",
+        }])
+
+        return {
+            "question": question,
+            "analysis_paragraph": f"No batter in the database was dismissed on {score}.",
+            "paragraph": f"No batter in the database was dismissed on {score}.",
+            "result": message_df,
+            "extra_tables": {f"Players out on {score}": message_df},
+            "sql_query": sql,
+            "similar_questions": [
+                "most times out on 99",
+                "players out on 49",
+                "who has been out on 0 the most",
+                "most times out on 100",
+            ],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    return {
+        "question": question,
+        "analysis_paragraph": (
+            f"These are the IPL innings where a batter was dismissed on exactly {score}. "
+            f"The table includes the player, match, opponent, venue and dismissal details."
+        ),
+        "paragraph": (
+            f"These are the IPL innings where a batter was dismissed on exactly {score}. "
+            f"The table includes the player, match, opponent, venue and dismissal details."
+        ),
+        "result": df,
+        "extra_tables": {f"Players out on {score}": df},
+        "sql_query": sql,
+        "similar_questions": [
+            "most times out on 99",
+            "players out on 49",
+            "who has been out on 0 the most",
+            "most times out on 100",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_exactscore = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_exactscore = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _exactscore_out_on_score_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_exactscore(user_question)
+
+# IPL SQL Agent exact score dismissal route END
+

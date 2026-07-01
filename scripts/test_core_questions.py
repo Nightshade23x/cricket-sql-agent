@@ -12,6 +12,16 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "most times out on 99",
+        "expected_columns": ["player", "score", "times_out_on_score", "match_id", "opponent"],
+    },
+    {
+        "question": "players out on 49",
+        "expected_columns": ["player", "score", "times_out_on_score", "match_id", "opponent"],
+    },
+
+
+    {
         "question": "who is the best batsman against Bumrah",
         "expected_columns": ["batter", "batting_team", "runs", "dismissals", "strike_rate"],
     },

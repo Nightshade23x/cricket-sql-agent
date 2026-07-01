@@ -276,64 +276,129 @@ def render_details(df):
             st.markdown(_ipl_frontend_clean_text(row.get(detail_col)))
 
 
+# IPL SQL Agent clean Streamlit dataframe display START
 
-# IPL SQL Agent Streamlit dataframe duplicate-column guard START
-
-def _streamlit_safe_dedupe_columns(df):
-    """Return a display-safe dataframe with unique column names for Streamlit/PyArrow."""
+def _clean_dataframe_for_streamlit_display(df):
+    """Remove schema-compatibility duplicate columns before UI rendering."""
     if df is None or not hasattr(df, "columns"):
         return df
 
     try:
+        import re
+        import pandas as pd
+
         df = df.copy()
-        seen = {}
-        new_cols = []
+
+        def base_name(col):
+            name = str(col).strip()
+            name = re.sub(r"\s*\(\d+\)$", "", name)
+            name = name.replace("_", " ")
+            name = re.sub(r"\s+", " ", name)
+            return name
+
+        def norm(col):
+            name = base_name(col).lower()
+            return re.sub(r"[^a-z0-9]+", "", name)
+
+        def is_blank_or_zero(series):
+            try:
+                as_text = series.fillna("").astype(str).str.strip()
+                if bool((as_text == "").all()):
+                    return True
+
+                nums = pd.to_numeric(series, errors="coerce")
+                if nums.notna().any() and bool(nums.fillna(0).eq(0).all()):
+                    return True
+            except Exception:
+                return False
+
+            return False
+
+        # 1) Drop exact duplicate column names, keeping the first useful occurrence.
+        kept_positions = []
+        seen_exact = set()
+
+        for idx, col in enumerate(list(df.columns)):
+            key = str(col)
+            if key not in seen_exact:
+                kept_positions.append(idx)
+                seen_exact.add(key)
+
+        df = df.iloc[:, kept_positions]
+
+        # 2) Drop semantic duplicates: Batter/batter, Runs/Runs (2), strike_rate/Strike Rate.
+        keep_cols = []
+        seen_norm = {}
 
         for col in list(df.columns):
-            base = str(col)
+            key = norm(col)
 
-            # Streamlit/PyArrow fails if final displayed column names collide.
-            # Keep the first name unchanged, then suffix later duplicates.
-            if base not in seen:
-                seen[base] = 1
-                new_cols.append(base)
-            else:
-                seen[base] += 1
-                new_cols.append(f"{base} ({seen[base]})")
+            if key not in seen_norm:
+                seen_norm[key] = col
+                keep_cols.append(col)
+                continue
 
-        df.columns = new_cols
-        return df
+            existing = seen_norm[key]
 
-    except Exception:
-        return df
+            if is_blank_or_zero(df[existing]) and not is_blank_or_zero(df[col]):
+                keep_cols = [c for c in keep_cols if c != existing]
+                keep_cols.append(col)
+                seen_norm[key] = col
 
-# IPL SQL Agent Streamlit dataframe duplicate-column guard END
+        df = df.loc[:, keep_cols]
 
+        # 3) Remove schema/test filler columns only when they are blank/zero.
+        filler_norms = {
+            "batter",
+            "bowler",
+            "team",
+            "battingteam",
+            "bowlingteam",
+            "matches",
+            "innings",
+            "wickets",
+            "legalballs",
+            "runsconceded",
+            "oversbowled",
+            "dotballs",
+            "fours",
+            "sixes",
+            "battersr",
+            "bowlingstrikerate",
+            "resolvedplayer",
+            "teamcode",
+            "keyplayerscore",
+            "suggestedrole",
+            "xino",
+            "targetprofile",
+            "playoffseasons",
+            "yearswon",
+            "venueprofile",
+            "avgfirstinningsscore",
+        }
 
-
-# IPL SQL Agent safe Streamlit dataframe wrapper START
-
-def _dedupe_dataframe_columns_for_streamlit(df):
-    """Make dataframe columns unique immediately before Streamlit renders them."""
-    if df is None or not hasattr(df, "columns"):
-        return df
-
-    try:
-        df = df.copy()
-        seen = {}
-        new_columns = []
+        drop_cols = []
 
         for col in list(df.columns):
-            base = str(col)
+            if norm(col) in filler_norms and is_blank_or_zero(df[col]):
+                if len(df.columns) - len(drop_cols) > 3:
+                    drop_cols.append(col)
 
-            if base not in seen:
-                seen[base] = 1
-                new_columns.append(base)
-            else:
-                seen[base] += 1
-                new_columns.append(f"{base} ({seen[base]})")
+        if drop_cols:
+            df = df.drop(columns=drop_cols)
 
-        df.columns = new_columns
+        # 4) Final exact duplicate pass.
+        final_cols = []
+        final_seen = set()
+
+        for col in list(df.columns):
+            key = str(col)
+            if key not in final_seen:
+                final_cols.append(col)
+                final_seen.add(key)
+
+        df = df.loc[:, final_cols]
+
         return df
 
     except Exception:
@@ -341,15 +406,13 @@ def _dedupe_dataframe_columns_for_streamlit(df):
 
 
 def _safe_st_dataframe(data=None, *args, **kwargs):
-    """Wrapper around st.dataframe that prevents PyArrow duplicate-column crashes."""
-    data = _dedupe_dataframe_columns_for_streamlit(data)
+    data = _clean_dataframe_for_streamlit_display(data)
     return st.dataframe(data, *args, **kwargs)
 
-# IPL SQL Agent safe Streamlit dataframe wrapper END
+# IPL SQL Agent clean Streamlit dataframe display END
 
 
 def render_dataframe(df, name=None):
-    df = _streamlit_safe_dedupe_columns(df)
     display_df = clean_dataframe(df)
 
     if display_df is None:
