@@ -12,6 +12,24 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "list all the 100s in 2021 season",
+        "expected_columns": ["batter", "team", "opponent", "innings_runs", "match_id"],
+    },
+    {
+        "question": "list all centuries in 2024 season",
+        "expected_columns": ["batter", "team", "opponent", "innings_runs", "match_id"],
+    },
+    {
+        "question": "list all 5 wicket hauls in 2021 season",
+        "expected_columns": ["bowler", "team", "opponent", "wickets", "match_id"],
+    },
+    {
+        "question": "list all 4 wicket hauls in 2021 season",
+        "expected_columns": ["bowler", "team", "opponent", "wickets", "match_id"],
+    },
+
+
+    {
         "question": "most times out on 99",
         "expected_columns": ["player", "score", "times_out_on_score", "match_id", "opponent"],
     },

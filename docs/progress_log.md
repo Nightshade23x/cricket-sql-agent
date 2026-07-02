@@ -216,3 +216,10 @@ cleaned up column names
 cleaned sixes for team bug
 added matchup ques for batsmans
 fixed column bugs where certain tables didnt appear
+added times out on a score such as times out on 99
+fixed duplicate columns issue
+
+day 19
+added support for listing of hundreds in season
+same for 5 wicket hauls
+same fof 4 wicket hauls

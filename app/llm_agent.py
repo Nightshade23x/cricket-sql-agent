@@ -30898,3 +30898,214 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent exact score dismissal route END
 
+
+# IPL SQL Agent season milestones route START
+
+def _sm_q(x):
+    return str(x).replace("'", "''")
+
+
+def _sm_short_team(x):
+    mapping = {
+        "Chennai Super Kings": "CSK", "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB", "Royal Challengers Bengaluru": "RCB",
+        "Kolkata Knight Riders": "KKR", "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH", "Gujarat Titans": "GT",
+        "Kings XI Punjab": "PBKS", "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG", "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals", "Deccan Chargers": "Deccan Chargers",
+        "Rising Pune Supergiant": "RPS", "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL", "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI", "Kochi Tuskers Kerala": "KTK",
+    }
+    return mapping.get(str(x), x)
+
+
+def _sm_clean(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+    try:
+        df = df.copy()
+        for c in ["team", "opponent", "batting_team", "bowling_team"]:
+            if c in df.columns:
+                df[c] = df[c].apply(_sm_short_team)
+        return df
+    except Exception:
+        return df
+
+
+def _sm_season_filter(alias, year):
+    year = int(year)
+    if year == 2020:
+        return f"(CAST({alias}.season AS varchar(20)) = '2020' OR CAST({alias}.season AS varchar(20)) = '2020/21')"
+    if year == 2021:
+        return f"(CAST({alias}.season AS varchar(20)) = '2021')"
+    slash = f"{year - 1}/{str(year)[-2:]}"
+    short = str(year)[-2:]
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{_sm_q(slash)}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{_sm_q(short)}')"
+    )
+
+
+def _sm_parse(q):
+    import re
+    text = str(q or "").strip()
+    low = text.lower()
+    ym = re.search(r"\b(20\d{2}|2008|2009|2010|2011|2012|2013|2014|2015|2016|2017|2018|2019)\b", text)
+    if not ym:
+        return None
+    year = int(ym.group(1))
+    if re.search(r"\b(100s|100|hundreds|hundred|centuries|century)\b", low) and re.search(r"\b(list|show|all|give|find)\b", low):
+        return ("centuries", year, None)
+    hm = re.search(r"\b([45])\s*[- ]?wicket\s+hauls?\b", low)
+    if hm and re.search(r"\b(list|show|all|give|find)\b", low):
+        return ("haul", year, int(hm.group(1)))
+    return None
+
+
+def _sm_centuries(q, year):
+    import pandas as pd
+    from app.db import run_query
+    sf = _sm_season_filter("m", year)
+    sql = f"""
+WITH inn AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.striker AS batter,
+        MAX(d.batting_team) AS team,
+        MAX(d.bowling_team) AS opponent,
+        SUM(COALESCE(d.runs_off_bat,0)) AS innings_runs,
+        COUNT(CASE WHEN COALESCE(d.wides,0)=0 THEN 1 END) AS balls_faced,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat,0)=4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat,0)=6 THEN 1 ELSE 0 END) AS sixes,
+        MAX(CASE WHEN d.player_dismissed = d.striker
+                  AND d.wicket_type IS NOT NULL
+                  AND d.wicket_type NOT IN ('retired hurt','retired not out','retired out')
+                 THEN d.wicket_type END) AS dismissal_type
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    WHERE d.innings IN (1,2) AND {sf}
+    GROUP BY d.match_id, d.innings, d.striker
+)
+SELECT
+    i.batter,
+    i.team,
+    i.opponent,
+    i.innings_runs,
+    i.balls_faced,
+    ROUND(i.innings_runs * 100.0 / NULLIF(i.balls_faced,0), 2) AS strike_rate,
+    i.fours,
+    i.sixes,
+    CASE WHEN i.dismissal_type IS NULL THEN 'not out' ELSE i.dismissal_type END AS dismissal_type,
+    i.match_id,
+    m.season,
+    m.start_date,
+    m.venue,
+    i.innings
+FROM inn i
+JOIN matches m ON i.match_id = m.match_id
+WHERE i.innings_runs >= 100
+ORDER BY i.innings_runs DESC, i.balls_faced ASC, m.start_date ASC, i.batter ASC;
+""".strip()
+    try:
+        df = run_query(sql)
+    except Exception as e:
+        return {"question": q, "analysis_paragraph": f"Season centuries route failed: {e}", "paragraph": f"Season centuries route failed: {e}", "result": pd.DataFrame(), "extra_tables": {}, "sql_query": sql, "similar_questions": []}
+    df = _sm_clean(df if df is not None else pd.DataFrame())
+    title = f"Centuries in IPL {year}"
+    if df.empty:
+        df = pd.DataFrame([{"batter": "", "team": "", "opponent": "", "innings_runs": 0, "match_id": "", "season": year, "message": f"No centuries found in IPL {year}."}])
+        para = f"No centuries found in IPL {year}."
+    else:
+        para = f"These are all individual 100+ scores in IPL {year}."
+    return {"question": q, "analysis_paragraph": para, "paragraph": para, "result": df, "extra_tables": {title: df}, "sql_query": sql, "similar_questions": ["list all the 100s in 2021 season", "list all 5 wicket hauls in 2021 season", "list all 4 wicket hauls in 2021 season"], "route_used": "", "data_sources": ""}
+
+
+def _sm_haul(q, year, haul):
+    import pandas as pd
+    from app.db import run_query
+    sf = _sm_season_filter("m", year)
+    cmp = ">=" if int(haul) == 5 else "="
+    sql = f"""
+WITH bi AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        d.bowler,
+        MAX(d.bowling_team) AS team,
+        MAX(d.batting_team) AS opponent,
+        COUNT(CASE WHEN d.wicket_type IS NOT NULL
+                    AND d.wicket_type NOT IN ('run out','retired hurt','retired out','retired not out','obstructing the field')
+                   THEN 1 END) AS wickets,
+        COUNT(CASE WHEN COALESCE(d.wides,0)=0 AND COALESCE(d.noballs,0)=0 THEN 1 END) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat,0)+COALESCE(d.extras,0)) AS runs_conceded,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat,0)=0 AND COALESCE(d.extras,0)=0 THEN 1 ELSE 0 END) AS dot_balls
+    FROM deliveries d
+    JOIN matches m ON d.match_id = m.match_id
+    WHERE d.innings IN (1,2) AND {sf}
+    GROUP BY d.match_id, d.innings, d.bowler
+)
+SELECT
+    b.bowler,
+    b.team,
+    b.opponent,
+    b.wickets,
+    b.runs_conceded,
+    b.legal_balls,
+    CONCAT(FLOOR(b.legal_balls / 6), '.', b.legal_balls % 6) AS overs_bowled,
+    ROUND(b.runs_conceded * 6.0 / NULLIF(b.legal_balls,0), 2) AS economy,
+    b.dot_balls,
+    b.match_id,
+    m.season,
+    m.start_date,
+    m.venue,
+    b.innings
+FROM bi b
+JOIN matches m ON b.match_id = m.match_id
+WHERE b.wickets {cmp} {int(haul)}
+ORDER BY b.wickets DESC, b.runs_conceded ASC, m.start_date ASC, b.bowler ASC;
+""".strip()
+    try:
+        df = run_query(sql)
+    except Exception as e:
+        return {"question": q, "analysis_paragraph": f"Season wicket-haul route failed: {e}", "paragraph": f"Season wicket-haul route failed: {e}", "result": pd.DataFrame(), "extra_tables": {}, "sql_query": sql, "similar_questions": []}
+    df = _sm_clean(df if df is not None else pd.DataFrame())
+    title = f"{haul}-wicket hauls in IPL {year}"
+    if df.empty:
+        df = pd.DataFrame([{"bowler": "", "team": "", "opponent": "", "wickets": 0, "match_id": "", "season": year, "message": f"No {haul}-wicket hauls found in IPL {year}."}])
+        para = f"No {haul}-wicket hauls found in IPL {year}."
+    else:
+        extra = "5 or more wickets" if int(haul) == 5 else "exactly 4 wickets"
+        para = f"These are all {haul}-wicket hauls in IPL {year} ({extra})."
+    return {"question": q, "analysis_paragraph": para, "paragraph": para, "result": df, "extra_tables": {title: df}, "sql_query": sql, "similar_questions": ["list all 5 wicket hauls in 2021 season", "list all 4 wicket hauls in 2021 season", "list all the 100s in 2021 season"], "route_used": "", "data_sources": ""}
+
+
+def _sm_route(q):
+    parsed = _sm_parse(q)
+    if not parsed:
+        return None
+    kind, year, haul = parsed
+    if kind == "centuries":
+        return _sm_centuries(q, year)
+    if kind == "haul":
+        return _sm_haul(q, year, haul)
+    return None
+
+
+try:
+    _previous_answer_question_with_fallback_before_sm = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_sm = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _sm_route(user_question)
+    if result is not None:
+        return result
+    return _previous_answer_question_with_fallback_before_sm(user_question)
+
+# IPL SQL Agent season milestones route END
+
