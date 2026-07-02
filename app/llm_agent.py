@@ -31109,3 +31109,2106 @@ def answer_question_with_fallback(user_question):
 
 # IPL SQL Agent season milestones route END
 
+
+# IPL SQL Agent single-over runs route START
+
+def _overruns_q(value):
+    return str(value).replace("'", "''")
+
+
+def _overruns_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _overruns_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _overruns_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Gujarat Titans": "GT",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Kochi Tuskers Kerala": "KTK",
+    }
+
+    return mapping.get(str(value), value)
+
+
+def _overruns_clean(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        df = df.copy()
+
+        for col in ["batting_team", "bowling_team", "team", "opponent", "winner"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_overruns_short_team)
+
+        return df
+
+    except Exception:
+        return df
+
+
+def _overruns_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "chennai super kings", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai", "mumbai indians"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata", "kolkata knight riders"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan", "rajasthan royals"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad", "sunrisers hyderabad"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat", "gujarat titans"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi", "punjab kings", "kings xi punjab"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow", "lucknow super giants"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(t in text for t in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _overruns_season_filter(alias, year):
+    year = int(year)
+
+    if year == 2020:
+        return f"(CAST({alias}.season AS varchar(20)) = '2020' OR CAST({alias}.season AS varchar(20)) = '2020/21')"
+
+    if year == 2021:
+        return f"(CAST({alias}.season AS varchar(20)) = '2021')"
+
+    slash = f"{year - 1}/{str(year)[-2:]}"
+    short = str(year)[-2:]
+
+    return (
+        f"(CAST({alias}.season AS varchar(20)) = '{year}' "
+        f"OR CAST({alias}.season AS varchar(20)) = '{_overruns_q(slash)}' "
+        f"OR CAST({alias}.season AS varchar(20)) LIKE '%/{_overruns_q(short)}')"
+    )
+
+
+def _overruns_venue_filter(raw):
+    low = str(raw or "").lower().strip(" .?")
+
+    if not low:
+        return None, None
+
+    if "wankhede" in low:
+        return "m.venue LIKE '%Wankhede%'", "Wankhede"
+    if "chepauk" in low or "chidambaram" in low:
+        return "(m.venue LIKE '%Chepauk%' OR m.venue LIKE '%Chidambaram%')", "Chepauk"
+    if "eden" in low:
+        return "m.venue LIKE '%Eden Gardens%'", "Eden Gardens"
+    if "chinnaswamy" in low:
+        return "m.venue LIKE '%Chinnaswamy%'", "Chinnaswamy"
+    if "mullanpur" in low or "new chandigarh" in low or "yadavindra" in low:
+        return "(m.venue LIKE '%Yadavindra%' OR m.venue LIKE '%Mullanpur%' OR m.venue LIKE '%New Chandigarh%')", "Mullanpur / New Chandigarh"
+    if "uppal" in low or "rajiv gandhi" in low:
+        return "(m.venue LIKE '%Rajiv Gandhi%' OR m.venue LIKE '%Uppal%')", "Uppal"
+    if "arun jaitley" in low or "kotla" in low:
+        return "(m.venue LIKE '%Arun Jaitley%' OR m.venue LIKE '%Kotla%')", "Arun Jaitley Stadium"
+    if "dubai" in low:
+        return "(m.venue LIKE '%Dubai%' OR m.city LIKE '%Dubai%')", "Dubai"
+    if "sharjah" in low:
+        return "(m.venue LIKE '%Sharjah%' OR m.city LIKE '%Sharjah%')", "Sharjah"
+    if "abu dhabi" in low or "zayed" in low:
+        return "(m.venue LIKE '%Abu Dhabi%' OR m.venue LIKE '%Zayed%' OR m.city LIKE '%Abu Dhabi%')", "Abu Dhabi"
+    if "mohali" in low or "bindra" in low:
+        return "(m.venue LIKE '%Mohali%' OR m.venue LIKE '%Bindra%' OR m.city LIKE '%Mohali%')", "Mohali"
+    if "ahmedabad" in low or "narendra" in low or "motera" in low:
+        return "(m.venue LIKE '%Narendra Modi%' OR m.venue LIKE '%Motera%' OR m.city LIKE '%Ahmedabad%')", "Ahmedabad"
+
+    return None, None
+
+
+def _overruns_parse(question):
+    import re
+
+    text = str(question or "").strip()
+    low = text.lower()
+
+    # Keep this route focused on over totals, not player innings/season totals.
+    if not (
+        ("single over" in low)
+        or ("one over" in low)
+        or ("an over" in low)
+        or ("highest scoring over" in low)
+        or ("most expensive over" in low)
+        or ("runs in an over" in low)
+        or ("runs in one over" in low)
+    ):
+        return None
+
+    if not (
+        "most runs" in low
+        or "highest" in low
+        or "expensive" in low
+        or "scored" in low
+        or "conceded" in low
+    ):
+        return None
+
+    limit = 10
+
+    top_match = re.search(r"\btop\s+(\d+)\b", text, flags=re.IGNORECASE)
+
+    if top_match:
+        value = int(top_match.group(1))
+
+        if 1 <= value <= 50:
+            limit = value
+
+    filters = ["d.innings IN (1, 2)"]
+    labels = []
+
+    year_match = re.search(r"\b(20\d{2}|2008|2009|2010|2011|2012|2013|2014|2015|2016|2017|2018|2019)\b", text)
+
+    if year_match:
+        year = int(year_match.group(1))
+        filters.append(_overruns_season_filter("m", year))
+        labels.append(f"in {year}")
+
+    # for CSK = batting team; by CSK also usually batting team for "scored".
+    team_match = re.search(
+        r"\b(?:for|by)\s+([A-Za-z0-9 .]+?)(?:\s+in\s+20\d{2}|\s+against\s+|\s+at\s+|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if team_match:
+        code, display, aliases = _overruns_team_lookup(team_match.group(1).strip(" .?"))
+
+        if code == "AMBIGUOUS_DC":
+            return {"ambiguous": True}
+
+        if aliases:
+            filters.append(f"d.batting_team IN {_overruns_sql_list(aliases)}")
+            labels.append(f"for {display}")
+
+    against_match = re.search(
+        r"\bagainst\s+([A-Za-z0-9 .]+?)(?:\s+in\s+20\d{2}|\s+at\s+|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if against_match:
+        code, display, aliases = _overruns_team_lookup(against_match.group(1).strip(" .?"))
+
+        if code == "AMBIGUOUS_DC":
+            return {"ambiguous": True}
+
+        if aliases:
+            filters.append(f"d.bowling_team IN {_overruns_sql_list(aliases)}")
+            labels.append(f"against {display}")
+
+    venue_match = re.search(
+        r"\bat\s+([A-Za-z0-9 .'-]+?)(?:\s+in\s+20\d{2}|\s+against\s+|\s+for\s+|\s*$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if venue_match:
+        venue_sql, venue_label = _overruns_venue_filter(venue_match.group(1))
+
+        if venue_sql:
+            filters.append(venue_sql)
+            labels.append(f"at {venue_label}")
+
+    return {
+        "filters": filters,
+        "labels": labels,
+        "limit": limit,
+    }
+
+
+def _overruns_ambiguous_dc(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "issue": "DC is ambiguous",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "example": "most runs in a single over for Delhi Capitals",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "most runs in a single over",
+            "top 10 highest scoring overs in IPL",
+            "most runs in a single over for CSK",
+            "most runs in a single over at Wankhede",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _overruns_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _overruns_parse(question)
+
+    if not parsed:
+        return None
+
+    if parsed.get("ambiguous"):
+        return _overruns_ambiguous_dc(question)
+
+    where_sql = " AND ".join(parsed["filters"])
+    limit = int(parsed["limit"])
+
+    sql = f"""
+WITH over_totals AS (
+    SELECT
+        d.match_id,
+        d.innings,
+        FLOOR(CAST(d.ball AS float)) AS over_number,
+        MAX(d.batting_team) AS batting_team,
+        MAX(d.bowling_team) AS bowling_team,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_in_over,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS bat_runs_in_over,
+        SUM(COALESCE(d.extras, 0)) AS extras_in_over,
+        COUNT(*) AS total_deliveries,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) AS legal_balls,
+        SUM(CASE WHEN COALESCE(d.wides, 0) > 0 THEN 1 ELSE 0 END) AS wides_balls,
+        SUM(CASE WHEN COALESCE(d.noballs, 0) > 0 THEN 1 ELSE 0 END) AS no_balls,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 6 THEN 1 ELSE 0 END) AS sixes,
+        STUFF((
+            SELECT DISTINCT ', ' + d2.striker
+            FROM deliveries d2
+            WHERE d2.match_id = d.match_id
+              AND d2.innings = d.innings
+              AND FLOOR(CAST(d2.ball AS float)) = FLOOR(CAST(d.ball AS float))
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS batters,
+        STUFF((
+            SELECT DISTINCT ', ' + d3.bowler
+            FROM deliveries d3
+            WHERE d3.match_id = d.match_id
+              AND d3.innings = d.innings
+              AND FLOOR(CAST(d3.ball AS float)) = FLOOR(CAST(d.ball AS float))
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS bowlers
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE {where_sql}
+    GROUP BY
+        d.match_id,
+        d.innings,
+        FLOOR(CAST(d.ball AS float))
+),
+completed_overs AS (
+    SELECT
+        o.*,
+        m.season,
+        m.start_date,
+        m.venue,
+        m.city,
+        m.winner
+    FROM over_totals o
+    JOIN matches m
+        ON o.match_id = m.match_id
+    WHERE o.legal_balls = 6
+)
+SELECT TOP {limit}
+    match_id,
+    season,
+    start_date,
+    venue,
+    innings,
+    over_number,
+    batting_team,
+    bowling_team,
+    runs_in_over,
+    bat_runs_in_over,
+    extras_in_over,
+    legal_balls,
+    total_deliveries,
+    wides_balls,
+    no_balls,
+    fours,
+    sixes,
+    batters,
+    bowlers,
+    winner
+FROM completed_overs
+ORDER BY
+    runs_in_over DESC,
+    bat_runs_in_over DESC,
+    extras_in_over DESC,
+    start_date DESC,
+    match_id ASC,
+    innings ASC,
+    over_number ASC;
+""".strip()
+
+    try:
+        df = run_query(sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The single-over runs route failed: {error}",
+            "paragraph": f"The single-over runs route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    df = _overruns_clean(df if df is not None else pd.DataFrame())
+
+    label = " ".join(parsed["labels"])
+    title = "Most runs scored in a completed single over" + (f" {label}" if label else "")
+
+    if df.empty:
+        message_df = pd.DataFrame([{
+            "match_id": "",
+            "runs_in_over": 0,
+            "legal_balls": 6,
+            "message": "No completed six-legal-ball overs matched this filter.",
+        }])
+
+        return {
+            "question": question,
+            "analysis_paragraph": "No completed six-legal-ball overs matched this filter.",
+            "paragraph": "No completed six-legal-ball overs matched this filter.",
+            "result": message_df,
+            "extra_tables": {title: message_df},
+            "sql_query": sql,
+            "similar_questions": [
+                "most runs scored in a single over",
+                "top 10 highest scoring overs in IPL",
+                "most runs in a single over for CSK",
+                "most runs in a single over at Wankhede",
+            ],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    return {
+        "question": question,
+        "analysis_paragraph": (
+            f"{title}. Only overs with exactly 6 legal balls are included. "
+            f"All runs in the over count, including extras and no-ball runs."
+        ),
+        "paragraph": (
+            f"{title}. Only overs with exactly 6 legal balls are included. "
+            f"All runs in the over count, including extras and no-ball runs."
+        ),
+        "result": df,
+        "extra_tables": {title: df},
+        "sql_query": sql,
+        "similar_questions": [
+            "most runs scored in a single over",
+            "top 10 highest scoring overs in IPL",
+            "most runs in a single over for CSK",
+            "most runs in a single over at Wankhede",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_overruns = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_overruns = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _overruns_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_overruns(user_question)
+
+# IPL SQL Agent single-over runs route END
+
+
+# IPL SQL Agent explicit bowler-to-batter route priority fix START
+
+def _explicit_b2b_q(value):
+    return str(value).replace("'", "''")
+
+
+def _explicit_b2b_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _explicit_b2b_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _explicit_b2b_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Gujarat Titans": "GT",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+        "Rising Pune Supergiant": "RPS",
+        "Rising Pune Supergiants": "RPS",
+        "Gujarat Lions": "GL",
+        "Pune Warriors": "PWI",
+        "Pune Warriors India": "PWI",
+        "Kochi Tuskers Kerala": "KTK",
+    }
+
+    return mapping.get(str(value), value)
+
+
+def _explicit_b2b_clean(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        df = df.copy()
+
+        for col in ["batting_team", "bowling_team", "team", "opponent"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_explicit_b2b_short_team)
+
+        return df
+
+    except Exception:
+        return df
+
+
+def _explicit_b2b_aliases(raw_name):
+    raw = str(raw_name or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "bumrah": ["JJ Bumrah", "Jasprit Bumrah"],
+        "jasprit bumrah": ["JJ Bumrah", "Jasprit Bumrah"],
+        "mohammed shami": ["Mohammed Shami", "Mohammad Shami"],
+        "mohammad shami": ["Mohammed Shami", "Mohammad Shami"],
+        "shami": ["Mohammed Shami", "Mohammad Shami"],
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "rohit sharma": ["RG Sharma", "Rohit Sharma"],
+        "gill": ["Shubman Gill"],
+        "shubman": ["Shubman Gill"],
+        "shubman gill": ["Shubman Gill"],
+        "dhoni": ["MS Dhoni"],
+        "ms dhoni": ["MS Dhoni"],
+        "rahul": ["KL Rahul"],
+        "kl rahul": ["KL Rahul"],
+        "buttler": ["JC Buttler", "Jos Buttler"],
+        "raina": ["SK Raina", "Suresh Raina"],
+        "warner": ["DA Warner", "David Warner"],
+        "rashid": ["Rashid Khan"],
+        "rashid khan": ["Rashid Khan"],
+        "chahal": ["YS Chahal", "Yuzvendra Chahal"],
+        "siraj": ["Mohammed Siraj"],
+        "narine": ["SP Narine", "Sunil Narine"],
+    }
+
+    for key, values in known.items():
+        if key in low:
+            for value in values:
+                if value not in aliases:
+                    aliases.append(value)
+
+    return aliases
+
+
+def _explicit_b2b_resolve(raw_name, role):
+    try:
+        from app.db import run_query
+
+        aliases = _explicit_b2b_aliases(raw_name)
+        col = "bowler" if role == "bowler" else "striker"
+        low = str(raw_name or "").lower().strip()
+
+        where_bits = [f"{col} IN {_explicit_b2b_sql_list(aliases)}"]
+
+        if len(low) >= 3:
+            where_bits.append(f"LOWER({col}) LIKE '%{_explicit_b2b_q(low)}%'")
+
+        sql = f"""
+SELECT TOP 1 {col} AS player_name, COUNT(*) AS n
+FROM deliveries
+WHERE {" OR ".join(where_bits)}
+GROUP BY {col}
+ORDER BY COUNT(*) DESC, {col} ASC;
+""".strip()
+
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+
+            return resolved, aliases
+
+    except Exception:
+        pass
+
+    aliases = _explicit_b2b_aliases(raw_name)
+
+    return aliases[0], aliases
+
+
+def _explicit_b2b_parse(question):
+    import re
+
+    text = str(question or "").strip()
+
+    # Very strict: explicit named bowler first, then named batter.
+    # This prevents the "current MI option" recommender from hijacking
+    # "how should Mohammed Shami bowl to Kohli".
+    patterns = [
+        r"^\s*how\s+should\s+(.+?)\s+bowl\s+to\s+(.+?)\s*\??\s*$",
+        r"^\s*how\s+should\s+(.+?)\s+bowl\s+against\s+(.+?)\s*\??\s*$",
+        r"^\s*how\s+can\s+(.+?)\s+bowl\s+to\s+(.+?)\s*\??\s*$",
+        r"^\s*(.+?)\s+bowling\s+plan\s+(?:to|against)\s+(.+?)\s*\??\s*$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+
+        if not match:
+            continue
+
+        bowler_raw = match.group(1).strip(" .?")
+        batter_raw = match.group(2).strip(" .?")
+
+        # Avoid team tactical questions accidentally entering this route.
+        if any(x in bowler_raw.lower() for x in ["csk", "mi", "rcb", "kkr", "rr", "srh", "pbks", "lsg", "gt", "delhi capitals"]):
+            return None
+
+        return {
+            "bowler_raw": bowler_raw,
+            "batter_raw": batter_raw,
+        }
+
+    return None
+
+
+def _explicit_b2b_plan_text(bowler_name, batter_name, balls, runs, dismissals, strike_rate):
+    bowler_low = str(bowler_name or "").lower()
+
+    if "shami" in bowler_low:
+        base_plan = "hit a hard length/fourth-stump channel, use seam movement, and avoid drifting onto the pads"
+    elif "bumrah" in bowler_low:
+        base_plan = "mix back-of-a-length balls with wide yorkers and keep the line away from the easy leg-side release"
+    elif "rashid" in bowler_low:
+        base_plan = "attack the stumps with leg-break/googly variation and deny easy singles through the middle"
+    elif "chahal" in bowler_low:
+        base_plan = "tempt the batter to hit against the spin with wider leg-spin and protect the straight boundary"
+    elif "siraj" in bowler_low:
+        base_plan = "attack with new-ball length outside off and use the wobble-seam/hard length option"
+    else:
+        base_plan = "use the direct matchup trend, keep the scoring zones protected, and avoid predictable release balls"
+
+    if balls is None:
+        balls = 0
+
+    if dismissals is None:
+        dismissals = 0
+
+    if runs is None:
+        runs = 0
+
+    if balls >= 12 and dismissals > 0:
+        evidence = f"direct matchup evidence: {balls} balls, {runs} runs, {dismissals} dismissal(s)"
+    elif balls >= 12 and dismissals == 0:
+        evidence = f"direct sample exists but no dismissal yet: {balls} balls, {runs} runs"
+    elif balls > 0:
+        evidence = f"very small direct sample: {balls} balls, {runs} runs"
+    else:
+        evidence = "no direct IPL ball-by-ball sample found in the database"
+
+    return f"{bowler_name} should {base_plan} to {batter_name}; evidence used: {evidence}."
+
+
+def _explicit_b2b_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _explicit_b2b_parse(question)
+
+    if not parsed:
+        return None
+
+    bowler_name, bowler_aliases = _explicit_b2b_resolve(parsed["bowler_raw"], "bowler")
+    batter_name, batter_aliases = _explicit_b2b_resolve(parsed["batter_raw"], "batter")
+
+    summary_sql = f"""
+WITH matchup AS (
+    SELECT
+        '{_explicit_b2b_q(bowler_name)}' AS bowler,
+        '{_explicit_b2b_q(batter_name)}' AS batter,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 6 THEN 1 ELSE 0 END) AS sixes,
+        COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0) = 0 AND COALESCE(d.extras, 0) = 0 THEN 1 END) AS dot_balls
+    FROM deliveries d
+    WHERE d.bowler IN {_explicit_b2b_sql_list(bowler_aliases)}
+      AND d.striker IN {_explicit_b2b_sql_list(batter_aliases)}
+      AND d.innings IN (1, 2)
+)
+SELECT
+    bowler,
+    batter,
+    matches,
+    balls,
+    runs,
+    dismissals,
+    CASE WHEN dismissals = 0 THEN NULL ELSE ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) END AS batting_average,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+    legal_balls,
+    runs_conceded,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy,
+    fours,
+    sixes,
+    dot_balls
+FROM matchup;
+""".strip()
+
+    innings_sql = f"""
+WITH by_match AS (
+    SELECT
+        d.match_id,
+        m.season,
+        m.start_date,
+        m.venue,
+        MAX(d.batting_team) AS batting_team,
+        MAX(d.bowling_team) AS bowling_team,
+        '{_explicit_b2b_q(bowler_name)}' AS bowler,
+        '{_explicit_b2b_q(batter_name)}' AS batter,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 6 THEN 1 ELSE 0 END) AS sixes
+    FROM deliveries d
+    JOIN matches m
+        ON d.match_id = m.match_id
+    WHERE d.bowler IN {_explicit_b2b_sql_list(bowler_aliases)}
+      AND d.striker IN {_explicit_b2b_sql_list(batter_aliases)}
+      AND d.innings IN (1, 2)
+    GROUP BY d.match_id, m.season, m.start_date, m.venue
+)
+SELECT
+    match_id,
+    season,
+    start_date,
+    venue,
+    batting_team,
+    bowling_team,
+    bowler,
+    batter,
+    balls,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+    fours,
+    sixes
+FROM by_match
+WHERE balls > 0
+ORDER BY start_date DESC, match_id DESC;
+""".strip()
+
+    try:
+        summary_df = run_query(summary_sql)
+        innings_df = run_query(innings_sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The explicit bowler-to-batter route failed: {error}",
+            "paragraph": f"The explicit bowler-to-batter route failed: {error}",
+            "result": pd.DataFrame(),
+            "extra_tables": {},
+            "sql_query": summary_sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    summary_df = _explicit_b2b_clean(summary_df if summary_df is not None else pd.DataFrame())
+    innings_df = _explicit_b2b_clean(innings_df if innings_df is not None else pd.DataFrame())
+
+    if summary_df.empty:
+        summary_df = pd.DataFrame([{
+            "bowler": bowler_name,
+            "batter": batter_name,
+            "matches": 0,
+            "balls": 0,
+            "runs": 0,
+            "dismissals": 0,
+            "batting_average": None,
+            "strike_rate": None,
+            "legal_balls": 0,
+            "runs_conceded": 0,
+            "economy": None,
+            "fours": 0,
+            "sixes": 0,
+            "dot_balls": 0,
+        }])
+
+    row = summary_df.iloc[0]
+    balls = int(row.get("balls") or 0)
+    runs = int(row.get("runs") or 0)
+    dismissals = int(row.get("dismissals") or 0)
+    strike_rate = row.get("strike_rate")
+
+    plan = _explicit_b2b_plan_text(bowler_name, batter_name, balls, runs, dismissals, strike_rate)
+
+    plan_df = pd.DataFrame([
+        {"section": "Bowler", "insight": bowler_name},
+        {"section": "Batter", "insight": batter_name},
+        {"section": "Recommended plan", "insight": plan},
+        {"section": "Direct balls", "insight": balls},
+        {"section": "Runs conceded off bat", "insight": runs},
+        {"section": "Dismissals", "insight": dismissals},
+    ])
+
+    result_df = plan_df
+
+    return {
+        "question": question,
+        "analysis_paragraph": plan,
+        "paragraph": plan,
+        "result": result_df,
+        "extra_tables": {
+            "Direct Matchup Summary": summary_df,
+            "Match-by-Match Evidence": innings_df,
+        },
+        "sql_query": summary_sql,
+        "similar_questions": [
+            "how should Mohammed Shami bowl to Kohli",
+            "how should Bumrah bowl to Kohli",
+            "how should Rashid Khan bowl to Rohit",
+            "who is the best batsman against Bumrah",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_explicit_b2b = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_explicit_b2b = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _explicit_b2b_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_explicit_b2b(user_question)
+
+# IPL SQL Agent explicit bowler-to-batter route priority fix END
+
+
+# IPL SQL Agent explicit bowler-to-batter final schema fix START
+
+def _b2bfinal_q(value):
+    return str(value).replace("'", "''")
+
+
+def _b2bfinal_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _b2bfinal_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _b2bfinal_aliases(raw_name):
+    raw = str(raw_name or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "bumrah": ["JJ Bumrah", "Jasprit Bumrah"],
+        "jasprit bumrah": ["JJ Bumrah", "Jasprit Bumrah"],
+        "mohammed shami": ["Mohammed Shami", "Mohammad Shami"],
+        "mohammad shami": ["Mohammed Shami", "Mohammad Shami"],
+        "shami": ["Mohammed Shami", "Mohammad Shami"],
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "virat kohli": ["V Kohli", "Virat Kohli"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "rohit sharma": ["RG Sharma", "Rohit Sharma"],
+        "gill": ["Shubman Gill"],
+        "shubman gill": ["Shubman Gill"],
+        "dhoni": ["MS Dhoni"],
+        "ms dhoni": ["MS Dhoni"],
+        "rashid": ["Rashid Khan"],
+        "rashid khan": ["Rashid Khan"],
+        "chahal": ["YS Chahal", "Yuzvendra Chahal"],
+        "siraj": ["Mohammed Siraj"],
+        "narine": ["SP Narine", "Sunil Narine"],
+    }
+
+    for key, vals in known.items():
+        if key in low:
+            for val in vals:
+                if val not in aliases:
+                    aliases.append(val)
+
+    return aliases
+
+
+def _b2bfinal_resolve(raw_name, role):
+    try:
+        from app.db import run_query
+
+        aliases = _b2bfinal_aliases(raw_name)
+        col = "bowler" if role == "bowler" else "striker"
+        low = str(raw_name or "").lower().strip()
+
+        where_parts = [f"{col} IN {_b2bfinal_sql_list(aliases)}"]
+
+        if len(low) >= 4:
+            where_parts.append(f"LOWER({col}) LIKE '%{_b2bfinal_q(low)}%'")
+
+        sql = f"""
+SELECT TOP 1 {col} AS player_name, COUNT(*) AS n
+FROM deliveries
+WHERE {" OR ".join(where_parts)}
+GROUP BY {col}
+ORDER BY COUNT(*) DESC, {col} ASC;
+""".strip()
+
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+
+            return resolved, aliases
+
+    except Exception:
+        pass
+
+    aliases = _b2bfinal_aliases(raw_name)
+
+    return aliases[0], aliases
+
+
+def _b2bfinal_parse(question):
+    import re
+
+    text = str(question or "").strip()
+
+    patterns = [
+        r"^\s*how\s+should\s+(.+?)\s+bowl\s+to\s+(.+?)\s*\??\s*$",
+        r"^\s*how\s+should\s+(.+?)\s+bowl\s+against\s+(.+?)\s*\??\s*$",
+        r"^\s*how\s+can\s+(.+?)\s+bowl\s+to\s+(.+?)\s*\??\s*$",
+        r"^\s*(.+?)\s+bowling\s+plan\s+(?:to|against)\s+(.+?)\s*\??\s*$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+
+        if match:
+            bowler_raw = match.group(1).strip(" .?")
+            batter_raw = match.group(2).strip(" .?")
+
+            return bowler_raw, batter_raw
+
+    return None
+
+
+def _b2bfinal_plan(bowler, batter, balls, runs, dismissals):
+    low = str(bowler).lower()
+
+    if "shami" in low:
+        plan = "hit a hard length/fourth-stump channel, use seam movement, and avoid drifting onto the pads"
+    elif "bumrah" in low:
+        plan = "mix back-of-a-length balls with wide yorkers and keep the line away from the easy leg-side release"
+    elif "rashid" in low:
+        plan = "attack the stumps with leg-break/googly variation and deny easy singles through the middle"
+    elif "chahal" in low:
+        plan = "tempt the batter to hit against the spin with wider leg-spin and protect the straight boundary"
+    else:
+        plan = "use the direct matchup trend, protect the batter's strongest scoring zones, and vary pace/length"
+
+    if balls >= 12:
+        evidence = f"direct sample: {balls} balls, {runs} runs, {dismissals} dismissal(s)"
+    elif balls > 0:
+        evidence = f"small direct sample: {balls} balls, {runs} runs, {dismissals} dismissal(s)"
+    else:
+        evidence = "no direct IPL ball-by-ball sample found"
+
+    return f"{bowler} should {plan} to {batter}. Evidence: {evidence}."
+
+
+def _b2bfinal_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _b2bfinal_parse(question)
+
+    if not parsed:
+        return None
+
+    bowler_raw, batter_raw = parsed
+    bowler, bowler_aliases = _b2bfinal_resolve(bowler_raw, "bowler")
+    batter, batter_aliases = _b2bfinal_resolve(batter_raw, "batter")
+
+    sql = f"""
+WITH matchup AS (
+    SELECT
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 4 THEN 1 ELSE 0 END) AS fours,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 6 THEN 1 ELSE 0 END) AS sixes,
+        COUNT(CASE WHEN COALESCE(d.runs_off_bat, 0) = 0 AND COALESCE(d.extras, 0) = 0 THEN 1 END) AS dot_balls
+    FROM deliveries d
+    WHERE d.bowler IN {_b2bfinal_sql_list(bowler_aliases)}
+      AND d.striker IN {_b2bfinal_sql_list(batter_aliases)}
+      AND d.innings IN (1, 2)
+)
+SELECT
+    '{_b2bfinal_q(bowler)}' AS bowler,
+    '{_b2bfinal_q(batter)}' AS batter,
+    matches,
+    balls,
+    runs,
+    dismissals,
+    CASE WHEN dismissals = 0 THEN NULL ELSE ROUND(runs * 1.0 / NULLIF(dismissals, 0), 2) END AS batting_average,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS strike_rate,
+    legal_balls,
+    runs_conceded,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy,
+    fours,
+    sixes,
+    dot_balls
+FROM matchup;
+""".strip()
+
+    match_sql = f"""
+SELECT
+    d.match_id,
+    m.season,
+    m.start_date,
+    m.venue,
+    MAX(d.batting_team) AS batting_team,
+    MAX(d.bowling_team) AS bowling_team,
+    '{_b2bfinal_q(bowler)}' AS bowler,
+    '{_b2bfinal_q(batter)}' AS batter,
+    COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls,
+    SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+    COUNT(CASE
+        WHEN d.wicket_type IS NOT NULL
+         AND d.player_dismissed = d.striker
+         AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+        THEN 1
+    END) AS dismissals,
+    ROUND(SUM(COALESCE(d.runs_off_bat, 0)) * 100.0 / NULLIF(COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END), 0), 2) AS strike_rate
+FROM deliveries d
+JOIN matches m
+    ON d.match_id = m.match_id
+WHERE d.bowler IN {_b2bfinal_sql_list(bowler_aliases)}
+  AND d.striker IN {_b2bfinal_sql_list(batter_aliases)}
+  AND d.innings IN (1, 2)
+GROUP BY d.match_id, m.season, m.start_date, m.venue
+HAVING COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) > 0
+ORDER BY m.start_date DESC, d.match_id DESC;
+""".strip()
+
+    try:
+        summary_df = run_query(sql)
+        evidence_df = run_query(match_sql)
+    except Exception as error:
+        return {
+            "question": question,
+            "analysis_paragraph": f"The explicit bowler-to-batter route failed: {error}",
+            "paragraph": f"The explicit bowler-to-batter route failed: {error}",
+            "result": pd.DataFrame([{
+                "section": "Error",
+                "insight": str(error),
+                "bowler": bowler,
+                "batter": batter,
+            }]),
+            "extra_tables": {},
+            "sql_query": sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    if summary_df is None or summary_df.empty:
+        summary_df = pd.DataFrame([{
+            "bowler": bowler,
+            "batter": batter,
+            "matches": 0,
+            "balls": 0,
+            "runs": 0,
+            "dismissals": 0,
+            "batting_average": None,
+            "strike_rate": None,
+            "legal_balls": 0,
+            "runs_conceded": 0,
+            "economy": None,
+            "fours": 0,
+            "sixes": 0,
+            "dot_balls": 0,
+        }])
+
+    evidence_df = evidence_df if evidence_df is not None else pd.DataFrame()
+
+    row = summary_df.iloc[0]
+    balls = int(row.get("balls") or 0)
+    runs = int(row.get("runs") or 0)
+    dismissals = int(row.get("dismissals") or 0)
+    plan = _b2bfinal_plan(bowler, batter, balls, runs, dismissals)
+
+    result_df = pd.DataFrame([
+        {"section": "Bowler", "insight": bowler, "bowler": bowler, "batter": batter},
+        {"section": "Batter", "insight": batter, "bowler": bowler, "batter": batter},
+        {"section": "Plan", "insight": plan, "bowler": bowler, "batter": batter},
+        {"section": "Direct balls", "insight": balls, "bowler": bowler, "batter": batter},
+        {"section": "Runs off bat", "insight": runs, "bowler": bowler, "batter": batter},
+        {"section": "Dismissals", "insight": dismissals, "bowler": bowler, "batter": batter},
+    ])
+
+    # Also provide title-case columns for UI display patches, while keeping lowercase for tests.
+    result_df["Section"] = result_df["section"]
+    result_df["Insight"] = result_df["insight"]
+    result_df["Bowler"] = result_df["bowler"]
+    result_df["Batter"] = result_df["batter"]
+
+    return {
+        "question": question,
+        "analysis_paragraph": plan,
+        "paragraph": plan,
+        "result": result_df,
+        "extra_tables": {
+            "Direct Matchup Summary": summary_df,
+            "Match-by-Match Evidence": evidence_df,
+        },
+        "sql_query": sql,
+        "similar_questions": [
+            "how should Mohammed Shami bowl to Kohli",
+            "how should Bumrah bowl to Kohli",
+            "how should Rashid Khan bowl to Rohit",
+            "who is the best batsman against Bumrah",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_b2bfinal = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_b2bfinal = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _b2bfinal_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_b2bfinal(user_question)
+
+# IPL SQL Agent explicit bowler-to-batter final schema fix END
+
+
+# IPL SQL Agent team bowl-to-batter tactical route START
+
+def _team_b2b_q(value):
+    return str(value).replace("'", "''")
+
+
+def _team_b2b_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _team_b2b_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _team_b2b_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "chennai super kings", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai", "mumbai indians"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata", "kolkata knight riders"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan", "rajasthan royals"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad", "sunrisers hyderabad"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat", "gujarat titans"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi", "punjab kings", "kings xi punjab"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow", "lucknow super giants"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _team_b2b_short_team(value):
+    if value is None:
+        return value
+
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Gujarat Titans": "GT",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    return mapping.get(str(value), value)
+
+
+def _team_b2b_clean(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        df = df.copy()
+
+        for col in ["team", "opponent", "batting_team", "bowling_team"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_team_b2b_short_team)
+
+        return df
+
+    except Exception:
+        return df
+
+
+def _team_b2b_player_aliases(raw):
+    raw = str(raw or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "virat kohli": ["V Kohli", "Virat Kohli"],
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "rohit sharma": ["RG Sharma", "Rohit Sharma"],
+        "gill": ["Shubman Gill"],
+        "shubman": ["Shubman Gill"],
+        "dhoni": ["MS Dhoni"],
+        "ms dhoni": ["MS Dhoni"],
+        "rahul": ["KL Rahul"],
+        "buttler": ["JC Buttler", "Jos Buttler"],
+        "warner": ["DA Warner", "David Warner"],
+        "raina": ["SK Raina", "Suresh Raina"],
+    }
+
+    for key, vals in known.items():
+        if key in low:
+            for val in vals:
+                if val not in aliases:
+                    aliases.append(val)
+
+    return aliases
+
+
+def _team_b2b_resolve_batter(raw):
+    try:
+        from app.db import run_query
+
+        aliases = _team_b2b_player_aliases(raw)
+        low = str(raw or "").lower().strip()
+        where_bits = [f"striker IN {_team_b2b_sql_list(aliases)}"]
+
+        if len(low) >= 4:
+            where_bits.append(f"LOWER(striker) LIKE '%{_team_b2b_q(low)}%'")
+
+        sql = f"""
+SELECT TOP 1 striker AS player_name, COUNT(*) AS n
+FROM deliveries
+WHERE {" OR ".join(where_bits)}
+GROUP BY striker
+ORDER BY COUNT(*) DESC, striker ASC;
+""".strip()
+
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+
+            return resolved, aliases
+
+    except Exception:
+        pass
+
+    aliases = _team_b2b_player_aliases(raw)
+
+    return aliases[0], aliases
+
+
+def _team_b2b_parse(question):
+    import re
+
+    text = str(question or "").strip()
+
+    patterns = [
+        r"^\s*how\s+can\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(powerplay|middle\s+overs?|death\s+overs?))?\s*\??\s*$",
+        r"^\s*how\s+should\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(powerplay|middle\s+overs?|death\s+overs?))?\s*\??\s*$",
+        r"^\s*(.+?)\s+bowling\s+plan\s+(?:to|against)\s+(.+?)(?:\s+in\s+(?:the\s+)?(powerplay|middle\s+overs?|death\s+overs?))?\s*\??\s*$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+
+        if not match:
+            continue
+
+        team_raw = match.group(1).strip(" .?")
+        batter_raw = match.group(2).strip(" .?")
+        phase_raw = (match.group(3) or "").lower().strip()
+
+        team_code, team_display, team_aliases = _team_b2b_team_lookup(team_raw)
+
+        if team_code == "AMBIGUOUS_DC":
+            return {"ambiguous": True}
+
+        # This route is ONLY for teams. Named bowlers fall through to the explicit bowler route.
+        if not team_aliases:
+            return None
+
+        if "powerplay" in phase_raw:
+            phase = "Powerplay"
+            phase_filter = "FLOOR(CAST(d.ball AS float)) BETWEEN 0 AND 5"
+        elif "death" in phase_raw:
+            phase = "Death overs"
+            phase_filter = "FLOOR(CAST(d.ball AS float)) BETWEEN 15 AND 19"
+        elif "middle" in phase_raw:
+            phase = "Middle overs"
+            phase_filter = "FLOOR(CAST(d.ball AS float)) BETWEEN 6 AND 14"
+        else:
+            phase = "All phases"
+            phase_filter = "1=1"
+
+        return {
+            "team_code": team_code,
+            "team_display": team_display,
+            "team_aliases": team_aliases,
+            "batter_raw": batter_raw,
+            "phase": phase,
+            "phase_filter": phase_filter,
+        }
+
+    return None
+
+
+def _team_b2b_ambiguous(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "section": "Clarification",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "why": "DC is ambiguous in IPL history.",
+        "team_code": "",
+        "batter": "",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [
+            "how can Gujarat Titans bowl to Kohli in the powerplay",
+            "how can KKR bowl to Gaikwad in middle overs",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _team_b2b_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _team_b2b_parse(question)
+
+    if not parsed:
+        return None
+
+    if parsed.get("ambiguous"):
+        return _team_b2b_ambiguous(question)
+
+    team_code = parsed["team_code"]
+    team_display = parsed["team_display"]
+    team_aliases = parsed["team_aliases"]
+    batter, batter_aliases = _team_b2b_resolve_batter(parsed["batter_raw"])
+    phase = parsed["phase"]
+    phase_filter = parsed["phase_filter"]
+
+    direct_sql = f"""
+WITH direct AS (
+    SELECT
+        d.bowler,
+        MAX(d.bowling_team) AS team,
+        '{_team_b2b_q(batter)}' AS batter,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 0 AND COALESCE(d.extras, 0) = 0 THEN 1 ELSE 0 END) AS dot_balls
+    FROM deliveries d
+    WHERE d.bowling_team IN {_team_b2b_sql_list(team_aliases)}
+      AND d.striker IN {_team_b2b_sql_list(batter_aliases)}
+      AND d.innings IN (1, 2)
+      AND {phase_filter}
+    GROUP BY d.bowler
+)
+SELECT
+    bowler,
+    team,
+    batter,
+    matches,
+    balls,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS batter_sr,
+    legal_balls,
+    runs_conceded,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy,
+    dot_balls,
+    CASE
+        WHEN balls >= 12 AND dismissals > 0 THEN 'Use direct matchup: has dismissal evidence'
+        WHEN balls >= 12 AND dismissals = 0 THEN 'Use with caution: direct sample but no wicket'
+        WHEN balls > 0 THEN 'Small direct sample'
+        ELSE 'No direct sample'
+    END AS action
+FROM direct
+WHERE balls > 0
+ORDER BY
+    CASE WHEN balls >= 12 THEN 0 ELSE 1 END,
+    dismissals DESC,
+    batter_sr ASC,
+    balls DESC,
+    bowler ASC;
+""".strip()
+
+    squad_sql = f"""
+SELECT
+    cs.display_name AS bowler,
+    cs.team_code,
+    cs.team_name AS team,
+    cs.role,
+    cs.bowling_style,
+    cs.bowling_arm,
+    cs.is_overseas,
+    CASE
+        WHEN LOWER(COALESCE(cs.role, '')) LIKE '%bowler%' THEN 'Primary bowling option'
+        WHEN LOWER(COALESCE(cs.role, '')) LIKE '%all%' THEN 'All-rounder bowling option'
+        ELSE 'Part-time option'
+    END AS action
+FROM current_squads cs
+WHERE (
+        cs.team_code = '{_team_b2b_q(team_code)}'
+        OR cs.team_name IN {_team_b2b_sql_list(team_aliases)}
+      )
+  AND COALESCE(cs.is_active, 1) = 1
+  AND (
+        LOWER(COALESCE(cs.role, '')) LIKE '%bowler%'
+        OR LOWER(COALESCE(cs.role, '')) LIKE '%all-rounder%'
+        OR LOWER(COALESCE(cs.role, '')) LIKE '%all rounder%'
+      )
+ORDER BY
+    CASE
+        WHEN LOWER(COALESCE(cs.role, '')) LIKE '%bowler%' THEN 0
+        WHEN LOWER(COALESCE(cs.role, '')) LIKE '%all%' THEN 1
+        ELSE 2
+    END,
+    cs.display_name ASC;
+""".strip()
+
+    try:
+        direct_df = run_query(direct_sql)
+        squad_df = run_query(squad_sql)
+    except Exception as error:
+        err = pd.DataFrame([{
+            "section": "Error",
+            "action": str(error),
+            "why": "Team bowl-to-batter route failed.",
+            "team_code": team_code,
+            "batter": batter,
+        }])
+
+        return {
+            "question": question,
+            "analysis_paragraph": str(error),
+            "paragraph": str(error),
+            "result": err,
+            "extra_tables": {},
+            "sql_query": direct_sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    direct_df = _team_b2b_clean(direct_df if direct_df is not None else pd.DataFrame())
+    squad_df = _team_b2b_clean(squad_df if squad_df is not None else pd.DataFrame())
+
+    recommended_bowler = ""
+    recommendation_basis = ""
+
+    if not direct_df.empty:
+        recommended_bowler = str(direct_df.iloc[0].get("bowler", ""))
+        recommendation_basis = str(direct_df.iloc[0].get("action", "direct matchup evidence"))
+    elif not squad_df.empty:
+        recommended_bowler = str(squad_df.iloc[0].get("bowler", ""))
+        recommendation_basis = "no direct matchup sample, use current squad role/profile"
+
+    if not recommended_bowler:
+        recommended_bowler = f"{team_display} bowling unit"
+        recommendation_basis = "no direct or squad bowling option found"
+
+    if phase == "Powerplay":
+        phase_plan = "attack with hard length/new-ball movement, keep a fourth-stump line, and protect the leg-side release"
+    elif phase == "Middle overs":
+        phase_plan = "use matchup bowling, deny easy singles, and force the batter to hit against the angle/spin"
+    elif phase == "Death overs":
+        phase_plan = "use wide yorkers, slower balls, and hard lengths away from the batter's strongest arc"
+    else:
+        phase_plan = "mix direct matchup evidence with current bowling roles and protect the batter's main scoring zones"
+
+    result_df = pd.DataFrame([
+        {
+            "section": "Recommended bowler",
+            "action": recommended_bowler,
+            "why": recommendation_basis,
+            "team_code": team_code,
+            "batter": batter,
+            "phase": phase,
+        },
+        {
+            "section": "Team plan",
+            "action": phase_plan,
+            "why": f"Plan is tailored for {phase.lower()} against {batter}.",
+            "team_code": team_code,
+            "batter": batter,
+            "phase": phase,
+        },
+        {
+            "section": "Data rule",
+            "action": "Prefer direct balls from this team to this batter; otherwise use current squad bowling roles.",
+            "why": "This avoids replacing a team question with a random named bowler route.",
+            "team_code": team_code,
+            "batter": batter,
+            "phase": phase,
+        },
+    ])
+
+    paragraph = (
+        f"For {team_display} bowling to {batter} in {phase.lower()}, the recommended option is {recommended_bowler}. "
+        f"Action: {phase_plan}. Basis: {recommendation_basis}."
+    )
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": result_df,
+        "extra_tables": {
+            "Direct Team Options vs Batter": direct_df,
+            "Current Team Bowling Squad": squad_df,
+        },
+        "sql_query": direct_sql,
+        "similar_questions": [
+            "how can GT bowl to Kohli in the powerplay",
+            "how can KKR bowl to Gaikwad in middle overs",
+            "how can CSK bowl to Rohit in death overs",
+            "how should Mohammed Shami bowl to Kohli",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_team_b2b = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_team_b2b = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _team_b2b_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_team_b2b(user_question)
+
+# IPL SQL Agent team bowl-to-batter tactical route END
+
+
+# IPL SQL Agent current-squad team bowl-to-batter route START
+
+def _curteam_b2b_q(value):
+    return str(value).replace("'", "''")
+
+
+def _curteam_b2b_sql_list(values):
+    values = [v for v in values if v and str(v).strip()]
+    return "(" + ", ".join("'" + _curteam_b2b_q(v) + "'" for v in values) + ")" if values else "('')"
+
+
+def _curteam_b2b_team_lookup(raw):
+    text = str(raw or "").lower().strip()
+
+    if text == "dc":
+        return "AMBIGUOUS_DC", None, []
+
+    teams = [
+        ("CSK", "CSK", ["Chennai Super Kings"], ["csk", "chennai", "chennai super kings", "super kings"]),
+        ("MI", "MI", ["Mumbai Indians"], ["mi", "mumbai", "mumbai indians"]),
+        ("RCB", "RCB", ["Royal Challengers Bangalore", "Royal Challengers Bengaluru"], ["rcb", "bangalore", "bengaluru", "royal challengers"]),
+        ("KKR", "KKR", ["Kolkata Knight Riders"], ["kkr", "kolkata", "kolkata knight riders"]),
+        ("RR", "RR", ["Rajasthan Royals"], ["rr", "rajasthan", "rajasthan royals"]),
+        ("SRH", "SRH", ["Sunrisers Hyderabad"], ["srh", "sunrisers", "hyderabad", "sunrisers hyderabad"]),
+        ("GT", "GT", ["Gujarat Titans"], ["gt", "gujarat", "gujarat titans"]),
+        ("PBKS", "PBKS", ["Kings XI Punjab", "Punjab Kings"], ["pbks", "kxip", "punjab", "kings xi", "punjab kings", "kings xi punjab"]),
+        ("LSG", "LSG", ["Lucknow Super Giants"], ["lsg", "lucknow", "lucknow super giants"]),
+        ("Delhi Capitals", "Delhi Capitals", ["Delhi Capitals", "Delhi Daredevils"], ["delhi capitals", "delhi daredevils"]),
+        ("Deccan Chargers", "Deccan Chargers", ["Deccan Chargers"], ["deccan chargers", "deccan"]),
+    ]
+
+    for code, display, aliases, triggers in teams:
+        if text in triggers or any(trigger in text for trigger in triggers):
+            return code, display, aliases
+
+    return None, None, []
+
+
+def _curteam_b2b_player_aliases(raw):
+    raw = str(raw or "").strip()
+    low = raw.lower()
+    aliases = [raw]
+
+    known = {
+        "kohli": ["V Kohli", "Virat Kohli"],
+        "virat": ["V Kohli", "Virat Kohli"],
+        "virat kohli": ["V Kohli", "Virat Kohli"],
+        "gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "ruturaj gaikwad": ["RD Gaikwad", "Ruturaj Gaikwad"],
+        "rohit": ["RG Sharma", "Rohit Sharma"],
+        "rohit sharma": ["RG Sharma", "Rohit Sharma"],
+        "gill": ["Shubman Gill"],
+        "shubman": ["Shubman Gill"],
+        "dhoni": ["MS Dhoni"],
+        "ms dhoni": ["MS Dhoni"],
+        "rahul": ["KL Rahul"],
+        "buttler": ["JC Buttler", "Jos Buttler"],
+        "warner": ["DA Warner", "David Warner"],
+        "raina": ["SK Raina", "Suresh Raina"],
+    }
+
+    for key, vals in known.items():
+        if key in low:
+            for val in vals:
+                if val not in aliases:
+                    aliases.append(val)
+
+    return aliases
+
+
+def _curteam_b2b_resolve_batter(raw):
+    try:
+        from app.db import run_query
+
+        aliases = _curteam_b2b_player_aliases(raw)
+        low = str(raw or "").lower().strip()
+        where_bits = [f"striker IN {_curteam_b2b_sql_list(aliases)}"]
+
+        if len(low) >= 4:
+            where_bits.append(f"LOWER(striker) LIKE '%{_curteam_b2b_q(low)}%'")
+
+        sql = f"""
+SELECT TOP 1 striker AS player_name, COUNT(*) AS n
+FROM deliveries
+WHERE {" OR ".join(where_bits)}
+GROUP BY striker
+ORDER BY COUNT(*) DESC, striker ASC;
+""".strip()
+
+        df = run_query(sql)
+
+        if df is not None and not df.empty:
+            resolved = str(df.iloc[0]["player_name"])
+
+            if resolved not in aliases:
+                aliases.insert(0, resolved)
+
+            return resolved, aliases
+
+    except Exception:
+        pass
+
+    aliases = _curteam_b2b_player_aliases(raw)
+
+    return aliases[0], aliases
+
+
+def _curteam_b2b_short_team(value):
+    mapping = {
+        "Chennai Super Kings": "CSK",
+        "Mumbai Indians": "MI",
+        "Royal Challengers Bangalore": "RCB",
+        "Royal Challengers Bengaluru": "RCB",
+        "Kolkata Knight Riders": "KKR",
+        "Rajasthan Royals": "RR",
+        "Sunrisers Hyderabad": "SRH",
+        "Gujarat Titans": "GT",
+        "Kings XI Punjab": "PBKS",
+        "Punjab Kings": "PBKS",
+        "Lucknow Super Giants": "LSG",
+        "Delhi Daredevils": "Delhi Capitals",
+        "Delhi Capitals": "Delhi Capitals",
+        "Deccan Chargers": "Deccan Chargers",
+    }
+
+    return mapping.get(str(value), value)
+
+
+def _curteam_b2b_clean(df):
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        df = df.copy()
+
+        for col in ["team", "opponent", "batting_team", "bowling_team"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_curteam_b2b_short_team)
+
+        return df
+
+    except Exception:
+        return df
+
+
+def _curteam_b2b_parse(question):
+    import re
+
+    text = str(question or "").strip()
+
+    patterns = [
+        r"^\s*how\s+can\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(powerplay|middle\s+overs?|death\s+overs?))?\s*\??\s*$",
+        r"^\s*how\s+should\s+(.+?)\s+bowl\s+to\s+(.+?)(?:\s+in\s+(?:the\s+)?(powerplay|middle\s+overs?|death\s+overs?))?\s*\??\s*$",
+        r"^\s*(.+?)\s+bowling\s+plan\s+(?:to|against)\s+(.+?)(?:\s+in\s+(?:the\s+)?(powerplay|middle\s+overs?|death\s+overs?))?\s*\??\s*$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+
+        if not match:
+            continue
+
+        team_raw = match.group(1).strip(" .?")
+        batter_raw = match.group(2).strip(" .?")
+        phase_raw = (match.group(3) or "").lower().strip()
+
+        team_code, team_display, team_aliases = _curteam_b2b_team_lookup(team_raw)
+
+        if team_code == "AMBIGUOUS_DC":
+            return {"ambiguous": True}
+
+        if not team_aliases:
+            return None
+
+        if "powerplay" in phase_raw:
+            phase = "Powerplay"
+            phase_filter = "FLOOR(CAST(d.ball AS float)) BETWEEN 0 AND 5"
+        elif "death" in phase_raw:
+            phase = "Death overs"
+            phase_filter = "FLOOR(CAST(d.ball AS float)) BETWEEN 15 AND 19"
+        elif "middle" in phase_raw:
+            phase = "Middle overs"
+            phase_filter = "FLOOR(CAST(d.ball AS float)) BETWEEN 6 AND 14"
+        else:
+            phase = "All phases"
+            phase_filter = "1=1"
+
+        return {
+            "team_code": team_code,
+            "team_display": team_display,
+            "team_aliases": team_aliases,
+            "batter_raw": batter_raw,
+            "phase": phase,
+            "phase_filter": phase_filter,
+        }
+
+    return None
+
+
+def _curteam_b2b_ambiguous(question):
+    import pandas as pd
+
+    df = pd.DataFrame([{
+        "section": "Clarification",
+        "action": "Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "why": "DC is ambiguous in IPL history.",
+        "team_code": "",
+        "batter": "",
+    }])
+
+    return {
+        "question": question,
+        "analysis_paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "paragraph": "DC is ambiguous. Use Delhi Capitals, Delhi Daredevils, or Deccan Chargers in full.",
+        "result": df,
+        "extra_tables": {"Clarification": df},
+        "sql_query": "",
+        "similar_questions": [],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+def _curteam_b2b_route(question):
+    import pandas as pd
+    from app.db import run_query
+
+    parsed = _curteam_b2b_parse(question)
+
+    if not parsed:
+        return None
+
+    if parsed.get("ambiguous"):
+        return _curteam_b2b_ambiguous(question)
+
+    team_code = parsed["team_code"]
+    team_display = parsed["team_display"]
+    team_aliases = parsed["team_aliases"]
+    batter, batter_aliases = _curteam_b2b_resolve_batter(parsed["batter_raw"])
+    phase = parsed["phase"]
+    phase_filter = parsed["phase_filter"]
+
+    # Key fix:
+    # Earlier route filtered deliveries by historical bowling_team, so former players
+    # like Shami/Hardik/Noor could appear as GT options. This route starts from
+    # current_squads and only attaches direct matchup evidence for those current active players.
+    options_sql = f"""
+WITH current_bowlers AS (
+    SELECT
+        cs.display_name AS bowler,
+        COALESCE(NULLIF(cs.cricsheet_name, ''), cs.display_name) AS cricsheet_name,
+        cs.team_code,
+        cs.team_name AS team,
+        cs.role,
+        cs.bowling_style,
+        cs.bowling_arm,
+        cs.is_overseas
+    FROM current_squads cs
+    WHERE (
+            cs.team_code = '{_curteam_b2b_q(team_code)}'
+            OR cs.team_name IN {_curteam_b2b_sql_list(team_aliases)}
+          )
+      AND COALESCE(cs.is_active, 1) = 1
+      AND (
+            LOWER(COALESCE(cs.role, '')) LIKE '%bowler%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all-rounder%'
+            OR LOWER(COALESCE(cs.role, '')) LIKE '%all rounder%'
+          )
+),
+matchup AS (
+    SELECT
+        cb.bowler,
+        cb.team_code,
+        cb.team,
+        cb.role,
+        cb.bowling_style,
+        cb.bowling_arm,
+        cb.is_overseas,
+        '{_curteam_b2b_q(batter)}' AS batter,
+        COUNT(DISTINCT d.match_id) AS matches,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 THEN 1 END) AS balls,
+        SUM(COALESCE(d.runs_off_bat, 0)) AS runs,
+        COUNT(CASE
+            WHEN d.wicket_type IS NOT NULL
+             AND d.player_dismissed = d.striker
+             AND d.wicket_type NOT IN ('run out', 'retired hurt', 'retired out', 'retired not out', 'obstructing the field')
+            THEN 1
+        END) AS dismissals,
+        COUNT(CASE WHEN COALESCE(d.wides, 0) = 0 AND COALESCE(d.noballs, 0) = 0 THEN 1 END) AS legal_balls,
+        SUM(COALESCE(d.runs_off_bat, 0) + COALESCE(d.extras, 0)) AS runs_conceded,
+        SUM(CASE WHEN COALESCE(d.runs_off_bat, 0) = 0 AND COALESCE(d.extras, 0) = 0 THEN 1 ELSE 0 END) AS dot_balls
+    FROM current_bowlers cb
+    LEFT JOIN deliveries d
+        ON (
+                d.bowler = cb.cricsheet_name
+                OR d.bowler = cb.bowler
+           )
+       AND d.striker IN {_curteam_b2b_sql_list(batter_aliases)}
+       AND d.innings IN (1, 2)
+       AND {phase_filter}
+    GROUP BY
+        cb.bowler,
+        cb.team_code,
+        cb.team,
+        cb.role,
+        cb.bowling_style,
+        cb.bowling_arm,
+        cb.is_overseas
+)
+SELECT
+    bowler,
+    team_code,
+    team,
+    role,
+    bowling_style,
+    bowling_arm,
+    is_overseas,
+    batter,
+    matches,
+    balls,
+    runs,
+    dismissals,
+    ROUND(runs * 100.0 / NULLIF(balls, 0), 2) AS batter_sr,
+    legal_balls,
+    runs_conceded,
+    ROUND(runs_conceded * 6.0 / NULLIF(legal_balls, 0), 2) AS economy,
+    dot_balls,
+    CASE
+        WHEN balls >= 12 AND dismissals > 0 THEN 'Use direct matchup: has dismissal evidence'
+        WHEN balls >= 12 AND dismissals = 0 THEN 'Use with caution: direct sample but no wicket'
+        WHEN balls > 0 THEN 'Small direct sample'
+        ELSE 'No direct sample: use role/style profile'
+    END AS action
+FROM matchup
+ORDER BY
+    CASE
+        WHEN balls >= 12 THEN 0
+        WHEN balls > 0 THEN 1
+        ELSE 2
+    END,
+    dismissals DESC,
+    batter_sr ASC,
+    balls DESC,
+    CASE
+        WHEN LOWER(COALESCE(role, '')) LIKE '%bowler%' THEN 0
+        WHEN LOWER(COALESCE(role, '')) LIKE '%all%' THEN 1
+        ELSE 2
+    END,
+    bowler ASC;
+""".strip()
+
+    try:
+        options_df = run_query(options_sql)
+    except Exception as error:
+        err = pd.DataFrame([{
+            "section": "Error",
+            "action": str(error),
+            "why": "Current-squad team bowl-to-batter route failed.",
+            "team_code": team_code,
+            "batter": batter,
+        }])
+
+        return {
+            "question": question,
+            "analysis_paragraph": str(error),
+            "paragraph": str(error),
+            "result": err,
+            "extra_tables": {},
+            "sql_query": options_sql,
+            "similar_questions": [],
+            "route_used": "",
+            "data_sources": "",
+        }
+
+    options_df = _curteam_b2b_clean(options_df if options_df is not None else pd.DataFrame())
+
+    recommended_bowler = ""
+    recommendation_basis = ""
+
+    if not options_df.empty:
+        recommended_bowler = str(options_df.iloc[0].get("bowler", ""))
+        recommendation_basis = str(options_df.iloc[0].get("action", "current squad role/profile"))
+
+    if not recommended_bowler:
+        recommended_bowler = f"{team_display} bowling unit"
+        recommendation_basis = "no current active bowling options found in current_squads"
+
+    if phase == "Powerplay":
+        phase_plan = "attack with hard length/new-ball movement, keep a fourth-stump line, and protect the leg-side release"
+    elif phase == "Middle overs":
+        phase_plan = "use matchup bowling, deny easy singles, and force the batter to hit against the angle/spin"
+    elif phase == "Death overs":
+        phase_plan = "use wide yorkers, slower balls, and hard lengths away from the batter's strongest arc"
+    else:
+        phase_plan = "mix current squad roles with any available direct matchup evidence"
+
+    result_df = pd.DataFrame([
+        {
+            "section": "Recommended bowler",
+            "action": recommended_bowler,
+            "why": recommendation_basis,
+            "team_code": team_code,
+            "batter": batter,
+            "phase": phase,
+        },
+        {
+            "section": "Team plan",
+            "action": phase_plan,
+            "why": f"Plan is tailored for {phase.lower()} against {batter}.",
+            "team_code": team_code,
+            "batter": batter,
+            "phase": phase,
+        },
+        {
+            "section": "Data rule",
+            "action": "Only current active squad players are recommended; historical deliveries are used only as evidence for those current players.",
+            "why": "This prevents former players from appearing as current tactical options.",
+            "team_code": team_code,
+            "batter": batter,
+            "phase": phase,
+        },
+    ])
+
+    paragraph = (
+        f"For {team_display} bowling to {batter} in {phase.lower()}, the recommended current option is {recommended_bowler}. "
+        f"Action: {phase_plan}. Basis: {recommendation_basis}."
+    )
+
+    return {
+        "question": question,
+        "analysis_paragraph": paragraph,
+        "paragraph": paragraph,
+        "result": result_df,
+        "extra_tables": {
+            "Current Squad Options vs Batter": options_df,
+        },
+        "sql_query": options_sql,
+        "similar_questions": [
+            "how can GT bowl to Kohli in the powerplay",
+            "how can KKR bowl to Gaikwad in middle overs",
+            "how can CSK bowl to Rohit in death overs",
+            "how should Mohammed Shami bowl to Kohli",
+        ],
+        "route_used": "",
+        "data_sources": "",
+    }
+
+
+try:
+    _previous_answer_question_with_fallback_before_curteam_b2b = answer_question_with_fallback
+except NameError:
+    _previous_answer_question_with_fallback_before_curteam_b2b = None
+
+
+def answer_question_with_fallback(user_question):
+    result = _curteam_b2b_route(user_question)
+
+    if result is not None:
+        return result
+
+    return _previous_answer_question_with_fallback_before_curteam_b2b(user_question)
+
+# IPL SQL Agent current-squad team bowl-to-batter route END
+

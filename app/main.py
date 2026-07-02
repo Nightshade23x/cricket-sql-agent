@@ -303,7 +303,8 @@ def _clean_dataframe_for_streamlit_display(df):
         def is_blank_or_zero(series):
             try:
                 as_text = series.fillna("").astype(str).str.strip()
-                if bool((as_text == "").all()):
+                as_text_lower = as_text.str.lower()
+                if bool((as_text == "").all()) or bool(as_text_lower.isin(["", "none", "nan", "nat"]).all()):
                     return True
 
                 nums = pd.to_numeric(series, errors="coerce")
@@ -407,9 +408,96 @@ def _clean_dataframe_for_streamlit_display(df):
 
 def _safe_st_dataframe(data=None, *args, **kwargs):
     data = _clean_dataframe_for_streamlit_display(data)
+    data = _tactical_display_drop_empty_stats(data)
     return st.dataframe(data, *args, **kwargs)
 
 # IPL SQL Agent clean Streamlit dataframe display END
+
+
+
+# IPL SQL Agent tactical main-result display cleanup START
+
+def _tactical_display_drop_empty_stats(df):
+    # Hide empty schema-compatibility stat columns from tactical summary tables only.
+    if df is None or not hasattr(df, "columns"):
+        return df
+
+    try:
+        import re
+        import pandas as pd
+
+        df = df.copy()
+
+        def norm(col):
+            return re.sub(r"[^a-z0-9]+", "", str(col).lower())
+
+        def emptyish(series):
+            try:
+                txt = series.fillna("").astype(str).str.strip().str.lower()
+
+                if bool(txt.isin(["", "none", "nan", "nat"]).all()):
+                    return True
+
+                nums = pd.to_numeric(series, errors="coerce")
+
+                if nums.notna().any() and bool(nums.fillna(0).eq(0).all()):
+                    return True
+
+            except Exception:
+                return False
+
+            return False
+
+        cols_norm = {norm(c) for c in df.columns}
+
+        is_summary_table = (
+            ("analysisarea" in cols_norm and "insight" in cols_norm)
+            or ("recommendation" in cols_norm and "insight" in cols_norm)
+        )
+
+        if not is_summary_table:
+            return df
+
+        removable = {
+            "runs",
+            "balls",
+            "dismissals",
+            "strikerate",
+            "battingaverage",
+            "economy",
+            "matches",
+            "innings",
+            "wickets",
+            "legalballs",
+            "runsconceded",
+            "oversbowled",
+            "dotballs",
+            "fours",
+            "sixes",
+            "battersr",
+            "bowlingstrikerate",
+            "batter",
+            "bowler",
+            "team",
+            "battingteam",
+            "bowlingteam",
+        }
+
+        drop_cols = []
+
+        for col in list(df.columns):
+            if norm(col) in removable and emptyish(df[col]) and len(df.columns) - len(drop_cols) > 2:
+                drop_cols.append(col)
+
+        if drop_cols:
+            df = df.drop(columns=drop_cols)
+
+        return df
+
+    except Exception:
+        return df
+
+# IPL SQL Agent tactical main-result display cleanup END
 
 
 def render_dataframe(df, name=None):

@@ -12,6 +12,26 @@ from app.llm_agent import answer_question_with_fallback
 TESTS = [
 
     {
+        "question": "how should Mohammed Shami bowl to Kohli",
+        "expected_columns": ["section", "insight"],
+    },
+    {
+        "question": "how should Bumrah bowl to Kohli",
+        "expected_columns": ["section", "insight"],
+    },
+
+
+    {
+        "question": "most runs scored in a single over",
+        "expected_columns": ["match_id", "runs_in_over", "legal_balls", "total_deliveries", "batting_team", "bowling_team"],
+    },
+    {
+        "question": "top 10 highest scoring overs in IPL",
+        "expected_columns": ["match_id", "runs_in_over", "legal_balls", "total_deliveries", "batters", "bowlers"],
+    },
+
+
+    {
         "question": "list all the 100s in 2021 season",
         "expected_columns": ["batter", "team", "opponent", "innings_runs", "match_id"],
     },
